@@ -112,6 +112,43 @@ void initgl_update_texture(initgl_texture_t tex, int x, int y, int w, int h,
 void initgl_draw(initgl_mesh_t mesh);
 void initgl_draw_range(initgl_mesh_t mesh, int first, int count);
 
+/* --- Texture queries --- */
+
+int initgl_texture_width(initgl_texture_t tex);
+int initgl_texture_height(initgl_texture_t tex);
+
+/* --- Image loading (requires stb_image.h) --- */
+
+/* Load texture from a PNG/JPG/BMP/TGA file.
+ * Returns zero-handle on failure. */
+initgl_texture_t initgl_load_texture(const char *path,
+                                     enum initgl_filter min_filter,
+                                     enum initgl_filter mag_filter);
+
+/* --- 2D sprite batch --- */
+
+/* Set up 2D orthographic projection for sprite drawing.
+ * (x, y) is the top-left corner of the view in world coords,
+ * (w, h) is the view size. Y-down coordinate system. */
+void initgl_sprite_begin(float x, float y, float w, float h);
+
+/* Draw a texture region as a 2D quad.
+ * dst_x/y/w/h: destination rect in world coords.
+ * src_x/y/w/h: source rect in pixels (texel coords).
+ * If src_w <= 0, draws the full texture. */
+void initgl_sprite_draw(initgl_texture_t tex,
+                        float dst_x, float dst_y, float dst_w, float dst_h,
+                        float src_x, float src_y, float src_w, float src_h);
+
+/* Draw with horizontal flip. */
+void initgl_sprite_draw_flip(initgl_texture_t tex,
+                             float dst_x, float dst_y, float dst_w, float dst_h,
+                             float src_x, float src_y, float src_w, float src_h,
+                             int flip_x);
+
+/* Flush pending draws and tear down sprite state. */
+void initgl_sprite_end(void);
+
 /* --- Immediate state --- */
 
 void initgl_clear(float r, float g, float b, float a);

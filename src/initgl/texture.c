@@ -135,6 +135,22 @@ initgl_update_texture(initgl_texture_t tex, int x, int y, int w, int h,
 		glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 }
 
+/* --- Texture queries --- */
+
+int
+initgl_texture_width(initgl_texture_t tex)
+{
+	texture_slot_t *s = get_slot(tex);
+	return s ? s->width : 0;
+}
+
+int
+initgl_texture_height(initgl_texture_t tex)
+{
+	texture_slot_t *s = get_slot(tex);
+	return s ? s->height : 0;
+}
+
 /* --- Global state operations --- */
 
 void
