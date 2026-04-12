@@ -1,4 +1,4 @@
-# modular-make -- A modular GNUmakefile for C, C++, D, Fortran, Objective-C, Objective-C++, Pascal, Modula-2, and Assembly projects [v1.2.0]
+# modular-make -- A modular GNUmakefile for C, C++, D, Fortran, Objective-C, Objective-C++, Pascal, Modula-2, and Assembly projects [v1.2.1]
 # updated: 12 Apr 2026
 # Requires GNU Make (tested with 4.x).
 #
@@ -257,6 +257,9 @@
 #   make run-tests    Build all test targets, then run their test
 #                     commands.  See _TESTCMD in MODULE.MK FILES.
 #   make run-test-<name>  Build and test a single target.
+#   make compile_commands.json
+#                     Generate compile_commands.json for clangd and
+#                     other LSP tooling.  Always regenerated.
 #
 # ============================================================================
 # CUSTOMIZATION
@@ -593,6 +596,7 @@ all :: $$(EXECUTABLES)
 clean : $$(addprefix clean_,$$(EXECUTABLES) $$(LIBRARIES) $$(SHARED_LIBS))
 clean-all : clean
 	-printf '%s\n' $(call explode_dirs,$(_all_dirs)) | sort -r | while read -r d; do $(RMDIR) "$$d" 2>/dev/null; done; true
+	$(RM) compile_commands.json
 .PHONY : all clean clean-all clean_% $(EXECUTABLES) $(LIBRARIES) $(SHARED_LIBS)
 
 # Create directories
@@ -688,5 +692,17 @@ $(foreach X,$(EXTENSIONS),$(eval $(BUILDDIR)/%.o : %.$X | $$$$(@D)/ ; $$(compile
 
 # Pull in generated dependency files (silent on first build)
 -include $(patsubst %.o,%.dep,$(foreach p,$(EXECUTABLES) $(LIBRARIES) $(SHARED_LIBS),$(call get_objs,$p)))
+
+# Generate compile_commands.json for clangd / LSP tooling.
+# Dry-runs the build and extracts compile commands for all languages
+# that use GCC-style "-c -o" invocation (C, C++, ObjC, ObjC++, D,
+# Fortran, Assembly, Modula-2).  NASM and FPC are excluded since
+# clangd does not consume them.
+.PHONY : compile_commands.json
+compile_commands.json :
+	$(MAKE) -j1 -n 2>/dev/null \
+	| sed -n 's/^ *//;/ -c -o /p' \
+	| awk -v dir="$$(pwd)" 'BEGIN{print "["} {src="";for(i=1;i<=NF;i++)if($$i~/\.(c|cc|cpp|m|mm|d|f|f90|S|mod)$$/){src=$$i;break} if(!src)next; cmd=$$0;gsub(/"/,"\\\"",cmd); if(n++)printf ",\n"; printf "  {\"directory\":\"%s\",\"command\":\"%s\",\"file\":\"%s/%s\"}",dir,cmd,dir,src} END{print "\n]"}' > $@
+	@echo "wrote $@ ($$(grep -c '"file"' $@) entries)"
 
 ##### END #####
