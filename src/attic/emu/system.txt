@@ -1,0 +1,29 @@
+8237A direct memory access controller (DMAC)
+8259A programmable interrupt controller (PIC)
+8254 programmable interval timer (PIT)
+8255 programmable peripheral interface (PPI)
+8288 Bus Controller
+8042 Clock generator
+8353 Timer
+
+Switch register (IO 0x62)
+Configuration register (IO 0x63 - write only)
+
+IO Map
+
+00 - 0F		8237 DMA
+10 - 1F		reserved
+20 - 21		8259 PIC
+22 - 3F		reserved
+40 - 42		8253 timer
+44 - 5F		reserved
+60		keyboard data register
+61		Control register - Port B
+62		Switch register - Port C
+63		Configuration register
+64 - 6F		reserved
+70 - 7F		unused
+81 - 83		DMA Page registers (81=chan2, 82=chan3, 83=chan1)
+84 - 9F		reserved
+A0		NMI mask register (bit7 1=enable nmi)
+A1 - FF		reserved
