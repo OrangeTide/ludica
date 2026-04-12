@@ -3,8 +3,8 @@ set -xe
 
 # IMGUI_VERSION=1.66.2
 # CIMGUI_VERSION=1.66.2
-IMGUI_VERSION=1.89.9-docking
-CIMGUI_VERSION=docking_inter
+IMGUI_VERSION=1.90.8-docking
+CIMGUI_VERSION=1.90.8dock
 
 # ImGUI
 mkdir -p imgui ; cd imgui

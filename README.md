@@ -12,7 +12,6 @@ Collection of my studies in game development.
 
   * Linux x86-64/ARM64 or Windows x86-64
   * GCC or MSYS2/[MinGW-w64](https://www.mingw-w64.org/) or equivalent
-  * cmake 2.8 or newer
   * GNU Make
   * If building on Windows:
     * MinGW-w64 or [w64devkit](https://github.com/skeeto/w64devkit)
