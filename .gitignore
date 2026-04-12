@@ -22,3 +22,6 @@
 /OLD
 
 compile_commands.json
+.cache/
+_build/
+_out/
