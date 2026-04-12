@@ -146,6 +146,16 @@ void initgl_sprite_draw_flip(initgl_texture_t tex,
                              float src_x, float src_y, float src_w, float src_h,
                              int flip_x);
 
+/* Draw a filled rectangle with the given color.
+ * Call between sprite_begin/end. Color is RGBA 0.0-1.0. */
+void initgl_sprite_rect(float x, float y, float w, float h,
+                        float r, float g, float b, float a);
+
+/* Draw a 1-pixel rectangle outline.
+ * Call between sprite_begin/end. Color is RGBA 0.0-1.0. */
+void initgl_sprite_rect_lines(float x, float y, float w, float h,
+                              float r, float g, float b, float a);
+
 /* Flush pending draws and tear down sprite state. */
 void initgl_sprite_end(void);
 

@@ -1,1 +1,1 @@
-SUBDIRS = thirdparty initgl imgui demo01_retrocrt demo02_multiscroll
+SUBDIRS = thirdparty initgl imgui demo01_retrocrt demo02_multiscroll demo03_text_dialogs

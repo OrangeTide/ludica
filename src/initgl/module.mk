@@ -1,6 +1,6 @@
 LIBRARIES += initgl
 initgl_DIR  := $(dir $(lastword $(MAKEFILE_LIST)))
-initgl_SRCS  = app.c event.c timing.c log.c input.c gamepad.c shader.c mesh.c texture.c framebuffer.c image.c sprite.c
+initgl_SRCS  = app.c event.c timing.c log.c input.c gamepad.c shader.c mesh.c texture.c framebuffer.c image.c sprite.c font.c
 initgl_CFLAGS = -Wall -W -O2 -g
 initgl_CPPFLAGS = -I$(initgl_DIR)include -I$(initgl_DIR)../thirdparty
 initgl_EXPORTED_CPPFLAGS = -I$(initgl_DIR)include -I$(initgl_DIR)
