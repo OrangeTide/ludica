@@ -1,50 +1,47 @@
 #ifndef INITGL_H_
 #define INITGL_H_
-#include <EGL/egl.h>
-#include <GLES2/gl2.h>
-#include <GLES2/gl2ext.h>
-#include <stdlib.h>
-#include "log.h"
+
+#include "initgl_input.h"
 
 #define INITGL_OK (0)
 #define INITGL_ERR (-1)
 
-#define initgl_gl_check() do { \
-		GLenum e = glGetError(); \
-		if (e != GL_NO_ERROR) {\
-			log_error("%s:%d:%s():GL error = 0x%04x\n", __FILE__, __LINE__, __func__, e); \
-			abort(); \
-		} \
-	} while(0)
+/* Application descriptor.
+ * Fill this struct and pass it to initgl_run().
+ * Zero-initialized fields use sensible defaults. */
+typedef struct initgl_desc {
+	const char *app_name;
+	int width, height;      /* initial window size (default: 640x480) */
 
-extern int terminate_flag;
+	/* Callbacks */
+	void (*init)(void);             /* called once after window+GL are ready */
+	void (*frame)(float dt);        /* called each frame; dt = seconds since last frame */
+	void (*cleanup)(void);          /* called before shutdown */
+	int  (*event)(const initgl_event_t *ev); /* return non-zero = event consumed */
 
-typedef void window_paintfunc(void);
-typedef void window_idlefunc(void);
-typedef void window_reshapefunc(int width, int height);
-typedef void window_keyeventfunc(int key);
-typedef void window_typingkeyboardfunc(const char *s, unsigned len);
+	/* User data pointer, retrievable via initgl_userdata() */
+	void *user_data;
 
-struct window_callback_functions {
-	window_paintfunc *paint;
-	window_idlefunc *idle;
-	window_reshapefunc *reshape;
-	window_keyeventfunc *keyevent;
-	window_typingkeyboardfunc *typingkeyboard;
-};
+	/* Hints (zero = sensible default) */
+	int target_fps;         /* 0 = vsync (default) */
+	int fullscreen;         /* non-zero = start fullscreen */
+	int resizable;          /* non-zero = allow resize */
+} initgl_desc_t;
 
-void display_done(void);
-int display_init(void);
-void paint_all(void);
-int window_new(const struct window_callback_functions *callbacks);
-void process_events(void);
-int lookup_key(const char *s);
-unsigned long long clock_now(void);
-double clock_diff(unsigned long long t1, unsigned long long t0);
+/* Entry point. Owns the main loop. Returns exit code.
+ * On WASM this never returns. */
+int initgl_run(const initgl_desc_t *desc);
 
-void window_register_paint(window_paintfunc *f);
-void window_register_idle(window_idlefunc *f);
-void window_register_reshape(window_reshapefunc *f);
-void window_register_keyevent(window_keyeventfunc *f);
-void window_register_typingkeyboard(window_typingkeyboardfunc *f);
-#endif
+/* Callable from callbacks */
+void   initgl_quit(void);
+void  *initgl_userdata(void);
+int    initgl_width(void);
+int    initgl_height(void);
+double initgl_time(void);        /* seconds since init */
+float  initgl_frame_time(void);  /* dt of last frame */
+
+/* Logging */
+void initgl_log(const char *msg, ...);
+void initgl_err(const char *msg, ...);
+
+#endif /* INITGL_H_ */
