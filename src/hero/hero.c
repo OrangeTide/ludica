@@ -46,12 +46,14 @@
 #endif
 
 /* ------------------------------------------------------------------ */
-/* Vertex format: position(3) + texcoord(2) + color(3) = 8 floats    */
+/* Vertex format: pos(3) + uv(2) + normal(3) + tangent(3) + color(3) */
 /* ------------------------------------------------------------------ */
 
 struct vertex {
 	float x, y, z;
 	float u, v;
+	float nx, ny, nz;
+	float tx, ty, tz;
 	float r, g, b;
 };
 
@@ -113,11 +115,16 @@ struct sector_render {
 /* World                                                              */
 /* ------------------------------------------------------------------ */
 
+struct texture_pair {
+	lud_texture_t diffuse;
+	lud_texture_t normal;
+};
+
 struct world {
 	const struct map_sector *sectors[MAX_SECTORS];
 	struct sector_render render[MAX_SECTORS];
 	unsigned num_sectors;
-	lud_texture_t textures[MAX_TEXTURES];
+	struct texture_pair textures[MAX_TEXTURES];
 	unsigned num_textures;
 };
 
@@ -225,50 +232,38 @@ sector_find_center(const struct map_sector *sec, float *cx, float *cy)
 }
 
 /* ------------------------------------------------------------------ */
-/* Procedural texture generation                                      */
+/* Texture loading                                                    */
 /* ------------------------------------------------------------------ */
 
-static lud_texture_t
-make_checkerboard(int w, int h, int check,
-                  unsigned char r1, unsigned char g1, unsigned char b1,
-                  unsigned char r2, unsigned char g2, unsigned char b2)
+static struct texture_pair
+load_texture_pair(const char *color_path, const char *normal_path)
 {
-	unsigned char *data = malloc(w * h * 3);
-	int x, y;
-	for (y = 0; y < h; y++) {
-		for (x = 0; x < w; x++) {
-			int c = ((x / check) + (y / check)) & 1;
-			unsigned char *p = &data[(y * w + x) * 3];
-			p[0] = c ? r1 : r2;
-			p[1] = c ? g1 : g2;
-			p[2] = c ? b1 : b2;
-		}
-	}
-	lud_texture_t tex = lud_make_texture(&(lud_texture_desc_t){
-		.width = w, .height = h,
-		.format = LUD_PIXFMT_RGB8,
-		.min_filter = LUD_FILTER_LINEAR,
-		.mag_filter = LUD_FILTER_LINEAR,
-		.data = data,
-	});
-	free(data);
-	return tex;
+	struct texture_pair tp;
+	tp.diffuse = lud_load_texture(color_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
+	tp.normal  = lud_load_texture(normal_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
+	return tp;
 }
 
 static void
 create_textures(void)
 {
-	/* 0: floor  - dark gray stone */
-	world.textures[0] = make_checkerboard(64, 64, 8,  80, 80, 80,  60, 60, 60);
-	/* 1: ceiling - dark blue */
-	world.textures[1] = make_checkerboard(64, 64, 16, 30, 30, 60,  20, 20, 50);
-	/* 2: red brick */
-	world.textures[2] = make_checkerboard(64, 64, 8, 160, 50, 40, 130, 40, 30);
-	/* 3: green stone */
-	world.textures[3] = make_checkerboard(64, 64, 8,  40, 140, 50,  30, 110, 40);
-	/* 4: blue tile */
-	world.textures[4] = make_checkerboard(64, 64, 8,  50, 60, 160,  40, 50, 130);
-	world.num_textures = 5;
+	/* 0: floor - ground dirt */
+	world.textures[0] = load_texture_pair(
+		"assets/textures/ground_color.jpg",
+		"assets/textures/ground_normal.jpg");
+	/* 1: ceiling - dark rock */
+	world.textures[1] = load_texture_pair(
+		"assets/textures/rock_dark_color.jpg",
+		"assets/textures/rock_dark_normal.jpg");
+	/* 2: walls - brick */
+	world.textures[2] = load_texture_pair(
+		"assets/textures/brick_color.jpg",
+		"assets/textures/brick_normal.jpg");
+	/* 3: walls - rocky */
+	world.textures[3] = load_texture_pair(
+		"assets/textures/rock_color.jpg",
+		"assets/textures/rock_normal.jpg");
+	world.num_textures = 4;
 }
 
 /* ------------------------------------------------------------------ */
@@ -299,19 +294,21 @@ build_sector_mesh(struct sector_render *sr, const struct map_sector *sec)
 	if (sec->num_sides > 2) {
 		int first = nv;
 		const struct sector_vertex *v0 = &sec->sides_xy[0];
-		/* CCW winding */
+		/* CCW winding, normal up, tangent +X */
 		for (i = 1; i + 1 < sec->num_sides; i++) {
 			const struct sector_vertex *v1 = &sec->sides_xy[i];
 			const struct sector_vertex *v2 = &sec->sides_xy[i + 1];
-			/* floor color: medium gray */
 			verts[nv++] = (struct vertex){
-				v0->x, fh, v0->y, v0->x, v0->y, 0.4f, 0.4f, 0.4f
+				v0->x, fh, v0->y, v0->x, v0->y,
+				0,1,0, 1,0,0, 0.4f, 0.4f, 0.4f
 			};
 			verts[nv++] = (struct vertex){
-				v1->x, fh, v1->y, v1->x, v1->y, 0.4f, 0.4f, 0.4f
+				v1->x, fh, v1->y, v1->x, v1->y,
+				0,1,0, 1,0,0, 0.4f, 0.4f, 0.4f
 			};
 			verts[nv++] = (struct vertex){
-				v2->x, fh, v2->y, v2->x, v2->y, 0.4f, 0.4f, 0.4f
+				v2->x, fh, v2->y, v2->x, v2->y,
+				0,1,0, 1,0,0, 0.4f, 0.4f, 0.4f
 			};
 		}
 		sr->groups[ng++] = (struct draw_group){
@@ -319,22 +316,25 @@ build_sector_mesh(struct sector_render *sr, const struct map_sector *sec)
 		};
 	}
 
-	/* --- ceiling (reverse winding for upward-facing normal) --- */
+	/* --- ceiling (reverse winding for downward-facing normal) --- */
 	if (sec->num_sides > 2) {
 		int first = nv;
 		const struct sector_vertex *v0 = &sec->sides_xy[0];
+		/* normal down, tangent +X */
 		for (i = 1; i + 1 < sec->num_sides; i++) {
-			/* reversed: v0, v2, v1 */
 			const struct sector_vertex *v1 = &sec->sides_xy[i];
 			const struct sector_vertex *v2 = &sec->sides_xy[i + 1];
 			verts[nv++] = (struct vertex){
-				v0->x, ch, v0->y, v0->x, v0->y, 0.3f, 0.3f, 0.4f
+				v0->x, ch, v0->y, v0->x, v0->y,
+				0,-1,0, 1,0,0, 0.3f, 0.3f, 0.4f
 			};
 			verts[nv++] = (struct vertex){
-				v2->x, ch, v2->y, v2->x, v2->y, 0.3f, 0.3f, 0.4f
+				v2->x, ch, v2->y, v2->x, v2->y,
+				0,-1,0, 1,0,0, 0.3f, 0.3f, 0.4f
 			};
 			verts[nv++] = (struct vertex){
-				v1->x, ch, v1->y, v1->x, v1->y, 0.3f, 0.3f, 0.4f
+				v1->x, ch, v1->y, v1->x, v1->y,
+				0,-1,0, 1,0,0, 0.3f, 0.3f, 0.4f
 			};
 		}
 		sr->groups[ng++] = (struct draw_group){
@@ -348,10 +348,19 @@ build_sector_mesh(struct sector_render *sr, const struct map_sector *sec)
 		const struct sector_vertex *cur = &sec->sides_xy[i];
 		if (sec->destination_sector[i] == SECTOR_NONE) {
 			int first = nv;
-			/* wall length for texture U coordinate */
+			/* wall direction and length for texture U coordinate */
 			float dx = last->x - cur->x;
-			float dy = last->y - cur->y;
-			float length = sqrtf(dx * dx + dy * dy);
+			float dz = last->y - cur->y;
+			float length = sqrtf(dx * dx + dz * dz);
+			float inv_len = (length > 0.0001f) ? 1.0f / length : 0.0f;
+
+			/* tangent along wall direction (U axis) */
+			float wall_tx = dx * inv_len;
+			float wall_tz = dz * inv_len;
+
+			/* inward-facing normal (perpendicular to wall, pointing into sector) */
+			float wall_nx = -wall_tz;
+			float wall_nz =  wall_tx;
 
 			/* wall color from the color table */
 			unsigned ci = sec->color[i] % ARRAY_SIZE(wall_colors);
@@ -360,36 +369,41 @@ build_sector_mesh(struct sector_render *sr, const struct map_sector *sec)
 			float cb = wall_colors[ci][2];
 
 			/* texture index for this wall */
-			int ti = (i + 2) % world.num_textures;
-			if (ti < 2) ti = 2; /* skip floor/ceil textures */
+			int ti = 2 + (i % (world.num_textures - 2));
 
-			/*
-			 * Original vertex order (triangle strip):
-			 *   last_top, cur_top, last_bot, cur_bot
-			 *
-			 * As two CCW triangles (viewed from inside the sector):
-			 *   tri1: last_top, cur_top, last_bot
-			 *   tri2: cur_top, cur_bot, last_bot
-			 */
-			/* tri 1 */
+			float wall_h = ch - fh;
+
+			/* tri 1: last_top, cur_top, last_bot */
 			verts[nv++] = (struct vertex){
-				last->x, ch, last->y, length, ch, cr, cg, cb
+				last->x, ch, last->y, length, wall_h,
+				wall_nx, 0, wall_nz, wall_tx, 0, wall_tz,
+				cr, cg, cb
 			};
 			verts[nv++] = (struct vertex){
-				cur->x, ch, cur->y, 0.0f, ch, cr, cg, cb
+				cur->x, ch, cur->y, 0.0f, wall_h,
+				wall_nx, 0, wall_nz, wall_tx, 0, wall_tz,
+				cr, cg, cb
 			};
 			verts[nv++] = (struct vertex){
-				last->x, fh, last->y, length, fh, cr, cg, cb
+				last->x, fh, last->y, length, 0.0f,
+				wall_nx, 0, wall_nz, wall_tx, 0, wall_tz,
+				cr, cg, cb
 			};
-			/* tri 2 */
+			/* tri 2: cur_top, cur_bot, last_bot */
 			verts[nv++] = (struct vertex){
-				cur->x, ch, cur->y, 0.0f, ch, cr, cg, cb
+				cur->x, ch, cur->y, 0.0f, wall_h,
+				wall_nx, 0, wall_nz, wall_tx, 0, wall_tz,
+				cr, cg, cb
 			};
 			verts[nv++] = (struct vertex){
-				cur->x, fh, cur->y, 0.0f, fh, cr, cg, cb
+				cur->x, fh, cur->y, 0.0f, 0.0f,
+				wall_nx, 0, wall_nz, wall_tx, 0, wall_tz,
+				cr, cg, cb
 			};
 			verts[nv++] = (struct vertex){
-				last->x, fh, last->y, length, fh, cr, cg, cb
+				last->x, fh, last->y, length, 0.0f,
+				wall_nx, 0, wall_nz, wall_tx, 0, wall_tz,
+				cr, cg, cb
 			};
 
 			sr->groups[ng++] = (struct draw_group){
@@ -407,9 +421,11 @@ build_sector_mesh(struct sector_render *sr, const struct map_sector *sec)
 		.layout = {
 			{ .size = 3, .offset = offsetof(struct vertex, x) },
 			{ .size = 2, .offset = offsetof(struct vertex, u) },
+			{ .size = 3, .offset = offsetof(struct vertex, nx) },
+			{ .size = 3, .offset = offsetof(struct vertex, tx) },
 			{ .size = 3, .offset = offsetof(struct vertex, r) },
 		},
-		.num_attrs = 3,
+		.num_attrs = 5,
 		.usage = LUD_USAGE_STATIC,
 		.primitive = LUD_PRIM_TRIANGLES,
 	});
@@ -443,8 +459,10 @@ draw_sector_recursive(unsigned sector_num, int ttl)
 	/* draw this sector's geometry */
 	for (i = 0; i < sr->num_groups; i++) {
 		struct draw_group *g = &sr->groups[i];
-		if (state.use_textures)
-			lud_bind_texture(world.textures[g->tex_index], 0);
+		if (state.use_textures) {
+			lud_bind_texture(world.textures[g->tex_index].diffuse, 0);
+			lud_bind_texture(world.textures[g->tex_index].normal, 1);
+		}
 		lud_draw_range(sr->mesh, g->first, g->count);
 	}
 
@@ -578,19 +596,21 @@ init(void)
 	shader_textured = lud_make_shader(&(lud_shader_desc_t){
 		.vert_src = portal_vert,
 		.frag_src = portal_textured_frag,
-		.attrs = { "a_position", "a_texcoord", "a_color" },
-		.num_attrs = 3,
+		.attrs = { "a_position", "a_texcoord", "a_normal",
+		           "a_tangent", "a_color" },
+		.num_attrs = 5,
 	});
 	shader_colored = lud_make_shader(&(lud_shader_desc_t){
 		.vert_src = portal_vert,
 		.frag_src = portal_colored_frag,
-		.attrs = { "a_position", "a_texcoord", "a_color" },
-		.num_attrs = 3,
+		.attrs = { "a_position", "a_texcoord", "a_normal",
+		           "a_tangent", "a_color" },
+		.num_attrs = 5,
 	});
 
 	font = lud_make_default_font();
 
-	/* create procedural textures */
+	/* load textures */
 	create_textures();
 
 	/* load map */
@@ -703,8 +723,17 @@ frame(float dt)
 		? shader_textured : shader_colored;
 	lud_apply_shader(active_shader);
 	lud_uniform_mat4(active_shader, "u_mvp", (const float *)mvp.Elements);
-	if (state.use_textures)
+	if (state.use_textures) {
 		lud_uniform_int(active_shader, "u_texture", 0);
+		lud_uniform_int(active_shader, "u_normal_map", 1);
+		/* directional light from above-right-front */
+		lud_uniform_vec3(active_shader, "u_light_dir", -0.3f, -0.7f, -0.4f);
+		/* camera position in world space */
+		lud_uniform_vec3(active_shader, "u_view_pos",
+			state.player_x,
+			state.player_height + state.player_z,
+			state.player_y);
+	}
 
 	memset(sector_drawn, 0, sizeof(sector_drawn));
 	draw_sector_recursive(state.player_sector, PORTAL_DEPTH);
@@ -735,8 +764,10 @@ cleanup(void)
 	unsigned i;
 	for (i = 0; i < world.num_sectors; i++)
 		lud_destroy_mesh(world.render[i].mesh);
-	for (i = 0; i < world.num_textures; i++)
-		lud_destroy_texture(world.textures[i]);
+	for (i = 0; i < world.num_textures; i++) {
+		lud_destroy_texture(world.textures[i].diffuse);
+		lud_destroy_texture(world.textures[i].normal);
+	}
 	lud_destroy_shader(shader_textured);
 	lud_destroy_shader(shader_colored);
 	lud_destroy_font(font);
