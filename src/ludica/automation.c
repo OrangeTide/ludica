@@ -63,6 +63,19 @@ static void sock_platform_init(void) {}
 static void sock_platform_shutdown(void) {}
 #endif
 
+#include <GLES2/gl2.h>
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
+/* ---- SIGUSR1 signal capture (POSIX only) ---- */
+
+#ifndef _WIN32
+#include <signal.h>
+static volatile sig_atomic_t sigusr1_pending;
+static void sigusr1_handler(int sig) { (void)sig; sigusr1_pending = 1; }
+#endif
+
 /* ---- Limits ---- */
 
 #define LINE_BUF_SIZE  4096
@@ -137,6 +150,193 @@ static void
 resp_err(const char *msg)
 {
 	send_resp("ERR %s", msg);
+}
+
+/* ---- Send all helper (for large responses) ---- */
+
+static void
+send_all(sock_t fd, const char *buf, size_t len)
+{
+	while (len > 0) {
+		int n = send(fd, buf, (int)len, 0);
+		if (n <= 0)
+			break;
+		buf += n;
+		len -= (size_t)n;
+	}
+}
+
+/* ---- Base64 encoding ---- */
+
+static const char b64_table[] =
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static size_t
+base64_encode(char *out, const unsigned char *in, size_t len)
+{
+	size_t i, j = 0;
+	for (i = 0; i + 2 < len; i += 3) {
+		out[j++] = b64_table[(in[i] >> 2) & 0x3f];
+		out[j++] = b64_table[((in[i] & 0x03) << 4) | (in[i+1] >> 4)];
+		out[j++] = b64_table[((in[i+1] & 0x0f) << 2) | (in[i+2] >> 6)];
+		out[j++] = b64_table[in[i+2] & 0x3f];
+	}
+	if (i < len) {
+		out[j++] = b64_table[(in[i] >> 2) & 0x3f];
+		if (i + 1 < len) {
+			out[j++] = b64_table[((in[i] & 0x03) << 4) | (in[i+1] >> 4)];
+			out[j++] = b64_table[((in[i+1] & 0x0f) << 2)];
+		} else {
+			out[j++] = b64_table[(in[i] & 0x03) << 4];
+			out[j++] = '=';
+		}
+		out[j++] = '=';
+	}
+	out[j] = '\0';
+	return j;
+}
+
+/* ---- Screen capture ---- */
+
+/* Memory writer for stbi_write_png_to_func */
+struct mem_writer {
+	unsigned char *buf;
+	size_t len;
+	size_t cap;
+};
+
+static void
+mem_write_func(void *ctx, void *data, int size)
+{
+	struct mem_writer *w = ctx;
+	if (w->len + (size_t)size > w->cap) {
+		size_t newcap = (w->cap == 0) ? 4096 : w->cap;
+		unsigned char *nb;
+		while (newcap < w->len + (size_t)size)
+			newcap *= 2;
+		nb = realloc(w->buf, newcap);
+		if (!nb) {
+			w->cap = w->len = 0;
+			return;
+		}
+		w->buf = nb;
+		w->cap = newcap;
+	}
+	memcpy(w->buf + w->len, data, (size_t)size);
+	w->len += (size_t)size;
+}
+
+/* Read pixels from GL framebuffer, flip vertically, return malloc'd RGBA */
+static unsigned char *
+capture_pixels(int x, int y, int w, int h)
+{
+	unsigned char *pixels, *temp_row, *top, *bot;
+	int stride, row;
+
+	stride = w * 4;
+	pixels = malloc((size_t)(stride * h));
+	temp_row = malloc((size_t)stride);
+	if (!pixels || !temp_row) {
+		free(pixels);
+		free(temp_row);
+		return NULL;
+	}
+
+	glReadPixels(x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+
+	/* flip vertically (GL origin is bottom-left) */
+	for (row = 0; row < h / 2; row++) {
+		top = pixels + row * stride;
+		bot = pixels + (h - 1 - row) * stride;
+		memcpy(temp_row, top, (size_t)stride);
+		memcpy(top, bot, (size_t)stride);
+		memcpy(bot, temp_row, (size_t)stride);
+	}
+	free(temp_row);
+	return pixels;
+}
+
+static void
+build_capture_path(char *out, size_t outsz, const char *name)
+{
+	const char *dir = lud__state.capture_dir ? lud__state.capture_dir : ".";
+	if (name && *name)
+		snprintf(out, outsz, "%s/%s", dir, name);
+	else
+		snprintf(out, outsz, "%s/frame_%06llu.png", dir,
+		         lud__state.frame_count);
+}
+
+/* Capture a rectangle and either write to file or send base64 over TCP */
+static void
+send_capture(int x, int y, int w, int h, int use_base64, const char *filename)
+{
+	unsigned char *pixels = capture_pixels(x, y, w, h);
+	if (!pixels) {
+		resp_err("capture failed");
+		return;
+	}
+
+	if (use_base64) {
+		struct mem_writer mw = {NULL, 0, 0};
+		size_t b64len, total;
+		char *b64;
+		int prefix;
+
+		stbi_write_png_to_func(mem_write_func, &mw, w, h, 4, pixels,
+		                       w * 4);
+		free(pixels);
+		if (!mw.buf) {
+			resp_err("PNG encode failed");
+			return;
+		}
+
+		b64len = ((mw.len + 2) / 3) * 4;
+		b64 = malloc(b64len + 32);
+		if (!b64) {
+			free(mw.buf);
+			resp_err("out of memory");
+			return;
+		}
+
+		prefix = sprintf(b64, "OK base64:");
+		base64_encode(b64 + prefix, mw.buf, mw.len);
+		free(mw.buf);
+
+		total = (size_t)prefix + b64len;
+		b64[total] = '\n';
+		if (client_fd != SOCK_INVALID)
+			send_all(client_fd, b64, total + 1);
+		free(b64);
+	} else {
+		char path[512];
+		build_capture_path(path, sizeof(path), filename);
+		if (!stbi_write_png(path, w, h, 4, pixels, w * 4)) {
+			free(pixels);
+			resp_err("write failed");
+			return;
+		}
+		free(pixels);
+		send_resp("OK %s", path);
+	}
+}
+
+/* Capture full screen to file (used by SIGUSR1) */
+static void
+capture_screen_to_file(void)
+{
+	char path[512];
+	unsigned char *pixels;
+	int w = lud__state.win_width;
+	int h = lud__state.win_height;
+
+	build_capture_path(path, sizeof(path), NULL);
+	pixels = capture_pixels(0, 0, w, h);
+	if (!pixels)
+		return;
+	if (stbi_write_png(path, w, h, 4, pixels, w * 4))
+		lud_log("automation: captured %s", path);
+	free(pixels);
 }
 
 /* ---- Tokenizer ---- */
@@ -410,6 +610,68 @@ cmd_resume(void)
 	resp_ok(NULL);
 }
 
+/* ---- Capture commands ---- */
+
+static void
+cmd_capscreen(void)
+{
+	int use_base64 = 0, i;
+	const char *filename = NULL;
+
+	for (i = 1; i < num_tokens; i++) {
+		if (strcasecmp(tokens[i], "--base64") == 0)
+			use_base64 = 1;
+		else
+			filename = tokens[i];
+	}
+	send_capture(0, 0, lud__state.win_width, lud__state.win_height,
+	             use_base64, filename);
+}
+
+static void
+cmd_caprect(void)
+{
+	int x, y, w, h, gl_y, use_base64 = 0, i;
+	const char *filename = NULL;
+
+	if (num_tokens < 5) {
+		resp_err("usage: CAPRECT <x> <y> <w> <h> [--base64] [filename]");
+		return;
+	}
+	x = atoi(tokens[1]);
+	y = atoi(tokens[2]);
+	w = atoi(tokens[3]);
+	h = atoi(tokens[4]);
+
+	for (i = 5; i < num_tokens; i++) {
+		if (strcasecmp(tokens[i], "--base64") == 0)
+			use_base64 = 1;
+		else
+			filename = tokens[i];
+	}
+
+	/* Convert from top-left origin to GL bottom-left origin */
+	gl_y = lud__state.win_height - y - h;
+	send_capture(x, gl_y, w, h, use_base64, filename);
+}
+
+static void
+cmd_readpixel(void)
+{
+	unsigned char pixel[4];
+	int x, y, gl_y;
+
+	if (num_tokens < 3) {
+		resp_err("usage: READPIXEL <x> <y>");
+		return;
+	}
+	x = atoi(tokens[1]);
+	y = atoi(tokens[2]);
+	gl_y = lud__state.win_height - 1 - y;
+	glReadPixels(x, gl_y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+	send_resp("OK %d %d %d", pixel[0], pixel[1], pixel[2]);
+}
+
 /* ---- Command dispatch ---- */
 
 /* Returns 1 if the command is blocking (STEP, FRAMEDELAY, WAITEVENT) */
@@ -435,6 +697,9 @@ process_command(const char *line)
 	else if (strcasecmp(tokens[0], "LISTVAR") == 0)   cmd_listvar();
 	else if (strcasecmp(tokens[0], "QUIT") == 0)      cmd_quit();
 	else if (strcasecmp(tokens[0], "RESUME") == 0)    cmd_resume();
+	else if (strcasecmp(tokens[0], "CAPSCREEN") == 0) cmd_capscreen();
+	else if (strcasecmp(tokens[0], "CAPRECT") == 0)   cmd_caprect();
+	else if (strcasecmp(tokens[0], "READPIXEL") == 0) cmd_readpixel();
 	else resp_err("unknown command");
 
 	return 0;
@@ -609,6 +874,15 @@ lud__auto_init(void)
 	if (lud__state.paused && lud__state.auto_port == 0 && !replay_fp)
 		lud_log("automation: --paused without --auto-port or --auto-file, "
 		        "game will be frozen");
+
+#ifndef _WIN32
+	{
+		struct sigaction sa;
+		memset(&sa, 0, sizeof(sa));
+		sa.sa_handler = sigusr1_handler;
+		sigaction(SIGUSR1, &sa, NULL);
+	}
+#endif
 }
 
 void
@@ -650,6 +924,14 @@ lud__auto_post_frame(void)
 
 	/* auto-release actions that were pressed via ACTION command */
 	lud__action_auto_release();
+
+#ifndef _WIN32
+	/* SIGUSR1 capture */
+	if (sigusr1_pending) {
+		sigusr1_pending = 0;
+		capture_screen_to_file();
+	}
+#endif
 }
 
 void
