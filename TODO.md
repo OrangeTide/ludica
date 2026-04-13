@@ -1,0 +1,4 @@
+- [x] ludica should offer a loading screen and progress meter as games initialize. hero's assets already create a few seconds of delay on start. -- resolved: new lud_draw_progress() does the job.
+- [ ] move all non-ludica components out of src and into samples. this will make it easier to vendor ludica if only the real library's files are in src/ and directories like samples/ and assets/ can be ignored.
+- [ ] clean up unused code and directories. (tiny/, src/attic/)
+- [X] why tools and scripts? -- resolved: tools = build tools, scripts = project maintenance
