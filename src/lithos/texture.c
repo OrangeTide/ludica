@@ -1,5 +1,5 @@
-#include "initgl_internal.h"
-#include "initgl_gfx.h"
+#include "lithos_internal.h"
+#include "lithos_gfx.h"
 #include <GLES2/gl2.h>
 #include <string.h>
 
@@ -26,7 +26,7 @@ alloc_slot(void)
 }
 
 static texture_slot_t *
-get_slot(initgl_texture_t tex)
+get_slot(lithos_texture_t tex)
 {
 	if (tex.id == 0 || tex.id > MAX_TEXTURES)
 		return NULL;
@@ -35,33 +35,33 @@ get_slot(initgl_texture_t tex)
 }
 
 static void
-format_to_gl(enum initgl_pixel_format fmt, GLenum *gl_fmt, int *bpp)
+format_to_gl(enum lithos_pixel_format fmt, GLenum *gl_fmt, int *bpp)
 {
 	switch (fmt) {
-	case INITGL_PIXFMT_R8:    *gl_fmt = GL_LUMINANCE; *bpp = 1; break;
-	case INITGL_PIXFMT_RGB8:  *gl_fmt = GL_RGB;       *bpp = 3; break;
-	case INITGL_PIXFMT_RGBA8: *gl_fmt = GL_RGBA;      *bpp = 4; break;
+	case LITHOS_PIXFMT_R8:    *gl_fmt = GL_LUMINANCE; *bpp = 1; break;
+	case LITHOS_PIXFMT_RGB8:  *gl_fmt = GL_RGB;       *bpp = 3; break;
+	case LITHOS_PIXFMT_RGBA8: *gl_fmt = GL_RGBA;      *bpp = 4; break;
 	default:                  *gl_fmt = GL_RGBA;       *bpp = 4; break;
 	}
 }
 
 static GLenum
-filter_to_gl(enum initgl_filter f)
+filter_to_gl(enum lithos_filter f)
 {
-	return f == INITGL_FILTER_NEAREST ? GL_NEAREST : GL_LINEAR;
+	return f == LITHOS_FILTER_NEAREST ? GL_NEAREST : GL_LINEAR;
 }
 
-initgl_texture_t
-initgl_make_texture(const initgl_texture_desc_t *desc)
+lithos_texture_t
+lithos_make_texture(const lithos_texture_desc_t *desc)
 {
-	initgl_texture_t out = {0};
+	lithos_texture_t out = {0};
 	texture_slot_t *s;
 	GLenum gl_fmt;
 	int bpp, idx;
 
 	idx = alloc_slot();
 	if (idx < 0) {
-		initgl_err("texture pool exhausted");
+		lithos_err("texture pool exhausted");
 		return out;
 	}
 
@@ -100,7 +100,7 @@ initgl_make_texture(const initgl_texture_desc_t *desc)
 }
 
 void
-initgl_destroy_texture(initgl_texture_t tex)
+lithos_destroy_texture(lithos_texture_t tex)
 {
 	texture_slot_t *s = get_slot(tex);
 	if (!s) return;
@@ -109,7 +109,7 @@ initgl_destroy_texture(initgl_texture_t tex)
 }
 
 void
-initgl_bind_texture(initgl_texture_t tex, int unit)
+lithos_bind_texture(lithos_texture_t tex, int unit)
 {
 	texture_slot_t *s = get_slot(tex);
 	glActiveTexture(GL_TEXTURE0 + unit);
@@ -117,7 +117,7 @@ initgl_bind_texture(initgl_texture_t tex, int unit)
 }
 
 void
-initgl_update_texture(initgl_texture_t tex, int x, int y, int w, int h,
+lithos_update_texture(lithos_texture_t tex, int x, int y, int w, int h,
                       const void *data)
 {
 	texture_slot_t *s = get_slot(tex);
@@ -138,14 +138,14 @@ initgl_update_texture(initgl_texture_t tex, int x, int y, int w, int h,
 /* --- Texture queries --- */
 
 int
-initgl_texture_width(initgl_texture_t tex)
+lithos_texture_width(lithos_texture_t tex)
 {
 	texture_slot_t *s = get_slot(tex);
 	return s ? s->width : 0;
 }
 
 int
-initgl_texture_height(initgl_texture_t tex)
+lithos_texture_height(lithos_texture_t tex)
 {
 	texture_slot_t *s = get_slot(tex);
 	return s ? s->height : 0;
@@ -154,14 +154,14 @@ initgl_texture_height(initgl_texture_t tex)
 /* --- Global state operations --- */
 
 void
-initgl_clear(float r, float g, float b, float a)
+lithos_clear(float r, float g, float b, float a)
 {
 	glClearColor(r, g, b, a);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
 void
-initgl_viewport(int x, int y, int w, int h)
+lithos_viewport(int x, int y, int w, int h)
 {
 	glViewport(x, y, w, h);
 }

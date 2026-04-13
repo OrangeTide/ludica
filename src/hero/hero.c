@@ -1,7 +1,7 @@
 /*
  * hero - portal-based 3D engine
  *
- * Ported from Jon Mayo's 2015 immediate-mode OpenGL prototype to initgl/GLES2.
+ * Ported from Jon Mayo's 2015 immediate-mode OpenGL prototype to lithos/GLES2.
  *
  * The world is composed of convex 2D sectors (polygons in the XZ plane).
  * Each sector side is either a solid wall or a portal into an adjacent sector.
@@ -11,9 +11,9 @@
  *   sector (x, y)  ->  world (X, Z)
  *   floor/ceil height  ->  world Y  (up)
  */
-#include "initgl.h"
-#include "initgl_gfx.h"
-#include "initgl_font.h"
+#include "lithos.h"
+#include "lithos_gfx.h"
+#include "lithos_font.h"
 #include <GLES2/gl2.h>
 #include <math.h>
 #include <stdbool.h>
@@ -100,7 +100,7 @@ struct draw_group {
 };
 
 struct sector_render {
-	initgl_mesh_t mesh;
+	lithos_mesh_t mesh;
 	struct draw_group groups[MAX_DRAW_GROUPS];
 	int num_groups;
 };
@@ -113,7 +113,7 @@ struct world {
 	const struct map_sector *sectors[MAX_SECTORS];
 	struct sector_render render[MAX_SECTORS];
 	unsigned num_sectors;
-	initgl_texture_t textures[MAX_TEXTURES];
+	lithos_texture_t textures[MAX_TEXTURES];
 	unsigned num_textures;
 };
 
@@ -145,9 +145,9 @@ struct game_state {
 
 static struct game_state state;
 static struct world world;
-static initgl_shader_t shader_textured;
-static initgl_shader_t shader_colored;
-static initgl_font_t font;
+static lithos_shader_t shader_textured;
+static lithos_shader_t shader_colored;
+static lithos_font_t font;
 
 /* ------------------------------------------------------------------ */
 /* Shaders                                                            */
@@ -249,7 +249,7 @@ sector_find_center(const struct map_sector *sec, float *cx, float *cy)
 /* Procedural texture generation                                      */
 /* ------------------------------------------------------------------ */
 
-static initgl_texture_t
+static lithos_texture_t
 make_checkerboard(int w, int h, int check,
                   unsigned char r1, unsigned char g1, unsigned char b1,
                   unsigned char r2, unsigned char g2, unsigned char b2)
@@ -265,11 +265,11 @@ make_checkerboard(int w, int h, int check,
 			p[2] = c ? b1 : b2;
 		}
 	}
-	initgl_texture_t tex = initgl_make_texture(&(initgl_texture_desc_t){
+	lithos_texture_t tex = lithos_make_texture(&(lithos_texture_desc_t){
 		.width = w, .height = h,
-		.format = INITGL_PIXFMT_RGB8,
-		.min_filter = INITGL_FILTER_LINEAR,
-		.mag_filter = INITGL_FILTER_LINEAR,
+		.format = LITHOS_PIXFMT_RGB8,
+		.min_filter = LITHOS_FILTER_LINEAR,
+		.mag_filter = LITHOS_FILTER_LINEAR,
 		.data = data,
 	});
 	free(data);
@@ -421,7 +421,7 @@ build_sector_mesh(struct sector_render *sr, const struct map_sector *sec)
 	}
 
 	sr->num_groups = ng;
-	sr->mesh = initgl_make_mesh(&(initgl_mesh_desc_t){
+	sr->mesh = lithos_make_mesh(&(lithos_mesh_desc_t){
 		.vertices = verts,
 		.vertex_count = nv,
 		.vertex_stride = sizeof(struct vertex),
@@ -431,8 +431,8 @@ build_sector_mesh(struct sector_render *sr, const struct map_sector *sec)
 			{ .size = 3, .offset = offsetof(struct vertex, r) },
 		},
 		.num_attrs = 3,
-		.usage = INITGL_USAGE_STATIC,
-		.primitive = INITGL_PRIM_TRIANGLES,
+		.usage = LITHOS_USAGE_STATIC,
+		.primitive = LITHOS_PRIM_TRIANGLES,
 	});
 
 	free(verts);
@@ -465,8 +465,8 @@ draw_sector_recursive(unsigned sector_num, int ttl)
 	for (i = 0; i < sr->num_groups; i++) {
 		struct draw_group *g = &sr->groups[i];
 		if (state.use_textures)
-			initgl_bind_texture(world.textures[g->tex_index], 0);
-		initgl_draw_range(sr->mesh, g->first, g->count);
+			lithos_bind_texture(world.textures[g->tex_index], 0);
+		lithos_draw_range(sr->mesh, g->first, g->count);
 	}
 
 	/* recurse into portals */
@@ -507,8 +507,8 @@ build_view_matrix(void)
 static hmm_mat4
 build_projection_matrix(void)
 {
-	float w = (float)initgl_width();
-	float h = (float)initgl_height();
+	float w = (float)lithos_width();
+	float h = (float)lithos_height();
 	if (h < 1.0f) h = 1.0f;
 	float aspect = w / h;
 	/* ~80 degree vertical FOV, matching the original frustum */
@@ -577,7 +577,7 @@ update_player(float dt)
 }
 
 /* ------------------------------------------------------------------ */
-/* initgl callbacks                                                   */
+/* lithos callbacks                                                   */
 /* ------------------------------------------------------------------ */
 
 static void
@@ -586,20 +586,20 @@ init(void)
 	unsigned i;
 
 	/* create shaders */
-	shader_textured = initgl_make_shader(&(initgl_shader_desc_t){
+	shader_textured = lithos_make_shader(&(lithos_shader_desc_t){
 		.vert_src = vert_src,
 		.frag_src = frag_textured_src,
 		.attrs = { "a_position", "a_texcoord", "a_color" },
 		.num_attrs = 3,
 	});
-	shader_colored = initgl_make_shader(&(initgl_shader_desc_t){
+	shader_colored = lithos_make_shader(&(lithos_shader_desc_t){
 		.vert_src = vert_src,
 		.frag_src = frag_colored_src,
 		.attrs = { "a_position", "a_texcoord", "a_color" },
 		.num_attrs = 3,
 	});
 
-	font = initgl_make_default_font();
+	font = lithos_make_default_font();
 
 	/* create procedural textures */
 	create_textures();
@@ -621,55 +621,55 @@ init(void)
 }
 
 static int
-on_event(const initgl_event_t *ev)
+on_event(const lithos_event_t *ev)
 {
-	if (ev->type == INITGL_EV_KEY_DOWN || ev->type == INITGL_EV_KEY_UP) {
-		bool down = (ev->type == INITGL_EV_KEY_DOWN);
+	if (ev->type == LITHOS_EV_KEY_DOWN || ev->type == LITHOS_EV_KEY_UP) {
+		bool down = (ev->type == LITHOS_EV_KEY_DOWN);
 		switch (ev->key.keycode) {
 		/* WASD + arrows */
-		case INITGL_KEY_W:
-		case INITGL_KEY_UP:
+		case LITHOS_KEY_W:
+		case LITHOS_KEY_UP:
 			state.act.up = down;
 			return 1;
-		case INITGL_KEY_S:
-		case INITGL_KEY_DOWN:
+		case LITHOS_KEY_S:
+		case LITHOS_KEY_DOWN:
 			state.act.down = down;
 			return 1;
-		case INITGL_KEY_Q:
+		case LITHOS_KEY_Q:
 			state.act.left = down;
 			return 1;
-		case INITGL_KEY_E:
+		case LITHOS_KEY_E:
 			state.act.right = down;
 			return 1;
-		case INITGL_KEY_A:
-		case INITGL_KEY_LEFT:
+		case LITHOS_KEY_A:
+		case LITHOS_KEY_LEFT:
 			state.act.turn_left = down;
 			return 1;
-		case INITGL_KEY_D:
-		case INITGL_KEY_RIGHT:
+		case LITHOS_KEY_D:
+		case LITHOS_KEY_RIGHT:
 			state.act.turn_right = down;
 			return 1;
 		/* fly */
-		case INITGL_KEY_HOME:
+		case LITHOS_KEY_HOME:
 			state.act.fly_up = down;
 			return 1;
-		case INITGL_KEY_END:
+		case LITHOS_KEY_END:
 			state.act.fly_down = down;
 			return 1;
 		/* look */
-		case INITGL_KEY_PAGE_UP:
+		case LITHOS_KEY_PAGE_UP:
 			state.act.look_up = down;
 			return 1;
-		case INITGL_KEY_PAGE_DOWN:
+		case LITHOS_KEY_PAGE_DOWN:
 			state.act.look_down = down;
 			return 1;
 		/* toggle texture mode */
-		case INITGL_KEY_T:
+		case LITHOS_KEY_T:
 			if (down)
 				state.use_textures = !state.use_textures;
 			return 1;
-		case INITGL_KEY_ESCAPE:
-			if (down) initgl_quit();
+		case LITHOS_KEY_ESCAPE:
+			if (down) lithos_quit();
 			return 1;
 		default:
 			break;
@@ -683,10 +683,10 @@ frame(float dt)
 {
 	update_player(dt);
 
-	int w = initgl_width();
-	int h = initgl_height();
-	initgl_viewport(0, 0, w, h);
-	initgl_clear(0.0f, 0.0f, 0.0f, 1.0f);
+	int w = lithos_width();
+	int h = lithos_height();
+	lithos_viewport(0, 0, w, h);
+	lithos_clear(0.0f, 0.0f, 0.0f, 1.0f);
 
 	/* enable depth test and backface culling */
 	glEnable(GL_DEPTH_TEST);
@@ -700,12 +700,12 @@ frame(float dt)
 	hmm_mat4 mvp = HMM_MultiplyMat4(proj, view);
 
 	/* draw world: pick shader based on render mode */
-	initgl_shader_t active_shader = state.use_textures
+	lithos_shader_t active_shader = state.use_textures
 		? shader_textured : shader_colored;
-	initgl_apply_shader(active_shader);
-	initgl_uniform_mat4(active_shader, "u_mvp", (const float *)mvp.Elements);
+	lithos_apply_shader(active_shader);
+	lithos_uniform_mat4(active_shader, "u_mvp", (const float *)mvp.Elements);
 	if (state.use_textures)
-		initgl_uniform_int(active_shader, "u_texture", 0);
+		lithos_uniform_int(active_shader, "u_texture", 0);
 
 	memset(sector_drawn, 0, sizeof(sector_drawn));
 	draw_sector_recursive(state.player_sector, PORTAL_DEPTH);
@@ -716,18 +716,18 @@ frame(float dt)
 
 	/* HUD text */
 	float vw = 640.0f, vh = 360.0f;
-	initgl_sprite_begin(0, 0, vw, vh);
+	lithos_sprite_begin(0, 0, vw, vh);
 
 	char buf[128];
 	snprintf(buf, sizeof(buf), "pos: %.1f, %.1f  facing: %.0f  [T]extures: %s",
 	         state.player_x, state.player_y, state.player_facing,
 	         state.use_textures ? "on" : "off");
-	initgl_draw_text(font, 4, 4, 1, buf);
+	lithos_draw_text(font, 4, 4, 1, buf);
 
 	snprintf(buf, sizeof(buf), "WASD/arrows: move  Q/E: strafe  PgUp/Dn: look  Home/End: fly");
-	initgl_draw_text(font, 4, vh - 12, 1, buf);
+	lithos_draw_text(font, 4, vh - 12, 1, buf);
 
-	initgl_sprite_end();
+	lithos_sprite_end();
 }
 
 static void
@@ -735,12 +735,12 @@ cleanup(void)
 {
 	unsigned i;
 	for (i = 0; i < world.num_sectors; i++)
-		initgl_destroy_mesh(world.render[i].mesh);
+		lithos_destroy_mesh(world.render[i].mesh);
 	for (i = 0; i < world.num_textures; i++)
-		initgl_destroy_texture(world.textures[i]);
-	initgl_destroy_shader(shader_textured);
-	initgl_destroy_shader(shader_colored);
-	initgl_destroy_font(font);
+		lithos_destroy_texture(world.textures[i]);
+	lithos_destroy_shader(shader_textured);
+	lithos_destroy_shader(shader_colored);
+	lithos_destroy_font(font);
 }
 
 /* ------------------------------------------------------------------ */
@@ -750,7 +750,7 @@ cleanup(void)
 int
 main(void)
 {
-	return initgl_run(&(initgl_desc_t){
+	return lithos_run(&(lithos_desc_t){
 		.app_name = "Hero",
 		.width = 960,
 		.height = 540,

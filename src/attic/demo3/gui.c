@@ -4,7 +4,7 @@
 
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 #include <cimgui/cimgui.h>
-#include <initgl.h>
+#include <lithos.h>
 
 void
 gui_init(void)

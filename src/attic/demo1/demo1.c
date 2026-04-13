@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
-#include <initgl.h>
+#include <lithos.h>
 #include "HandmadeMath.h"
 #include "cube-sapp.glsl.h"
 

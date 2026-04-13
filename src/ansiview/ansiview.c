@@ -9,8 +9,8 @@
  * Escape: quit
  */
 
-#include "initgl.h"
-#include "initgl_gfx.h"
+#include "lithos.h"
+#include "lithos_gfx.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -33,9 +33,9 @@ static int ansi_width, ansi_height;
 static struct ansi_cell *ansi_data;
 
 /* Font state */
-static initgl_texture_t font16_tex; /* 8x16 font atlas */
-static initgl_texture_t font8_tex;  /* 8x8 font atlas */
-static initgl_texture_t font_tex;   /* currently active */
+static lithos_texture_t font16_tex; /* 8x16 font atlas */
+static lithos_texture_t font8_tex;  /* 8x8 font atlas */
+static lithos_texture_t font_tex;   /* currently active */
 static int font_w, font_h;         /* current glyph dimensions */
 
 static int view_x, view_y;
@@ -249,12 +249,12 @@ done:
 /*
  * Load a font PNG (white-on-transparent, pre-inverted).
  */
-static initgl_texture_t
+static lithos_texture_t
 load_font_png(const char *path)
 {
-	initgl_texture_t tex;
+	lithos_texture_t tex;
 
-	tex = initgl_load_texture(path, INITGL_FILTER_NEAREST, INITGL_FILTER_NEAREST);
+	tex = lithos_load_texture(path, LITHOS_FILTER_NEAREST, LITHOS_FILTER_NEAREST);
 	if (tex.id == 0)
 		fprintf(stderr, "Failed to load font: %s\n", path);
 	return tex;
@@ -285,52 +285,52 @@ draw_glyph(unsigned char ch, int x, int y, int fg_idx, int bg_idx)
 	float sy = (float)(row * font_h);
 
 	/* background */
-	initgl_sprite_rect(dx, dy, font_w, font_h,
+	lithos_sprite_rect(dx, dy, font_w, font_h,
 	                   palette[bg_idx][0], palette[bg_idx][1], palette[bg_idx][2], 1.0f);
 
 	/* foreground glyph */
-	initgl_sprite_draw_tinted(font_tex,
+	lithos_sprite_draw_tinted(font_tex,
 	                          dx, dy, font_w, font_h,
 	                          sx, sy, font_w, font_h,
 	                          palette[fg_idx][0], palette[fg_idx][1], palette[fg_idx][2], 1.0f);
 }
 
 static int
-on_event(const initgl_event_t *ev)
+on_event(const lithos_event_t *ev)
 {
-	if (ev->type != INITGL_EV_KEY_DOWN)
+	if (ev->type != LITHOS_EV_KEY_DOWN)
 		return 0;
 
 	switch (ev->key.keycode) {
-	case INITGL_KEY_ESCAPE:
-		initgl_quit();
+	case LITHOS_KEY_ESCAPE:
+		lithos_quit();
 		return 1;
-	case INITGL_KEY_LEFT:
+	case LITHOS_KEY_LEFT:
 		view_x--;
 		return 1;
-	case INITGL_KEY_RIGHT:
+	case LITHOS_KEY_RIGHT:
 		view_x++;
 		return 1;
-	case INITGL_KEY_UP:
+	case LITHOS_KEY_UP:
 		view_y--;
 		return 1;
-	case INITGL_KEY_DOWN:
+	case LITHOS_KEY_DOWN:
 		view_y++;
 		return 1;
-	case INITGL_KEY_HOME:
+	case LITHOS_KEY_HOME:
 		view_x = 0;
 		view_y = 0;
 		return 1;
-	case INITGL_KEY_END:
-		view_y = ansi_height - initgl_height() / font_h;
+	case LITHOS_KEY_END:
+		view_y = ansi_height - lithos_height() / font_h;
 		return 1;
-	case INITGL_KEY_PAGE_UP:
-		view_y -= initgl_height() / font_h;
+	case LITHOS_KEY_PAGE_UP:
+		view_y -= lithos_height() / font_h;
 		return 1;
-	case INITGL_KEY_PAGE_DOWN:
-		view_y += initgl_height() / font_h;
+	case LITHOS_KEY_PAGE_DOWN:
+		view_y += lithos_height() / font_h;
 		return 1;
-	case INITGL_KEY_TAB:
+	case LITHOS_KEY_TAB:
 		if (font_h == 16)
 			set_font_mode(0);
 		else
@@ -363,8 +363,8 @@ frame(float dt)
 
 	(void)dt;
 
-	virtual_w = initgl_width();
-	virtual_h = initgl_height();
+	virtual_w = lithos_width();
+	virtual_h = lithos_height();
 	cols_visible = virtual_w / font_w;
 	rows_visible = virtual_h / font_h;
 
@@ -378,10 +378,10 @@ frame(float dt)
 	if (view_x < 0) view_x = 0;
 	if (view_y < 0) view_y = 0;
 
-	initgl_viewport(0, 0, virtual_w, virtual_h);
-	initgl_clear(0.0f, 0.0f, 0.0f, 1.0f);
+	lithos_viewport(0, 0, virtual_w, virtual_h);
+	lithos_clear(0.0f, 0.0f, 0.0f, 1.0f);
 
-	initgl_sprite_begin(0, 0, virtual_w, virtual_h);
+	lithos_sprite_begin(0, 0, virtual_w, virtual_h);
 
 	for (y = 0; y < rows_visible && (view_y + y) < ansi_height; y++) {
 		for (x = 0; x < cols_visible && (view_x + x) < ansi_width; x++) {
@@ -390,14 +390,14 @@ frame(float dt)
 		}
 	}
 
-	initgl_sprite_end();
+	lithos_sprite_end();
 }
 
 static void
 cleanup(void)
 {
-	initgl_destroy_texture(font16_tex);
-	initgl_destroy_texture(font8_tex);
+	lithos_destroy_texture(font16_tex);
+	lithos_destroy_texture(font8_tex);
 	free(ansi_data);
 	ansi_data = NULL;
 }
@@ -405,7 +405,7 @@ cleanup(void)
 int
 main(void)
 {
-	return initgl_run(&(initgl_desc_t){
+	return lithos_run(&(lithos_desc_t){
 		.app_name = "demo04 — ANSI art viewer",
 		.width = 640,
 		.height = 400,

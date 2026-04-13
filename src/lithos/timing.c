@@ -1,11 +1,11 @@
-#include "initgl_internal.h"
+#include "lithos_internal.h"
 
 #if defined(__linux__) || defined(__APPLE__)
 
 #include <time.h>
 
 unsigned long long
-initgl__clock_now(void)
+lithos__clock_now(void)
 {
 	struct timespec tp;
 	clock_gettime(CLOCK_MONOTONIC, &tp);
@@ -20,7 +20,7 @@ initgl__clock_now(void)
 #include <windows.h>
 
 unsigned long long
-initgl__clock_now(void)
+lithos__clock_now(void)
 {
 	static LARGE_INTEGER freq;
 	LARGE_INTEGER counter;
@@ -37,7 +37,7 @@ initgl__clock_now(void)
 #endif
 
 double
-initgl__clock_diff(unsigned long long t1, unsigned long long t0)
+lithos__clock_diff(unsigned long long t1, unsigned long long t0)
 {
 	return (double)(t1 - t0) / 1e9;
 }

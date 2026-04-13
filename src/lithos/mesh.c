@@ -1,5 +1,5 @@
-#include "initgl_internal.h"
-#include "initgl_gfx.h"
+#include "lithos_internal.h"
+#include "lithos_gfx.h"
 #include <GLES2/gl2.h>
 #include <string.h>
 
@@ -16,7 +16,7 @@ typedef struct {
 	struct {
 		GLint size;
 		int offset;
-	} attrs[INITGL_MAX_VERTEX_ATTRS];
+	} attrs[LITHOS_MAX_VERTEX_ATTRS];
 	int vertex_stride;
 } mesh_slot_t;
 
@@ -33,7 +33,7 @@ alloc_slot(void)
 }
 
 static mesh_slot_t *
-get_slot(initgl_mesh_t mesh)
+get_slot(lithos_mesh_t mesh)
 {
 	if (mesh.id == 0 || mesh.id > MAX_MESHES)
 		return NULL;
@@ -42,39 +42,39 @@ get_slot(initgl_mesh_t mesh)
 }
 
 static GLenum
-translate_primitive(enum initgl_primitive p)
+translate_primitive(enum lithos_primitive p)
 {
 	switch (p) {
-	case INITGL_PRIM_TRIANGLES:      return GL_TRIANGLES;
-	case INITGL_PRIM_TRIANGLE_FAN:   return GL_TRIANGLE_FAN;
-	case INITGL_PRIM_TRIANGLE_STRIP: return GL_TRIANGLE_STRIP;
-	case INITGL_PRIM_LINES:          return GL_LINES;
+	case LITHOS_PRIM_TRIANGLES:      return GL_TRIANGLES;
+	case LITHOS_PRIM_TRIANGLE_FAN:   return GL_TRIANGLE_FAN;
+	case LITHOS_PRIM_TRIANGLE_STRIP: return GL_TRIANGLE_STRIP;
+	case LITHOS_PRIM_LINES:          return GL_LINES;
 	default:                         return GL_TRIANGLES;
 	}
 }
 
 static GLenum
-translate_usage(enum initgl_usage u)
+translate_usage(enum lithos_usage u)
 {
 	switch (u) {
-	case INITGL_USAGE_STATIC:  return GL_STATIC_DRAW;
-	case INITGL_USAGE_DYNAMIC: return GL_DYNAMIC_DRAW;
-	case INITGL_USAGE_STREAM:  return GL_STREAM_DRAW;
+	case LITHOS_USAGE_STATIC:  return GL_STATIC_DRAW;
+	case LITHOS_USAGE_DYNAMIC: return GL_DYNAMIC_DRAW;
+	case LITHOS_USAGE_STREAM:  return GL_STREAM_DRAW;
 	default:                   return GL_STATIC_DRAW;
 	}
 }
 
-initgl_mesh_t
-initgl_make_mesh(const initgl_mesh_desc_t *desc)
+lithos_mesh_t
+lithos_make_mesh(const lithos_mesh_desc_t *desc)
 {
-	initgl_mesh_t out = {0};
+	lithos_mesh_t out = {0};
 	mesh_slot_t *s;
 	GLenum usage;
 	int idx, i;
 
 	idx = alloc_slot();
 	if (idx < 0) {
-		initgl_err("mesh pool exhausted");
+		lithos_err("mesh pool exhausted");
 		return out;
 	}
 
@@ -86,7 +86,7 @@ initgl_make_mesh(const initgl_mesh_desc_t *desc)
 	s->primitive = translate_primitive(desc->primitive);
 	s->num_attrs = desc->num_attrs;
 
-	for (i = 0; i < desc->num_attrs && i < INITGL_MAX_VERTEX_ATTRS; i++) {
+	for (i = 0; i < desc->num_attrs && i < LITHOS_MAX_VERTEX_ATTRS; i++) {
 		s->attrs[i].size = desc->layout[i].size;
 		s->attrs[i].offset = desc->layout[i].offset;
 	}
@@ -118,7 +118,7 @@ initgl_make_mesh(const initgl_mesh_desc_t *desc)
 }
 
 void
-initgl_destroy_mesh(initgl_mesh_t mesh)
+lithos_destroy_mesh(lithos_mesh_t mesh)
 {
 	mesh_slot_t *s = get_slot(mesh);
 	if (!s) return;
@@ -159,7 +159,7 @@ bind_and_draw(mesh_slot_t *s, int first, int count)
 }
 
 void
-initgl_draw(initgl_mesh_t mesh)
+lithos_draw(lithos_mesh_t mesh)
 {
 	mesh_slot_t *s = get_slot(mesh);
 	if (!s) return;
@@ -167,7 +167,7 @@ initgl_draw(initgl_mesh_t mesh)
 }
 
 void
-initgl_draw_range(initgl_mesh_t mesh, int first, int count)
+lithos_draw_range(lithos_mesh_t mesh, int first, int count)
 {
 	mesh_slot_t *s = get_slot(mesh);
 	if (!s) return;

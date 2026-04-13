@@ -6,17 +6,17 @@
 
 /config.mk
 
-/src/initgl/include/EGL/
-/src/initgl/include/GLES2/
-/src/initgl/include/GLES3/
-/src/initgl/include/KHR/
+/src/lithos/include/EGL/
+/src/lithos/include/GLES2/
+/src/lithos/include/GLES3/
+/src/lithos/include/KHR/
 
-/src/initgl/win32libs/chrome.zip
-/src/initgl/win32libs/d3dcompiler_47.dll
-/src/initgl/win32libs/libEGL.dll
-/src/initgl/win32libs/libGLESv2.dll
-/src/initgl/win32libs/vk_swiftshader.dll
-/src/initgl/win32libs/vk_swiftshader_icd.json
+/src/lithos/win32libs/chrome.zip
+/src/lithos/win32libs/d3dcompiler_47.dll
+/src/lithos/win32libs/libEGL.dll
+/src/lithos/win32libs/libGLESv2.dll
+/src/lithos/win32libs/vk_swiftshader.dll
+/src/lithos/win32libs/vk_swiftshader_icd.json
 
 /JUNK
 /OLD

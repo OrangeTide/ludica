@@ -1,14 +1,14 @@
 /*
- * platform_x11.c — X11 + EGL platform backend for initgl
+ * platform_x11.c — X11 + EGL platform backend for lithos
  *
- * Implements the platform interface from initgl_internal.h:
- *   initgl__platform_init()
- *   initgl__platform_shutdown()
- *   initgl__platform_poll_events()
- *   initgl__platform_swap()
+ * Implements the platform interface from lithos_internal.h:
+ *   lithos__platform_init()
+ *   lithos__platform_shutdown()
+ *   lithos__platform_poll_events()
+ *   lithos__platform_swap()
  */
 
-#include "initgl_internal.h"
+#include "lithos_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -20,79 +20,79 @@
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 
-/* ---- X11 keysym to initgl_keycode translation ---- */
+/* ---- X11 keysym to lithos_keycode translation ---- */
 
-static enum initgl_keycode
+static enum lithos_keycode
 translate_keysym(KeySym sym)
 {
 	/* Printable ASCII range */
 	if (sym >= XK_space && sym <= XK_asciitilde) {
 		/* Uppercase letters -> our enum uses uppercase ASCII values */
 		if (sym >= XK_a && sym <= XK_z)
-			return (enum initgl_keycode)(sym - XK_a + INITGL_KEY_A);
+			return (enum lithos_keycode)(sym - XK_a + LITHOS_KEY_A);
 		/* Already matches ASCII for digits, punctuation */
-		return (enum initgl_keycode)sym;
+		return (enum lithos_keycode)sym;
 	}
 
 	switch (sym) {
-	case XK_Escape:       return INITGL_KEY_ESCAPE;
-	case XK_Return:       return INITGL_KEY_ENTER;
-	case XK_Tab:          return INITGL_KEY_TAB;
-	case XK_BackSpace:    return INITGL_KEY_BACKSPACE;
-	case XK_Insert:       return INITGL_KEY_INSERT;
-	case XK_Delete:       return INITGL_KEY_DELETE;
-	case XK_Right:        return INITGL_KEY_RIGHT;
-	case XK_Left:         return INITGL_KEY_LEFT;
-	case XK_Down:         return INITGL_KEY_DOWN;
-	case XK_Up:           return INITGL_KEY_UP;
-	case XK_Page_Up:      return INITGL_KEY_PAGE_UP;
-	case XK_Page_Down:    return INITGL_KEY_PAGE_DOWN;
-	case XK_Home:         return INITGL_KEY_HOME;
-	case XK_End:          return INITGL_KEY_END;
-	case XK_Caps_Lock:    return INITGL_KEY_CAPS_LOCK;
-	case XK_Scroll_Lock:  return INITGL_KEY_SCROLL_LOCK;
-	case XK_Num_Lock:     return INITGL_KEY_NUM_LOCK;
-	case XK_Print:        return INITGL_KEY_PRINT_SCREEN;
-	case XK_Pause:        return INITGL_KEY_PAUSE;
-	case XK_F1:           return INITGL_KEY_F1;
-	case XK_F2:           return INITGL_KEY_F2;
-	case XK_F3:           return INITGL_KEY_F3;
-	case XK_F4:           return INITGL_KEY_F4;
-	case XK_F5:           return INITGL_KEY_F5;
-	case XK_F6:           return INITGL_KEY_F6;
-	case XK_F7:           return INITGL_KEY_F7;
-	case XK_F8:           return INITGL_KEY_F8;
-	case XK_F9:           return INITGL_KEY_F9;
-	case XK_F10:          return INITGL_KEY_F10;
-	case XK_F11:          return INITGL_KEY_F11;
-	case XK_F12:          return INITGL_KEY_F12;
-	case XK_KP_0:         return INITGL_KEY_KP_0;
-	case XK_KP_1:         return INITGL_KEY_KP_1;
-	case XK_KP_2:         return INITGL_KEY_KP_2;
-	case XK_KP_3:         return INITGL_KEY_KP_3;
-	case XK_KP_4:         return INITGL_KEY_KP_4;
-	case XK_KP_5:         return INITGL_KEY_KP_5;
-	case XK_KP_6:         return INITGL_KEY_KP_6;
-	case XK_KP_7:         return INITGL_KEY_KP_7;
-	case XK_KP_8:         return INITGL_KEY_KP_8;
-	case XK_KP_9:         return INITGL_KEY_KP_9;
-	case XK_KP_Decimal:   return INITGL_KEY_KP_DECIMAL;
-	case XK_KP_Divide:    return INITGL_KEY_KP_DIVIDE;
-	case XK_KP_Multiply:  return INITGL_KEY_KP_MULTIPLY;
-	case XK_KP_Subtract:  return INITGL_KEY_KP_SUBTRACT;
-	case XK_KP_Add:       return INITGL_KEY_KP_ADD;
-	case XK_KP_Enter:     return INITGL_KEY_KP_ENTER;
-	case XK_KP_Equal:     return INITGL_KEY_KP_EQUAL;
-	case XK_Shift_L:      return INITGL_KEY_LEFT_SHIFT;
-	case XK_Control_L:    return INITGL_KEY_LEFT_CONTROL;
-	case XK_Alt_L:        return INITGL_KEY_LEFT_ALT;
-	case XK_Super_L:      return INITGL_KEY_LEFT_SUPER;
-	case XK_Shift_R:      return INITGL_KEY_RIGHT_SHIFT;
-	case XK_Control_R:    return INITGL_KEY_RIGHT_CONTROL;
-	case XK_Alt_R:        return INITGL_KEY_RIGHT_ALT;
-	case XK_Super_R:      return INITGL_KEY_RIGHT_SUPER;
-	case XK_Menu:         return INITGL_KEY_MENU;
-	default:              return INITGL_KEY_UNKNOWN;
+	case XK_Escape:       return LITHOS_KEY_ESCAPE;
+	case XK_Return:       return LITHOS_KEY_ENTER;
+	case XK_Tab:          return LITHOS_KEY_TAB;
+	case XK_BackSpace:    return LITHOS_KEY_BACKSPACE;
+	case XK_Insert:       return LITHOS_KEY_INSERT;
+	case XK_Delete:       return LITHOS_KEY_DELETE;
+	case XK_Right:        return LITHOS_KEY_RIGHT;
+	case XK_Left:         return LITHOS_KEY_LEFT;
+	case XK_Down:         return LITHOS_KEY_DOWN;
+	case XK_Up:           return LITHOS_KEY_UP;
+	case XK_Page_Up:      return LITHOS_KEY_PAGE_UP;
+	case XK_Page_Down:    return LITHOS_KEY_PAGE_DOWN;
+	case XK_Home:         return LITHOS_KEY_HOME;
+	case XK_End:          return LITHOS_KEY_END;
+	case XK_Caps_Lock:    return LITHOS_KEY_CAPS_LOCK;
+	case XK_Scroll_Lock:  return LITHOS_KEY_SCROLL_LOCK;
+	case XK_Num_Lock:     return LITHOS_KEY_NUM_LOCK;
+	case XK_Print:        return LITHOS_KEY_PRINT_SCREEN;
+	case XK_Pause:        return LITHOS_KEY_PAUSE;
+	case XK_F1:           return LITHOS_KEY_F1;
+	case XK_F2:           return LITHOS_KEY_F2;
+	case XK_F3:           return LITHOS_KEY_F3;
+	case XK_F4:           return LITHOS_KEY_F4;
+	case XK_F5:           return LITHOS_KEY_F5;
+	case XK_F6:           return LITHOS_KEY_F6;
+	case XK_F7:           return LITHOS_KEY_F7;
+	case XK_F8:           return LITHOS_KEY_F8;
+	case XK_F9:           return LITHOS_KEY_F9;
+	case XK_F10:          return LITHOS_KEY_F10;
+	case XK_F11:          return LITHOS_KEY_F11;
+	case XK_F12:          return LITHOS_KEY_F12;
+	case XK_KP_0:         return LITHOS_KEY_KP_0;
+	case XK_KP_1:         return LITHOS_KEY_KP_1;
+	case XK_KP_2:         return LITHOS_KEY_KP_2;
+	case XK_KP_3:         return LITHOS_KEY_KP_3;
+	case XK_KP_4:         return LITHOS_KEY_KP_4;
+	case XK_KP_5:         return LITHOS_KEY_KP_5;
+	case XK_KP_6:         return LITHOS_KEY_KP_6;
+	case XK_KP_7:         return LITHOS_KEY_KP_7;
+	case XK_KP_8:         return LITHOS_KEY_KP_8;
+	case XK_KP_9:         return LITHOS_KEY_KP_9;
+	case XK_KP_Decimal:   return LITHOS_KEY_KP_DECIMAL;
+	case XK_KP_Divide:    return LITHOS_KEY_KP_DIVIDE;
+	case XK_KP_Multiply:  return LITHOS_KEY_KP_MULTIPLY;
+	case XK_KP_Subtract:  return LITHOS_KEY_KP_SUBTRACT;
+	case XK_KP_Add:       return LITHOS_KEY_KP_ADD;
+	case XK_KP_Enter:     return LITHOS_KEY_KP_ENTER;
+	case XK_KP_Equal:     return LITHOS_KEY_KP_EQUAL;
+	case XK_Shift_L:      return LITHOS_KEY_LEFT_SHIFT;
+	case XK_Control_L:    return LITHOS_KEY_LEFT_CONTROL;
+	case XK_Alt_L:        return LITHOS_KEY_LEFT_ALT;
+	case XK_Super_L:      return LITHOS_KEY_LEFT_SUPER;
+	case XK_Shift_R:      return LITHOS_KEY_RIGHT_SHIFT;
+	case XK_Control_R:    return LITHOS_KEY_RIGHT_CONTROL;
+	case XK_Alt_R:        return LITHOS_KEY_RIGHT_ALT;
+	case XK_Super_R:      return LITHOS_KEY_RIGHT_SUPER;
+	case XK_Menu:         return LITHOS_KEY_MENU;
+	default:              return LITHOS_KEY_UNKNOWN;
 	}
 }
 
@@ -100,10 +100,10 @@ static unsigned
 translate_modifiers(unsigned x11_state)
 {
 	unsigned mods = 0;
-	if (x11_state & ShiftMask)   mods |= INITGL_MOD_SHIFT;
-	if (x11_state & ControlMask) mods |= INITGL_MOD_CTRL;
-	if (x11_state & Mod1Mask)    mods |= INITGL_MOD_ALT;
-	if (x11_state & Mod4Mask)    mods |= INITGL_MOD_SUPER;
+	if (x11_state & ShiftMask)   mods |= LITHOS_MOD_SHIFT;
+	if (x11_state & ControlMask) mods |= LITHOS_MOD_CTRL;
+	if (x11_state & Mod1Mask)    mods |= LITHOS_MOD_ALT;
+	if (x11_state & Mod4Mask)    mods |= LITHOS_MOD_SUPER;
 	return mods;
 }
 
@@ -144,7 +144,7 @@ static int auto_repeat_detected;
 /* ---- Implementation ---- */
 
 static Window
-create_window(const initgl_desc_t *desc)
+create_window(const lithos_desc_t *desc)
 {
 	Screen *screen = DefaultScreenOfDisplay(xdisplay);
 	Window root = RootWindowOfScreen(screen);
@@ -217,13 +217,13 @@ create_window(const initgl_desc_t *desc)
 }
 
 int
-initgl__platform_init(const initgl_desc_t *desc)
+lithos__platform_init(const lithos_desc_t *desc)
 {
 	/* Open X11 display */
 	xdisplay = XOpenDisplay(NULL);
 	if (!xdisplay) {
-		initgl_err("Failed to open X11 display");
-		return INITGL_ERR;
+		lithos_err("Failed to open X11 display");
+		return LITHOS_ERR;
 	}
 
 	/* Intern atoms */
@@ -233,23 +233,23 @@ initgl__platform_init(const initgl_desc_t *desc)
 	/* Initialize EGL */
 	egl_display = eglGetDisplay((EGLNativeDisplayType)xdisplay);
 	if (egl_display == EGL_NO_DISPLAY) {
-		initgl_err("No EGL display available");
+		lithos_err("No EGL display available");
 		XCloseDisplay(xdisplay);
 		xdisplay = NULL;
-		return INITGL_ERR;
+		return LITHOS_ERR;
 	}
 
 	EGLint major, minor;
 	if (!eglInitialize(egl_display, &major, &minor)) {
-		initgl_err("Failed to initialize EGL");
+		lithos_err("Failed to initialize EGL");
 		eglTerminate(egl_display);
 		egl_display = EGL_NO_DISPLAY;
 		XCloseDisplay(xdisplay);
 		xdisplay = NULL;
-		return INITGL_ERR;
+		return LITHOS_ERR;
 	}
 
-	initgl_log("EGL %d.%d: %s (%s)", major, minor,
+	lithos_log("EGL %d.%d: %s (%s)", major, minor,
 		   eglQueryString(egl_display, EGL_VERSION),
 		   eglQueryString(egl_display, EGL_VENDOR));
 
@@ -258,12 +258,12 @@ initgl__platform_init(const initgl_desc_t *desc)
 	EGLint num_config;
 	if (!eglChooseConfig(egl_display, config_attribs, &egl_config, 1, &num_config) ||
 	    num_config == 0) {
-		initgl_err("No suitable EGL config found");
+		lithos_err("No suitable EGL config found");
 		eglTerminate(egl_display);
 		egl_display = EGL_NO_DISPLAY;
 		XCloseDisplay(xdisplay);
 		xdisplay = NULL;
-		return INITGL_ERR;
+		return LITHOS_ERR;
 	}
 
 	/* Create X11 window */
@@ -276,13 +276,13 @@ initgl__platform_init(const initgl_desc_t *desc)
 				       EGL_NO_CONTEXT, gles_ctx_attribs);
 	eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context);
 
-	initgl_log("GL: %s (%s)", glGetString(GL_VERSION), glGetString(GL_VENDOR));
+	lithos_log("GL: %s (%s)", glGetString(GL_VERSION), glGetString(GL_VENDOR));
 
-	return INITGL_OK;
+	return LITHOS_OK;
 }
 
 void
-initgl__platform_shutdown(void)
+lithos__platform_shutdown(void)
 {
 	if (egl_display != EGL_NO_DISPLAY) {
 		eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -309,10 +309,10 @@ initgl__platform_shutdown(void)
 }
 
 void
-initgl__platform_poll_events(void)
+lithos__platform_poll_events(void)
 {
 	XEvent xev;
-	initgl_event_t ev;
+	lithos_event_t ev;
 
 	while (XPending(xdisplay)) {
 		XNextEvent(xdisplay, &xev);
@@ -324,13 +324,13 @@ initgl__platform_poll_events(void)
 		switch (xev.type) {
 		case KeyPress: {
 			KeySym sym = XLookupKeysym(&xev.xkey, 0);
-			enum initgl_keycode kc = translate_keysym(sym);
+			enum lithos_keycode kc = translate_keysym(sym);
 
 			/* Detect auto-repeat: X11 sends KeyRelease+KeyPress
 			 * with identical timestamps for held keys */
 			auto_repeat_detected = 0;
 
-			ev.type = INITGL_EV_KEY_DOWN;
+			ev.type = LITHOS_EV_KEY_DOWN;
 			ev.modifiers = translate_modifiers(xev.xkey.state);
 			ev.key.keycode = kc;
 			ev.key.repeat = 0; /* updated below if repeat detected */
@@ -346,7 +346,7 @@ initgl__platform_poll_events(void)
 				}
 			}
 
-			initgl__event_push(&ev);
+			lithos__event_push(&ev);
 
 			/* Also generate CHAR event for text input */
 			{
@@ -373,12 +373,12 @@ initgl__platform_poll_events(void)
 					}
 					/* Skip control characters except tab, enter, backspace */
 					if (cp >= 32 || cp == '\t' || cp == '\r' || cp == '\n') {
-						initgl_event_t cev;
+						lithos_event_t cev;
 						memset(&cev, 0, sizeof(cev));
-						cev.type = INITGL_EV_CHAR;
+						cev.type = LITHOS_EV_CHAR;
 						cev.modifiers = translate_modifiers(xev.xkey.state);
 						cev.ch.codepoint = cp;
-						initgl__event_push(&cev);
+						lithos__event_push(&cev);
 					}
 				}
 			}
@@ -403,19 +403,19 @@ initgl__platform_poll_events(void)
 			}
 
 			KeySym sym = XLookupKeysym(&xev.xkey, 0);
-			ev.type = INITGL_EV_KEY_UP;
+			ev.type = LITHOS_EV_KEY_UP;
 			ev.modifiers = translate_modifiers(xev.xkey.state);
 			ev.key.keycode = translate_keysym(sym);
-			initgl__event_push(&ev);
+			lithos__event_push(&ev);
 			break;
 		}
 
 		case MotionNotify:
-			ev.type = INITGL_EV_MOUSE_MOVE;
+			ev.type = LITHOS_EV_MOUSE_MOVE;
 			ev.modifiers = translate_modifiers(xev.xmotion.state);
 			ev.mouse_move.x = xev.xmotion.x;
 			ev.mouse_move.y = xev.xmotion.y;
-			initgl__event_push(&ev);
+			lithos__event_push(&ev);
 			break;
 
 		case ButtonPress:
@@ -425,66 +425,66 @@ initgl__platform_poll_events(void)
 			/* Buttons 4/5 are scroll wheel on X11 */
 			if (btn == Button4 || btn == Button5) {
 				if (xev.type == ButtonPress) {
-					ev.type = INITGL_EV_MOUSE_SCROLL;
+					ev.type = LITHOS_EV_MOUSE_SCROLL;
 					ev.modifiers = translate_modifiers(xev.xbutton.state);
 					ev.scroll.dx = 0.0f;
 					ev.scroll.dy = (btn == Button4) ? 1.0f : -1.0f;
-					initgl__event_push(&ev);
+					lithos__event_push(&ev);
 				}
 				break;
 			}
 			/* Buttons 6/7 are horizontal scroll */
 			if (btn == 6 || btn == 7) {
 				if (xev.type == ButtonPress) {
-					ev.type = INITGL_EV_MOUSE_SCROLL;
+					ev.type = LITHOS_EV_MOUSE_SCROLL;
 					ev.modifiers = translate_modifiers(xev.xbutton.state);
 					ev.scroll.dx = (btn == 6) ? -1.0f : 1.0f;
 					ev.scroll.dy = 0.0f;
-					initgl__event_push(&ev);
+					lithos__event_push(&ev);
 				}
 				break;
 			}
 
-			ev.type = (xev.type == ButtonPress) ? INITGL_EV_MOUSE_DOWN : INITGL_EV_MOUSE_UP;
+			ev.type = (xev.type == ButtonPress) ? LITHOS_EV_MOUSE_DOWN : LITHOS_EV_MOUSE_UP;
 			ev.modifiers = translate_modifiers(xev.xbutton.state);
 			ev.mouse_button.x = xev.xbutton.x;
 			ev.mouse_button.y = xev.xbutton.y;
 			if (btn == Button1)
-				ev.mouse_button.button = INITGL_MOUSE_LEFT;
+				ev.mouse_button.button = LITHOS_MOUSE_LEFT;
 			else if (btn == Button2)
-				ev.mouse_button.button = INITGL_MOUSE_MIDDLE;
+				ev.mouse_button.button = LITHOS_MOUSE_MIDDLE;
 			else if (btn == Button3)
-				ev.mouse_button.button = INITGL_MOUSE_RIGHT;
+				ev.mouse_button.button = LITHOS_MOUSE_RIGHT;
 			else
 				break; /* ignore extra buttons */
-			initgl__event_push(&ev);
+			lithos__event_push(&ev);
 			break;
 		}
 
 		case ConfigureNotify:
-			if (xev.xconfigure.width != initgl__state.win_width ||
-			    xev.xconfigure.height != initgl__state.win_height) {
-				ev.type = INITGL_EV_RESIZED;
+			if (xev.xconfigure.width != lithos__state.win_width ||
+			    xev.xconfigure.height != lithos__state.win_height) {
+				ev.type = LITHOS_EV_RESIZED;
 				ev.resize.width = xev.xconfigure.width;
 				ev.resize.height = xev.xconfigure.height;
-				initgl__event_push(&ev);
+				lithos__event_push(&ev);
 			}
 			break;
 
 		case FocusIn:
-			ev.type = INITGL_EV_FOCUS;
-			initgl__event_push(&ev);
+			ev.type = LITHOS_EV_FOCUS;
+			lithos__event_push(&ev);
 			break;
 
 		case FocusOut:
-			ev.type = INITGL_EV_UNFOCUS;
-			initgl__event_push(&ev);
+			ev.type = LITHOS_EV_UNFOCUS;
+			lithos__event_push(&ev);
 			break;
 
 		case ClientMessage:
 			if (xev.xclient.message_type == wm_protocols &&
 			    (Atom)xev.xclient.data.l[0] == wm_delete_window) {
-				initgl_quit();
+				lithos_quit();
 			}
 			break;
 
@@ -495,7 +495,7 @@ initgl__platform_poll_events(void)
 }
 
 void
-initgl__platform_swap(void)
+lithos__platform_swap(void)
 {
 	eglSwapBuffers(egl_display, egl_surface);
 }

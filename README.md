@@ -33,7 +33,7 @@ Install MSYS2 and MINGW64.
 Install headers and libraries, from MSYS2 shell:
 
   ```sh
-  cd src/initgl
+  cd src/lithos
   download-headers.sh
   cd win32libs
   update-binaries.sh

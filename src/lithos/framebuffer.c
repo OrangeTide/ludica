@@ -7,8 +7,8 @@
  * to the current viewport.
  */
 
-#include "initgl_internal.h"
-#include "initgl_gfx.h"
+#include "lithos_internal.h"
+#include "lithos_gfx.h"
 #include <GLES2/gl2.h>
 #include <string.h>
 #include <stdlib.h>
@@ -85,12 +85,12 @@ static const float quad_verts[] = {
 typedef struct {
 	int used;
 	int width, height;
-	enum initgl_crt_mode crt;
+	enum lithos_crt_mode crt;
 	unsigned char *pixels;          /* CPU-side pixel buffer */
-	initgl_shader_t shader;
-	initgl_mesh_t quad;
-	initgl_texture_t screen_tex;
-	initgl_texture_t palette_tex;
+	lithos_shader_t shader;
+	lithos_mesh_t quad;
+	lithos_texture_t screen_tex;
+	lithos_texture_t palette_tex;
 } fb_slot_t;
 
 static fb_slot_t slots[MAX_FRAMEBUFFERS];
@@ -106,7 +106,7 @@ alloc_slot(void)
 }
 
 static fb_slot_t *
-get_slot(initgl_framebuffer_t fb)
+get_slot(lithos_framebuffer_t fb)
 {
 	if (fb.id == 0 || fb.id > MAX_FRAMEBUFFERS)
 		return NULL;
@@ -116,17 +116,17 @@ get_slot(initgl_framebuffer_t fb)
 
 /* ---- Public API ------------------------------------------------------- */
 
-initgl_framebuffer_t
-initgl_make_framebuffer(const initgl_framebuffer_desc_t *desc)
+lithos_framebuffer_t
+lithos_make_framebuffer(const lithos_framebuffer_desc_t *desc)
 {
-	initgl_framebuffer_t out = {0};
+	lithos_framebuffer_t out = {0};
 	fb_slot_t *s;
 	int idx;
 	const char *frag;
 
 	idx = alloc_slot();
 	if (idx < 0) {
-		initgl_err("framebuffer pool exhausted");
+		lithos_err("framebuffer pool exhausted");
 		return out;
 	}
 
@@ -140,16 +140,16 @@ initgl_make_framebuffer(const initgl_framebuffer_desc_t *desc)
 	/* CPU pixel buffer */
 	s->pixels = (unsigned char *)calloc(1, (size_t)desc->width * desc->height);
 	if (!s->pixels) {
-		initgl_err("framebuffer pixel alloc failed");
+		lithos_err("framebuffer pixel alloc failed");
 		s->used = 0;
 		return out;
 	}
 
 	/* Choose fragment shader */
-	frag = (desc->crt == INITGL_CRT_SCANLINES) ? fb_frag_crt : fb_frag_flat;
+	frag = (desc->crt == LITHOS_CRT_SCANLINES) ? fb_frag_crt : fb_frag_flat;
 
 	/* Compile shader */
-	s->shader = initgl_make_shader(&(initgl_shader_desc_t){
+	s->shader = lithos_make_shader(&(lithos_shader_desc_t){
 		.vert_src = fb_vert_src,
 		.frag_src = frag,
 		.attrs = { "vertex" },
@@ -157,33 +157,33 @@ initgl_make_framebuffer(const initgl_framebuffer_desc_t *desc)
 	});
 
 	/* Full-screen quad */
-	s->quad = initgl_make_mesh(&(initgl_mesh_desc_t){
+	s->quad = lithos_make_mesh(&(lithos_mesh_desc_t){
 		.vertices = quad_verts,
 		.vertex_count = 4,
 		.vertex_stride = 16,
 		.layout = { { .size = 4, .offset = 0 } },
 		.num_attrs = 1,
-		.primitive = INITGL_PRIM_TRIANGLE_FAN,
-		.usage = INITGL_USAGE_STATIC,
+		.primitive = LITHOS_PRIM_TRIANGLE_FAN,
+		.usage = LITHOS_USAGE_STATIC,
 	});
 
 	/* Screen texture: WxH single-channel */
-	s->screen_tex = initgl_make_texture(&(initgl_texture_desc_t){
+	s->screen_tex = lithos_make_texture(&(lithos_texture_desc_t){
 		.width = desc->width,
 		.height = desc->height,
-		.format = INITGL_PIXFMT_R8,
-		.min_filter = INITGL_FILTER_LINEAR,
-		.mag_filter = INITGL_FILTER_LINEAR,
+		.format = LITHOS_PIXFMT_R8,
+		.min_filter = LITHOS_FILTER_LINEAR,
+		.mag_filter = LITHOS_FILTER_LINEAR,
 		.data = s->pixels,
 	});
 
 	/* Palette texture: 256x1 RGBA, default all-black */
-	s->palette_tex = initgl_make_texture(&(initgl_texture_desc_t){
+	s->palette_tex = lithos_make_texture(&(lithos_texture_desc_t){
 		.width = 256,
 		.height = 1,
-		.format = INITGL_PIXFMT_RGBA8,
-		.min_filter = INITGL_FILTER_LINEAR,
-		.mag_filter = INITGL_FILTER_LINEAR,
+		.format = LITHOS_PIXFMT_RGBA8,
+		.min_filter = LITHOS_FILTER_LINEAR,
+		.mag_filter = LITHOS_FILTER_LINEAR,
 		.data = NULL,
 	});
 
@@ -192,58 +192,58 @@ initgl_make_framebuffer(const initgl_framebuffer_desc_t *desc)
 }
 
 void
-initgl_destroy_framebuffer(initgl_framebuffer_t fb)
+lithos_destroy_framebuffer(lithos_framebuffer_t fb)
 {
 	fb_slot_t *s = get_slot(fb);
 	if (!s) return;
-	initgl_destroy_mesh(s->quad);
-	initgl_destroy_texture(s->screen_tex);
-	initgl_destroy_texture(s->palette_tex);
-	initgl_destroy_shader(s->shader);
+	lithos_destroy_mesh(s->quad);
+	lithos_destroy_texture(s->screen_tex);
+	lithos_destroy_texture(s->palette_tex);
+	lithos_destroy_shader(s->shader);
 	free(s->pixels);
 	memset(s, 0, sizeof(*s));
 }
 
 void
-initgl_framebuffer_palette(initgl_framebuffer_t fb,
+lithos_framebuffer_palette(lithos_framebuffer_t fb,
                            const unsigned int palette[256])
 {
 	fb_slot_t *s = get_slot(fb);
 	if (!s) return;
-	initgl_update_texture(s->palette_tex, 0, 0, 256, 1, palette);
+	lithos_update_texture(s->palette_tex, 0, 0, 256, 1, palette);
 }
 
 unsigned char *
-initgl_framebuffer_lock(initgl_framebuffer_t fb)
+lithos_framebuffer_lock(lithos_framebuffer_t fb)
 {
 	fb_slot_t *s = get_slot(fb);
 	return s ? s->pixels : NULL;
 }
 
 void
-initgl_framebuffer_unlock(initgl_framebuffer_t fb)
+lithos_framebuffer_unlock(lithos_framebuffer_t fb)
 {
 	fb_slot_t *s = get_slot(fb);
 	if (!s) return;
-	initgl_update_texture(s->screen_tex, 0, 0, s->width, s->height, s->pixels);
+	lithos_update_texture(s->screen_tex, 0, 0, s->width, s->height, s->pixels);
 }
 
 void
-initgl_framebuffer_blit(initgl_framebuffer_t fb)
+lithos_framebuffer_blit(lithos_framebuffer_t fb)
 {
 	fb_slot_t *s = get_slot(fb);
 	if (!s) return;
 
-	initgl_apply_shader(s->shader);
-	initgl_bind_texture(s->screen_tex, 0);
-	initgl_bind_texture(s->palette_tex, 1);
-	initgl_uniform_int(s->shader, "u_screen", 0);
-	initgl_uniform_int(s->shader, "u_palette", 1);
+	lithos_apply_shader(s->shader);
+	lithos_bind_texture(s->screen_tex, 0);
+	lithos_bind_texture(s->palette_tex, 1);
+	lithos_uniform_int(s->shader, "u_screen", 0);
+	lithos_uniform_int(s->shader, "u_palette", 1);
 
-	if (s->crt == INITGL_CRT_SCANLINES) {
-		initgl_uniform_vec2(s->shader, "u_resolution",
+	if (s->crt == LITHOS_CRT_SCANLINES) {
+		lithos_uniform_vec2(s->shader, "u_resolution",
 		                    (float)s->width, (float)s->height);
 	}
 
-	initgl_draw(s->quad);
+	lithos_draw(s->quad);
 }

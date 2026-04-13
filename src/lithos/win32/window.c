@@ -12,7 +12,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "initgl.h"
+#include "lithos.h"
 #include "log.h"
 
 /**********************************************************************/
@@ -21,13 +21,13 @@
 #define EGL_PLATFORM_ANGLE_TYPE_ANGLE                      0x3203
 #define EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE               0x3450
 
-#ifndef INITGL_MAX_WINDOWS
-#define INITGL_MAX_WINDOWS 4
+#ifndef LITHOS_MAX_WINDOWS
+#define LITHOS_MAX_WINDOWS 4
 #endif
 
-#define INITGL_WAIT_THRESHOLD_MS 3
+#define LITHOS_WAIT_THRESHOLD_MS 3
 
-#define initgl_egl_check() do { \
+#define lithos_egl_check() do { \
 		GLenum e = eglGetError(); \
 		if (e != EGL_SUCCESS) {\
 			log_error("%s:%d:%s():EGL error = 0x%04x\n", __FILE__, __LINE__, __func__, e); \
@@ -37,11 +37,11 @@
 
 #if 0
 enum {
-	INITGL_WM_APP_INITDONE = WM_APP, /* unblock rendering thread */
-	INITGL_WM_APP_PAUSE, /* pauses rendering */
-	INITGL_WM_APP_CONTINUE, /* continues rendering */
-	INITGL_WM_APP_STOP, /* exit rendering thread */
-	INITGL_WM_APP_RESIZE, /* resize viewport */
+	LITHOS_WM_APP_INITDONE = WM_APP, /* unblock rendering thread */
+	LITHOS_WM_APP_PAUSE, /* pauses rendering */
+	LITHOS_WM_APP_CONTINUE, /* continues rendering */
+	LITHOS_WM_APP_STOP, /* exit rendering thread */
+	LITHOS_WM_APP_RESIZE, /* resize viewport */
 };
 #endif
 
@@ -58,8 +58,8 @@ struct win_info {
 
 /**********************************************************************/
 
-static int current_index = INITGL_ERR;
-static struct win_info window[INITGL_MAX_WINDOWS];
+static int current_index = LITHOS_ERR;
+static struct win_info window[LITHOS_MAX_WINDOWS];
 static int default_width = 640, default_height = 480;
 static LONGLONG qpcFrequency;
 static BOOL fQpc = FALSE;      // use QueryPerformanceCounters if TRUE
@@ -86,26 +86,26 @@ static int
 find_next_window(void)
 {
 	int i;
-	for (i = 0; i < INITGL_MAX_WINDOWS; i++) {
+	for (i = 0; i < LITHOS_MAX_WINDOWS; i++) {
 		if (window[i].alive == FALSE) {
 			return i;
 		}
 	}
 
-	return INITGL_ERR;
+	return LITHOS_ERR;
 }
 
 /* find index of matching window handle */
 static int
 find_win(HWND hWnd) {
 	int i;
-	for (i = 0; i < INITGL_MAX_WINDOWS; i++) {
+	for (i = 0; i < LITHOS_MAX_WINDOWS; i++) {
 		if (window[i].alive == TRUE && window[i].hWnd == hWnd) {
 			return i;
 		}
 	}
 
-	return INITGL_ERR;
+	return LITHOS_ERR;
 }
 
 static void
@@ -123,18 +123,18 @@ render_continue(void)
 int
 window_select(int num)
 {
-	if (num < 0 || num > INITGL_MAX_WINDOWS) {
-		return INITGL_ERR;
+	if (num < 0 || num > LITHOS_MAX_WINDOWS) {
+		return LITHOS_ERR;
 	}
 
 	/* skip if we've cached */
 	if (current_index == num) {
-		return INITGL_OK;
+		return LITHOS_OK;
 	}
 
 	struct win_info *info = &window[num];
 	if (info->alive == FALSE) {
-		return INITGL_ERR;
+		return LITHOS_ERR;
 	}
 	current_index = num;
 	if (info->surface && info->eglContext) {
@@ -145,17 +145,17 @@ window_select(int num)
 		log_debug("No Selected window context");
 	}
 
-	return INITGL_OK;
+	return LITHOS_OK;
 }
 
 static LRESULT CALLBACK
 MainWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
 	int cur = find_win(hWnd);
-	struct win_info *info = cur == INITGL_ERR ? NULL : &window[cur];
+	struct win_info *info = cur == LITHOS_ERR ? NULL : &window[cur];
 	switch (Msg) {
 
 #if 0 // TODO: support a render thread
-	case INITGL_WM_APP_INITDONE:
+	case LITHOS_WM_APP_INITDONE:
 		/* render thread is ready */
 		if (wParam) { /* full screen window? */
 			ShowWindow(hWnd, SW_MAXIMIZE);
@@ -192,7 +192,7 @@ MainWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
 
 		case SIZE_RESTORED:
 			/* tell the render thread to resize viewport */
-			// TODO: PostThreadMessage(_nRenderThreadID, INITGL_WM_APP_RESIZE, 0, 0);
+			// TODO: PostThreadMessage(_nRenderThreadID, LITHOS_WM_APP_RESIZE, 0, 0);
 
 			/* unblock render thread */
 			render_continue();
@@ -223,7 +223,7 @@ MainWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
 		// TODO: save window size and position
 
 		/* terminate render thread */
-		// TODO: PostThreadMessage(_nRenderThreadID, INITGL_WM_APP_STOP, 0, 0);
+		// TODO: PostThreadMessage(_nRenderThreadID, LITHOS_WM_APP_STOP, 0, 0);
 		// TODO: WaitForSingleObject(_hRenderThread, 5000);
 
 		if (info && info->eglDisplay != EGL_NO_DISPLAY) {
@@ -287,15 +287,15 @@ window_new(const struct window_callback_functions *callback)
 		wndcls = RegisterClassEx(&wcx);
 		if (!wndcls) {
 			errormsg("RegisterClassEx() failed: Cannot register window class.");
-			return INITGL_ERR;
+			return LITHOS_ERR;
 		}
 	}
 
 	int win_index = find_next_window();
 
-	if (win_index == INITGL_ERR) {
+	if (win_index == LITHOS_ERR) {
 		errormsg("Too many open windows.");
-		return INITGL_ERR;
+		return LITHOS_ERR;
 	}
 
 #ifdef UNICODE
@@ -305,7 +305,7 @@ window_new(const struct window_callback_functions *callback)
         if (!len) {
 		title_buf[0] = 0; // ERROR
 		errormsg("Invalidate window title string");
-		return INITGL_ERR;
+		return LITHOS_ERR;
 	}
 #else
         char *title_buf = title; // pass it through
@@ -324,7 +324,7 @@ window_new(const struct window_callback_functions *callback)
 
 	if (hwnd == NULL) {
 		errormsg("CreateWindow() failed: Cannot create OpenGL window.");
-		return INITGL_ERR;
+		return LITHOS_ERR;
 	}
 
 	HDC hdc = GetDC(hwnd);
@@ -341,7 +341,7 @@ window_new(const struct window_callback_functions *callback)
 		errormsg("Unable to find EGL display");
 		info->alive = FALSE;
 		DestroyWindow(hwnd);
-		return INITGL_ERR;
+		return LITHOS_ERR;
 	}
 
 	// Initialize EGL for this display, returns EGL version
@@ -351,7 +351,7 @@ window_new(const struct window_callback_functions *callback)
 	log_debug("EGL %u.%u version: %s (%s)", major, minor,
 		eglQueryString(eglDisplay, EGL_VERSION),
 		eglQueryString(eglDisplay, EGL_VENDOR));
-	initgl_egl_check();
+	lithos_egl_check();
 
 	EGLint configAttributes[] = {
 		EGL_BUFFER_SIZE, 0,
@@ -388,7 +388,7 @@ window_new(const struct window_callback_functions *callback)
 	EGLint surfaceAttributes[] = { EGL_NONE };
 	EGLSurface eglSurface = eglCreateWindowSurface(eglDisplay, windowConfig, hwnd, surfaceAttributes);
 
-	initgl_egl_check();
+	lithos_egl_check();
 
 	EGLint contextAttributes[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
 	EGLContext eglContext = eglCreateContext(eglDisplay, windowConfig, NULL, contextAttributes);
@@ -398,7 +398,7 @@ window_new(const struct window_callback_functions *callback)
 		info->alive = FALSE;
 		eglTerminate(eglDisplay);
 		DestroyWindow(hwnd);
-		return INITGL_ERR;
+		return LITHOS_ERR;
 	}
 
 	info->alive = TRUE;
@@ -410,7 +410,7 @@ window_new(const struct window_callback_functions *callback)
 	eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext);
 	current_index = win_index;
 
-	initgl_egl_check();
+	lithos_egl_check();
 
 	log_debug("win_index=%d context=%p", win_index, eglContext);
 
@@ -448,7 +448,7 @@ display_init(void)
                 tNext = timeGetTime(); // TODO: handle wrap around
         }
 
-	return INITGL_OK;
+	return LITHOS_OK;
 }
 
 void
@@ -456,7 +456,7 @@ display_done(void)
 {
 	unsigned i;
 
-	for (i = 0; i < INITGL_MAX_WINDOWS; i++) {
+	for (i = 0; i < LITHOS_MAX_WINDOWS; i++) {
 		struct win_info *info = &window[i];
 		if (info->alive == TRUE) {
 			log_debug("TODO: clean up window %d", i);
@@ -517,7 +517,7 @@ process_events(void)
 				tRemaining /= qpcFrequency;
 			}
 
-			if (tRemaining >= INITGL_WAIT_THRESHOLD_MS) {
+			if (tRemaining >= LITHOS_WAIT_THRESHOLD_MS) {
 				MsgWaitForMultipleObjects(0, NULL, FALSE, tRemaining, QS_ALLEVENTS);
 			}
 		}
@@ -535,11 +535,11 @@ paint_all(void)
         }
         dirty_flag = FALSE;
 
-	for (i = 0; i < INITGL_MAX_WINDOWS; i++) {
+	for (i = 0; i < LITHOS_MAX_WINDOWS; i++) {
 		struct win_info *info = &window[i];
 		window_select(i);
 		if (info->alive == TRUE && info->eglDisplay != EGL_NO_DISPLAY) {
-			if (window_select(i) == INITGL_OK) {
+			if (window_select(i) == LITHOS_OK) {
 				if (info->callback.paint) {
 					info->callback.paint();
 				}

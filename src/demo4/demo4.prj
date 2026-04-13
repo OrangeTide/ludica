@@ -4,5 +4,5 @@ TYPE = exe
 SRCS = demo4.c
 CFLAGS = -Wall -W -O2
 CFLAGS += -g
-USES = initgl
+USES = lithos
 $(END_TARGET)

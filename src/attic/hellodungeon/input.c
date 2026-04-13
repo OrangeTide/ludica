@@ -2,7 +2,7 @@
 #include "input.h"
 #include "state.h"
 #include "gui.h"
-#include <initgl.h>
+#include <lithos.h>
 
 #define INPUT_SOURCE_KEYBOARD (1U)
 #define INPUT_SOURCE_GAMEPAD(n) (2U << (n))

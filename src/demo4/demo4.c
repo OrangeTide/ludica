@@ -1,4 +1,4 @@
-#include "initgl.h"
+#include "lithos.h"
 #include "gamepad.h"
 #include "log.h"
 #include <assert.h>
@@ -61,7 +61,7 @@ struct demo4_state {
 static int
 compile_shader(GLuint *program_out, const GLchar *vert_source, const GLchar *frag_source)
 {
-	initgl_gl_check();
+	lithos_gl_check();
 
 	*program_out = 0; /* initialize assuming failure */
 
@@ -70,7 +70,7 @@ compile_shader(GLuint *program_out, const GLchar *vert_source, const GLchar *fra
 	glShaderSource(vshader, 1, &vert_source, 0);
 	glCompileShader(vshader);
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	// fragment shader
 	GLuint fshader = glCreateShader(GL_FRAGMENT_SHADER);
@@ -79,23 +79,23 @@ compile_shader(GLuint *program_out, const GLchar *vert_source, const GLchar *fra
 
 	GLuint shader_parts[] = { vshader, fshader };
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	unsigned i;
 	for (i = 0; i < sizeof(shader_parts) / sizeof(*shader_parts); i++) {
 		GLint compile_status = GL_TRUE;
 		glGetShaderiv(shader_parts[i], GL_COMPILE_STATUS, &compile_status);
-		initgl_gl_check();
+		lithos_gl_check();
 		if (compile_status != GL_TRUE) {
 			char info[256] = "Unknown";
 			glGetShaderInfoLog(shader_parts[i], sizeof(info), NULL, info);
 			log_error("GL shader #%u compile failure:%s", i, info);
-			initgl_gl_check();
+			lithos_gl_check();
 			return ERR;
 		}
 	}
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	GLuint program = glCreateProgram();
 	assert(program != 0);
@@ -105,19 +105,19 @@ compile_shader(GLuint *program_out, const GLchar *vert_source, const GLchar *fra
 
 	GLint link_status;
 	glGetProgramiv(program, GL_LINK_STATUS, &link_status);
-	initgl_gl_check();
+	lithos_gl_check();
 	if (link_status != GL_TRUE) {
 		char info[256] = "Unknown";
 		glGetProgramInfoLog(program, sizeof(info), NULL, info);
 		log_error("GL program link failure:%s", info);
-		initgl_gl_check();
+		lithos_gl_check();
 		return ERR;
 	}
 
 	glDeleteShader(vshader);
 	glDeleteShader(fshader);
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	*program_out = program;
 
@@ -236,7 +236,7 @@ screen_update(struct screen *screen, unsigned left, unsigned top, unsigned right
 	glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, one_byte_swizzle);
 	glTexSubImage2D(GL_TEXTURE_2D, 0, left, top, width, height, GL_RED, GL_UNSIGNED_BYTE, screen->data);
 #endif
-	initgl_gl_check();
+	lithos_gl_check();
 
 	return OK;
 }
@@ -298,7 +298,7 @@ screen_init(struct screen *screen, int screen_width, int screen_height)
 	}
 	assert(screen->shader.program != 0);
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	load_attributes(screen->shader.program, (const char*[]){ "vertex", "AttrMultiTexCoord0" }, &screen->shader.attr_vertex, 2);
 	if (screen->shader.attr_vertex < 0) {
@@ -307,11 +307,11 @@ screen_init(struct screen *screen, int screen_width, int screen_height)
 	}
 	load_uniforms(screen->shader.program, (const char*[]){ "color", "palette", "texture" }, &screen->shader.unif_color, 3);
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	glUseProgram(screen->shader.program);
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	screen->width = screen_width;
 	screen->height = screen_height;
@@ -340,7 +340,7 @@ screen_init(struct screen *screen, int screen_width, int screen_height)
 	glEnableVertexAttribArray(screen->shader.attr_vertex);
 	screen->buf = buf;
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	/*** Textures ***/
 
@@ -373,7 +373,7 @@ screen_init(struct screen *screen, int screen_width, int screen_height)
 	glBindTexture(GL_TEXTURE_2D, screen->palette_tex);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, screen->palette_buf);
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	return OK;
 }
@@ -400,7 +400,7 @@ screen_paint(struct screen *screen)
 		glUniform1i(screen->shader.unif_texture, 0); // screen_tex is GL_TEXTURE0
 	}
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 
@@ -414,7 +414,7 @@ screen_paint(struct screen *screen)
 	glActiveTexture(GL_TEXTURE1);
 	glBindTexture(GL_TEXTURE_2D, 0);
 
-	initgl_gl_check();
+	lithos_gl_check();
 }
 
 static int
@@ -459,7 +459,7 @@ sprite_group_init(struct sprite_group *group, unsigned count)
 	}
 	assert(group->shader.program != 0);
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	load_attributes(group->shader.program, (const char*[]){ "vertex", }, &group->shader.attr_vertex, 1);
 	if (group->shader.attr_vertex < 0) {
@@ -469,11 +469,11 @@ sprite_group_init(struct sprite_group *group, unsigned count)
 
 	load_uniforms(group->shader.program, (const char*[]){ "scale" }, &group->shader.unif_scale, 1);
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	glUseProgram(group->shader.program);
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	/*** Vertex Buffer ***/
 
@@ -492,7 +492,7 @@ sprite_group_init(struct sprite_group *group, unsigned count)
 	glEnableVertexAttribArray(group->shader.attr_vertex);
 	group->quad_buf = quad_buf;
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	/*** Textures ***/
 
@@ -528,14 +528,14 @@ sprite_group_paint(struct sprite_group *group)
 	for (i = 0; i < count; i++) {
 		// struct sprite_instance *sprite = group->instance + i;
 
-		initgl_gl_check();
+		lithos_gl_check();
 
 		// TODO: apply instance and coordinate information
 
 		glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 	}
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	/* clean up state */
 
@@ -547,7 +547,7 @@ sprite_group_paint(struct sprite_group *group)
 	glActiveTexture(GL_TEXTURE1);
 	glBindTexture(GL_TEXTURE_2D, 0);
 
-	initgl_gl_check();
+	lithos_gl_check();
 }
 
 /* load shader, initialize GL state */
@@ -561,11 +561,11 @@ my_gl_init(void)
 
 	screen_update_full(&state.screen);
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	sprite_group_init(&state.sprite_group, 1);
 
-	initgl_gl_check();
+	lithos_gl_check();
 
 	return OK;
 }
@@ -601,7 +601,7 @@ paint(void)
 
 	glFlush();
 
-	initgl_gl_check();
+	lithos_gl_check();
 }
 
 void
@@ -668,10 +668,10 @@ animate(void)
 int
 main()
 {
-	if (display_init() != INITGL_OK) {
+	if (display_init() != LITHOS_OK) {
 		return 1;
 	}
-	if (window_new(&callbacks) != INITGL_OK) {
+	if (window_new(&callbacks) != LITHOS_OK) {
 		return 1;
 	}
 

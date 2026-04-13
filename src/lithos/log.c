@@ -1,4 +1,4 @@
-#include "initgl.h"
+#include "lithos.h"
 #include <stdio.h>
 #include <stdarg.h>
 
@@ -10,7 +10,7 @@
 #endif
 
 void
-initgl_log(const char *msg, ...)
+lithos_log(const char *msg, ...)
 {
 	va_list ap;
 	va_start(ap, msg);
@@ -20,7 +20,7 @@ initgl_log(const char *msg, ...)
 }
 
 void
-initgl_err(const char *msg, ...)
+lithos_err(const char *msg, ...)
 {
 	va_list ap;
 	va_start(ap, msg);

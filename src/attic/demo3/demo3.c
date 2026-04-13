@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include <initgl.h>
+#include <lithos.h>
 #include "graphics.h"
 #include "gui.h"
 #include "input.h"
