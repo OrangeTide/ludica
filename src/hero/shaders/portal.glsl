@@ -4,6 +4,7 @@ varying vec2 v_texcoord;
 varying vec3 v_color;
 varying vec3 v_tangent_light;
 varying vec3 v_tangent_view;
+varying float v_light_dist;
 @end
 
 @vs portal
@@ -14,7 +15,7 @@ attribute vec3 a_tangent;
 attribute vec3 a_color;
 uniform mat4 u_mvp;
 uniform vec3 u_view_pos;
-uniform vec3 u_light_dir;
+uniform vec3 u_light_pos;
 void main() {
     gl_Position = u_mvp * vec4(a_position, 1.0);
     v_texcoord = a_texcoord;
@@ -25,13 +26,16 @@ void main() {
     vec3 T = normalize(a_tangent);
     vec3 B = cross(N, T);
 
-    /* transform light and view directions into tangent space */
+    /* point light: direction and distance from vertex to light */
     vec3 world_pos = a_position;
-    vec3 to_light = normalize(-u_light_dir);
-    vec3 to_view  = normalize(u_view_pos - world_pos);
+    vec3 to_light = u_light_pos - world_pos;
+    v_light_dist = length(to_light);
+    vec3 light_dir = to_light / v_light_dist;
 
-    v_tangent_light = vec3(dot(to_light, T), dot(to_light, B), dot(to_light, N));
-    v_tangent_view  = vec3(dot(to_view, T),  dot(to_view, B),  dot(to_view, N));
+    vec3 to_view = normalize(u_view_pos - world_pos);
+
+    v_tangent_light = vec3(dot(light_dir, T), dot(light_dir, B), dot(light_dir, N));
+    v_tangent_view  = vec3(dot(to_view, T),   dot(to_view, B),   dot(to_view, N));
 }
 @end
 
@@ -40,7 +44,46 @@ uniform sampler2D u_texture;
 uniform sampler2D u_normal_map;
 uniform sampler2D u_roughness_map;
 uniform sampler2D u_ao_map;
+uniform sampler2D u_height_map;
 uniform vec3 u_light_color;
+uniform float u_height_scale;
+
+/* ---- Parallax Occlusion Mapping ---- */
+
+vec2 parallax_occlusion(vec2 uv, vec3 view_dir) {
+    const float min_layers = 8.0;
+    const float max_layers = 32.0;
+    float num_layers = mix(max_layers, min_layers, max(dot(vec3(0, 0, 1), view_dir), 0.0));
+
+    float layer_depth = 1.0 / num_layers;
+    float current_layer = 0.0;
+
+    /* direction to shift UVs per layer (scaled by height) */
+    vec2 P = view_dir.xy / view_dir.z * u_height_scale;
+    vec2 delta_uv = P / num_layers;
+
+    vec2 cur_uv = uv;
+    float cur_height = texture2D(u_height_map, fract(cur_uv)).r;
+
+    /* step through layers until we hit the surface */
+    for (int i = 0; i < 32; i++) {
+        if (current_layer >= cur_height) break;
+        cur_uv -= delta_uv;
+        cur_height = texture2D(u_height_map, fract(cur_uv)).r;
+        current_layer += layer_depth;
+    }
+
+    /* interpolate between last two layers for smoother result */
+    vec2 prev_uv = cur_uv + delta_uv;
+    float after_depth  = cur_height - current_layer;
+    float before_depth = texture2D(u_height_map, fract(prev_uv)).r
+                         - current_layer + layer_depth;
+    float weight = after_depth / (after_depth - before_depth);
+
+    return mix(cur_uv, prev_uv, weight);
+}
+
+/* ---- Cook-Torrance BRDF ---- */
 
 /* GGX/Trowbridge-Reitz normal distribution */
 float distribution_ggx(float NdotH, float roughness) {
@@ -69,19 +112,21 @@ vec3 fresnel_schlick(float cosTheta, vec3 F0) {
 }
 
 void main() {
-    vec2 uv = fract(v_texcoord);
+    vec3 V = normalize(v_tangent_view);
+
+    /* parallax-shifted UV */
+    vec2 uv = parallax_occlusion(v_texcoord, V);
 
     /* albedo from sRGB texture (hardware-decoded to linear by GL_SRGB8) */
-    vec3 albedo = texture2D(u_texture, uv).rgb;
+    vec3 albedo = texture2D(u_texture, fract(uv)).rgb;
 
     /* sample PBR maps (linear data) */
-    vec3 N = texture2D(u_normal_map, uv).rgb;
+    vec3 N = texture2D(u_normal_map, fract(uv)).rgb;
     N = normalize(N * 2.0 - 1.0);
-    float roughness = texture2D(u_roughness_map, uv).r;
-    float ao = texture2D(u_ao_map, uv).r;
+    float roughness = texture2D(u_roughness_map, fract(uv)).r;
+    float ao = texture2D(u_ao_map, fract(uv)).r;
 
     vec3 L = normalize(v_tangent_light);
-    vec3 V = normalize(v_tangent_view);
     vec3 H = normalize(L + V);
 
     float NdotL = max(dot(N, L), 0.0);
@@ -107,13 +152,20 @@ void main() {
     /* Lambertian diffuse */
     vec3 diffuse = kD * albedo / 3.14159265;
 
-    /* direct lighting */
-    vec3 Lo = (diffuse + specular) * u_light_color * NdotL;
+    /* point light attenuation (inverse-square with linear falloff) */
+    float dist = v_light_dist;
+    float atten = 1.0 / (1.0 + 0.35 * dist + 0.44 * dist * dist);
 
-    /* ambient (very simple, AO-modulated) */
-    vec3 ambient = vec3(0.08) * albedo * ao;
+    /* direct lighting with attenuation */
+    vec3 Lo = (diffuse + specular) * u_light_color * NdotL * atten;
+
+    /* minimal ambient: just enough to not lose detail in deep shadow */
+    vec3 ambient = vec3(0.00125, 0.005, 0.004) * albedo * ao;
 
     vec3 color = ambient + Lo;
+
+    /* Reinhard tone mapping (keeps bright specular from clipping) */
+    color = color / (color + vec3(1.0));
 
     /* linear -> sRGB gamma correction */
     color = pow(color, vec3(1.0 / 2.2));

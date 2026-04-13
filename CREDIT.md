@@ -12,4 +12,4 @@ under [Creative Commons CC0 1.0 Universal](https://creativecommons.org/publicdom
 | Walls   | Bricks076C | <https://ambientcg.com/view?id=Bricks076C> |
 | Walls   | Rock034    | <https://ambientcg.com/view?id=Rock034> |
 
-Downloaded as 1K JPG (Color, NormalGL, Roughness, and AmbientOcclusion maps).
+Downloaded as 1K JPG (Color, NormalGL, Roughness, AmbientOcclusion, and Displacement maps).

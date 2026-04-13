@@ -120,6 +120,7 @@ struct texture_set {
 	lud_texture_t normal;
 	lud_texture_t roughness;
 	lud_texture_t ao;
+	lud_texture_t height;
 };
 
 struct world {
@@ -144,6 +145,8 @@ struct game_state {
 
 	float hfov;               /* horizontal FOV, degrees */
 	bool use_textures; /* runtime toggle */
+
+	float time;               /* accumulated time for torch flicker */
 
 	struct {
 		bool up, down, left, right;
@@ -239,13 +242,15 @@ sector_find_center(const struct map_sector *sec, float *cx, float *cy)
 
 static struct texture_set
 load_texture_set(const char *color_path, const char *normal_path,
-                 const char *roughness_path, const char *ao_path)
+                 const char *roughness_path, const char *ao_path,
+                 const char *height_path)
 {
 	struct texture_set ts;
 	ts.diffuse   = lud_load_texture_srgb(color_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
 	ts.normal    = lud_load_texture(normal_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
 	ts.roughness = lud_load_texture(roughness_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
 	ts.ao        = lud_load_texture(ao_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
+	ts.height    = lud_load_texture(height_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
 	return ts;
 }
 
@@ -257,25 +262,29 @@ create_textures(void)
 		"assets/textures/ground_color.jpg",
 		"assets/textures/ground_normal.jpg",
 		"assets/textures/ground_roughness.jpg",
-		"assets/textures/ground_ao.jpg");
+		"assets/textures/ground_ao.jpg",
+		"assets/textures/ground_height.jpg");
 	/* 1: ceiling - dark rock */
 	world.textures[1] = load_texture_set(
 		"assets/textures/rock_dark_color.jpg",
 		"assets/textures/rock_dark_normal.jpg",
 		"assets/textures/rock_dark_roughness.jpg",
-		"assets/textures/rock_dark_ao.jpg");
+		"assets/textures/rock_dark_ao.jpg",
+		"assets/textures/rock_dark_height.jpg");
 	/* 2: walls - brick */
 	world.textures[2] = load_texture_set(
 		"assets/textures/brick_color.jpg",
 		"assets/textures/brick_normal.jpg",
 		"assets/textures/brick_roughness.jpg",
-		"assets/textures/brick_ao.jpg");
+		"assets/textures/brick_ao.jpg",
+		"assets/textures/brick_height.jpg");
 	/* 3: walls - rocky */
 	world.textures[3] = load_texture_set(
 		"assets/textures/rock_color.jpg",
 		"assets/textures/rock_normal.jpg",
 		"assets/textures/rock_roughness.jpg",
-		"assets/textures/rock_ao.jpg");
+		"assets/textures/rock_ao.jpg",
+		"assets/textures/rock_height.jpg");
 	world.num_textures = 4;
 }
 
@@ -478,6 +487,7 @@ draw_sector_recursive(unsigned sector_num, int ttl)
 			lud_bind_texture(t->normal, 1);
 			lud_bind_texture(t->roughness, 2);
 			lud_bind_texture(t->ao, 3);
+			lud_bind_texture(t->height, 4);
 		}
 		lud_draw_range(sr->mesh, g->first, g->count);
 	}
@@ -717,6 +727,7 @@ static void
 frame(float dt)
 {
 	update_player(dt);
+	state.time += dt;
 
 	int w = lud_width();
 	int h = lud_height();
@@ -744,14 +755,28 @@ frame(float dt)
 		lud_uniform_int(active_shader, "u_normal_map", 1);
 		lud_uniform_int(active_shader, "u_roughness_map", 2);
 		lud_uniform_int(active_shader, "u_ao_map", 3);
-		/* directional light from above-right-front */
-		lud_uniform_vec3(active_shader, "u_light_dir", -0.3f, -0.7f, -0.4f);
-		lud_uniform_vec3(active_shader, "u_light_color", 3.0f, 2.9f, 2.7f);
+		lud_uniform_int(active_shader, "u_height_map", 4);
+		lud_uniform_float(active_shader, "u_height_scale", 0.04f);
+
+		/* torch point light at player position */
+		float eye_x = state.player_x;
+		float eye_y = state.player_height + state.player_z;
+		float eye_z = state.player_y;
+		lud_uniform_vec3(active_shader, "u_light_pos",
+			eye_x, eye_y, eye_z);
+
+		/* torch flicker: layered sine waves for organic variation */
+		float t = state.time;
+		float flicker = 1.0f
+			+ 0.08f * sinf(t * 7.3f)
+			+ 0.05f * sinf(t * 13.1f)
+			+ 0.03f * sinf(t * 23.7f);
+		lud_uniform_vec3(active_shader, "u_light_color",
+			2.8f * flicker, 1.8f * flicker, 0.9f * flicker);
+
 		/* camera position in world space */
 		lud_uniform_vec3(active_shader, "u_view_pos",
-			state.player_x,
-			state.player_height + state.player_z,
-			state.player_y);
+			eye_x, eye_y, eye_z);
 	}
 
 	memset(sector_drawn, 0, sizeof(sector_drawn));
