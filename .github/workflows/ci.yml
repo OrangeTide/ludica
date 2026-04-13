@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install libx11-dev libxext-dev libxfixes-dev libxi-dev libxcursor-dev libgl1-mesa-dev libasound2-dev libegl1-mesa-dev libgles2-mesa-dev
+
+      - name: Build
+        run: make
+
+  sanity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install libx11-dev libxext-dev libxfixes-dev libxi-dev libxcursor-dev libgl1-mesa-dev libasound2-dev libegl1-mesa-dev libgles2-mesa-dev
+
+      - name: Build release
+        run: make RELEASE=1 RELEASE_MARCH=x86-64
+
+      - name: Check executables exist
+        run: |
+          for bin in _out/*/bin/*; do
+            echo "Found: $bin"
+            file "$bin"
+          done
+          test -n "$(ls _out/*/bin/* 2>/dev/null)" || { echo "No executables built"; exit 1; }
+
+  unit-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install libx11-dev libxext-dev libxfixes-dev libxi-dev libxcursor-dev libgl1-mesa-dev libasound2-dev libegl1-mesa-dev libgles2-mesa-dev
+
+      - name: Build and run tests
+        run: make run-tests

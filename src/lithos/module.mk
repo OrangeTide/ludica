@@ -1,7 +1,7 @@
 LIBRARIES += lithos
 lithos_DIR  := $(dir $(lastword $(MAKEFILE_LIST)))
 lithos_SRCS  = app.c event.c timing.c log.c input.c gamepad.c shader.c mesh.c texture.c framebuffer.c image.c sprite.c font.c
-lithos_CPPFLAGS = -I$(lithos_DIR)include -I$(lithos_DIR)../thirdparty
+lithos_CPPFLAGS = -I$(lithos_DIR)include -I$(lithos_DIR)../thirdparty -DLITHOS_VERSION='"$(shell cat $(lithos_DIR)../../VERSION 2>/dev/null || echo unknown)"'
 lithos_EXPORTED_CPPFLAGS = -I$(lithos_DIR)include -I$(lithos_DIR)
 
 ### Linux

@@ -3,6 +3,10 @@
 
 #include "lithos_input.h"
 
+#ifndef LITHOS_VERSION
+#define LITHOS_VERSION "unknown"
+#endif
+
 #define LITHOS_OK (0)
 #define LITHOS_ERR (-1)
 
