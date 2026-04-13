@@ -5,9 +5,9 @@ imgui_CPPFLAGS = -I$(imgui_DIR) -I$(imgui_DIR)backends
 imgui_EXPORTED_CPPFLAGS = -I$(imgui_DIR) -I$(imgui_DIR)backends
 
 ### Linux
-imgui_SRCS.Linux = backends/imgui_impl_sdl2.cpp backends/imgui_impl_opengl3.cpp
-imgui_CXXFLAGS.Linux = $(shell sdl2-config --cflags) $(shell pkg-config --cflags gl)
-imgui_EXPORTED_LDLIBS.Linux = $(shell sdl2-config --libs) $(shell pkg-config --libs gl) -lm
+imgui_SRCS.Linux = backends/imgui_impl_opengl3.cpp
+imgui_CPPFLAGS.Linux = -DIMGUI_IMPL_OPENGL_ES2
+imgui_EXPORTED_LDLIBS.Linux = -lm
 
 ### Windows
 imgui_SRCS.Windows_NT = backends/imgui_impl_win32.cpp backends/imgui_impl_dx10.cpp
