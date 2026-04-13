@@ -115,16 +115,18 @@ struct sector_render {
 /* World                                                              */
 /* ------------------------------------------------------------------ */
 
-struct texture_pair {
+struct texture_set {
 	lud_texture_t diffuse;
 	lud_texture_t normal;
+	lud_texture_t roughness;
+	lud_texture_t ao;
 };
 
 struct world {
 	const struct map_sector *sectors[MAX_SECTORS];
 	struct sector_render render[MAX_SECTORS];
 	unsigned num_sectors;
-	struct texture_pair textures[MAX_TEXTURES];
+	struct texture_set textures[MAX_TEXTURES];
 	unsigned num_textures;
 };
 
@@ -235,34 +237,45 @@ sector_find_center(const struct map_sector *sec, float *cx, float *cy)
 /* Texture loading                                                    */
 /* ------------------------------------------------------------------ */
 
-static struct texture_pair
-load_texture_pair(const char *color_path, const char *normal_path)
+static struct texture_set
+load_texture_set(const char *color_path, const char *normal_path,
+                 const char *roughness_path, const char *ao_path)
 {
-	struct texture_pair tp;
-	tp.diffuse = lud_load_texture(color_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
-	tp.normal  = lud_load_texture(normal_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
-	return tp;
+	struct texture_set ts;
+	ts.diffuse   = lud_load_texture_srgb(color_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
+	ts.normal    = lud_load_texture(normal_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
+	ts.roughness = lud_load_texture(roughness_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
+	ts.ao        = lud_load_texture(ao_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
+	return ts;
 }
 
 static void
 create_textures(void)
 {
 	/* 0: floor - ground dirt */
-	world.textures[0] = load_texture_pair(
+	world.textures[0] = load_texture_set(
 		"assets/textures/ground_color.jpg",
-		"assets/textures/ground_normal.jpg");
+		"assets/textures/ground_normal.jpg",
+		"assets/textures/ground_roughness.jpg",
+		"assets/textures/ground_ao.jpg");
 	/* 1: ceiling - dark rock */
-	world.textures[1] = load_texture_pair(
+	world.textures[1] = load_texture_set(
 		"assets/textures/rock_dark_color.jpg",
-		"assets/textures/rock_dark_normal.jpg");
+		"assets/textures/rock_dark_normal.jpg",
+		"assets/textures/rock_dark_roughness.jpg",
+		"assets/textures/rock_dark_ao.jpg");
 	/* 2: walls - brick */
-	world.textures[2] = load_texture_pair(
+	world.textures[2] = load_texture_set(
 		"assets/textures/brick_color.jpg",
-		"assets/textures/brick_normal.jpg");
+		"assets/textures/brick_normal.jpg",
+		"assets/textures/brick_roughness.jpg",
+		"assets/textures/brick_ao.jpg");
 	/* 3: walls - rocky */
-	world.textures[3] = load_texture_pair(
+	world.textures[3] = load_texture_set(
 		"assets/textures/rock_color.jpg",
-		"assets/textures/rock_normal.jpg");
+		"assets/textures/rock_normal.jpg",
+		"assets/textures/rock_roughness.jpg",
+		"assets/textures/rock_ao.jpg");
 	world.num_textures = 4;
 }
 
@@ -460,8 +473,11 @@ draw_sector_recursive(unsigned sector_num, int ttl)
 	for (i = 0; i < sr->num_groups; i++) {
 		struct draw_group *g = &sr->groups[i];
 		if (state.use_textures) {
-			lud_bind_texture(world.textures[g->tex_index].diffuse, 0);
-			lud_bind_texture(world.textures[g->tex_index].normal, 1);
+			struct texture_set *t = &world.textures[g->tex_index];
+			lud_bind_texture(t->diffuse, 0);
+			lud_bind_texture(t->normal, 1);
+			lud_bind_texture(t->roughness, 2);
+			lud_bind_texture(t->ao, 3);
 		}
 		lud_draw_range(sr->mesh, g->first, g->count);
 	}
@@ -726,8 +742,11 @@ frame(float dt)
 	if (state.use_textures) {
 		lud_uniform_int(active_shader, "u_texture", 0);
 		lud_uniform_int(active_shader, "u_normal_map", 1);
+		lud_uniform_int(active_shader, "u_roughness_map", 2);
+		lud_uniform_int(active_shader, "u_ao_map", 3);
 		/* directional light from above-right-front */
 		lud_uniform_vec3(active_shader, "u_light_dir", -0.3f, -0.7f, -0.4f);
+		lud_uniform_vec3(active_shader, "u_light_color", 3.0f, 2.9f, 2.7f);
 		/* camera position in world space */
 		lud_uniform_vec3(active_shader, "u_view_pos",
 			state.player_x,

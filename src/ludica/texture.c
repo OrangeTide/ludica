@@ -3,13 +3,22 @@
 #include <GLES2/gl2.h>
 #include <string.h>
 
+/* GLES3 sRGB internal formats (not in GLES2 headers) */
+#ifndef GL_SRGB8
+#define GL_SRGB8       0x8C41
+#endif
+#ifndef GL_SRGB8_ALPHA8
+#define GL_SRGB8_ALPHA8 0x8C43
+#endif
+
 #define MAX_TEXTURES 64
 
 typedef struct {
 	int used;
 	GLuint tex;
 	int width, height;
-	GLenum gl_format;
+	GLenum gl_format;     /* external format (GL_RGB, GL_RGBA, ...) */
+	GLenum gl_internal;   /* internal format (may differ for sRGB) */
 	int bpp;
 } texture_slot_t;
 
@@ -35,13 +44,31 @@ get_slot(lud_texture_t tex)
 }
 
 static void
-format_to_gl(enum lud_pixel_format fmt, GLenum *gl_fmt, int *bpp)
+format_to_gl(enum lud_pixel_format fmt, GLenum *gl_fmt, GLenum *gl_internal,
+             int *bpp)
 {
 	switch (fmt) {
-	case LUD_PIXFMT_R8:    *gl_fmt = GL_LUMINANCE; *bpp = 1; break;
-	case LUD_PIXFMT_RGB8:  *gl_fmt = GL_RGB;       *bpp = 3; break;
-	case LUD_PIXFMT_RGBA8: *gl_fmt = GL_RGBA;      *bpp = 4; break;
-	default:                  *gl_fmt = GL_RGBA;       *bpp = 4; break;
+	case LUD_PIXFMT_R8:
+		*gl_fmt = GL_LUMINANCE; *gl_internal = GL_LUMINANCE; *bpp = 1;
+		break;
+	case LUD_PIXFMT_RGB8:
+		*gl_fmt = GL_RGB; *gl_internal = GL_RGB; *bpp = 3;
+		break;
+	case LUD_PIXFMT_RGBA8:
+		*gl_fmt = GL_RGBA; *gl_internal = GL_RGBA; *bpp = 4;
+		break;
+	case LUD_PIXFMT_SRGB8:
+		*gl_fmt = GL_RGB; *bpp = 3;
+		*gl_internal = (lud__state.gles_version >= 3) ? GL_SRGB8 : GL_RGB;
+		break;
+	case LUD_PIXFMT_SRGBA8:
+		*gl_fmt = GL_RGBA; *bpp = 4;
+		*gl_internal = (lud__state.gles_version >= 3) ? GL_SRGB8_ALPHA8
+		                                              : GL_RGBA;
+		break;
+	default:
+		*gl_fmt = GL_RGBA; *gl_internal = GL_RGBA; *bpp = 4;
+		break;
 	}
 }
 
@@ -56,7 +83,7 @@ lud_make_texture(const lud_texture_desc_t *desc)
 {
 	lud_texture_t out = {0};
 	texture_slot_t *s;
-	GLenum gl_fmt;
+	GLenum gl_fmt, gl_internal;
 	int bpp, idx;
 
 	idx = alloc_slot();
@@ -65,7 +92,7 @@ lud_make_texture(const lud_texture_desc_t *desc)
 		return out;
 	}
 
-	format_to_gl(desc->format, &gl_fmt, &bpp);
+	format_to_gl(desc->format, &gl_fmt, &gl_internal, &bpp);
 
 	s = &slots[idx];
 	memset(s, 0, sizeof(*s));
@@ -73,6 +100,7 @@ lud_make_texture(const lud_texture_desc_t *desc)
 	s->width = desc->width;
 	s->height = desc->height;
 	s->gl_format = gl_fmt;
+	s->gl_internal = gl_internal;
 	s->bpp = bpp;
 
 	glGenTextures(1, &s->tex);
@@ -87,7 +115,7 @@ lud_make_texture(const lud_texture_desc_t *desc)
 	if (bpp == 1)
 		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-	glTexImage2D(GL_TEXTURE_2D, 0, gl_fmt, desc->width, desc->height, 0,
+	glTexImage2D(GL_TEXTURE_2D, 0, gl_internal, desc->width, desc->height, 0,
 	             gl_fmt, GL_UNSIGNED_BYTE, desc->data);
 
 	if (bpp == 1)

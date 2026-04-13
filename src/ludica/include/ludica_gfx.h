@@ -8,6 +8,8 @@ enum lud_pixel_format {
 	LUD_PIXFMT_R8,       /* single channel, 8-bit (GL_LUMINANCE on GLES2) */
 	LUD_PIXFMT_RGB8,     /* 3 channels, 8-bit each */
 	LUD_PIXFMT_RGBA8,    /* 4 channels, 8-bit each */
+	LUD_PIXFMT_SRGB8,    /* 3 channels, sRGB (GLES3 only, falls back to RGB8) */
+	LUD_PIXFMT_SRGBA8,   /* 4 channels, sRGB+alpha (GLES3 only, falls back to RGBA8) */
 };
 
 /* Texture filter modes */
@@ -124,6 +126,12 @@ int lud_texture_height(lud_texture_t tex);
 lud_texture_t lud_load_texture(const char *path,
                                      enum lud_filter min_filter,
                                      enum lud_filter mag_filter);
+
+/* Load texture with sRGB internal format (GLES3 only, falls back to linear).
+ * Use for color/albedo maps; the GPU decodes gamma on sample. */
+lud_texture_t lud_load_texture_srgb(const char *path,
+                                           enum lud_filter min_filter,
+                                           enum lud_filter mag_filter);
 
 /* --- 2D sprite batch --- */
 
