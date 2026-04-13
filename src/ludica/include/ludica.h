@@ -30,6 +30,7 @@ typedef struct lud_desc {
 	int target_fps;         /* 0 = vsync (default) */
 	int fullscreen;         /* non-zero = start fullscreen */
 	int resizable;          /* non-zero = allow resize */
+	int gles_version;       /* 2 or 3; 0 defaults to 2 */
 } lud_desc_t;
 
 /* Entry point. Owns the main loop. Returns exit code.
@@ -43,6 +44,7 @@ int    lud_width(void);
 int    lud_height(void);
 double lud_time(void);        /* seconds since init */
 float  lud_frame_time(void);  /* dt of last frame */
+int    lud_gles_version(void); /* 2 or 3 */
 
 /* Logging */
 void lud_log(const char *msg, ...);

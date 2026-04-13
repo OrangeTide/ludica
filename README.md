@@ -1,11 +1,13 @@
 # Ludica [![CI](https://github.com/OrangeTide/gamedev/workflows/CI/badge.svg)](https://github.com/OrangeTide/gamedev/actions)
 
 A lightweight cross-platform graphics library for games and demos,
-built on OpenGL ES 2.0.
+built on OpenGL ES 2.0 and 3.0.
 
 Ludica provides a minimal C API for windowing, input, shaders, meshes,
-textures, sprites, fonts, and framebuffer effects. Several demo programs
-and a portal-based 3D engine (`hero`) are included.
+textures, sprites, fonts, and framebuffer effects. Programs choose GLES2
+(for low-end targets like Pi Zero) or GLES3 (for normal-mapped PBR and
+WebGL 2) at startup. Several demo programs and a portal-based 3D engine
+(`hero`) are included.
 
 ## Programs
 

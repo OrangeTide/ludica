@@ -785,6 +785,7 @@ main(void)
 		.width = 960,
 		.height = 540,
 		.resizable = 1,
+		.gles_version = 3,
 		.init = init,
 		.frame = frame,
 		.event = on_event,

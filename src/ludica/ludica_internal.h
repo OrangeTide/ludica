@@ -16,6 +16,7 @@ typedef struct lud__state {
 	unsigned long long time_init;   /* nanoseconds at init */
 	unsigned long long time_prev;   /* nanoseconds at previous frame */
 	float frame_dt;                 /* seconds */
+	int gles_version;               /* 2 or 3, resolved at init */
 } lud__state_t;
 
 extern lud__state_t lud__state;

@@ -13,6 +13,8 @@ apply_defaults(lud_desc_t *desc)
 		desc->height = 480;
 	if (!desc->app_name)
 		desc->app_name = "ludica";
+	if (desc->gles_version == 0)
+		desc->gles_version = 2;
 }
 
 static void
@@ -86,6 +88,7 @@ lud_run(const lud_desc_t *desc)
 
 	lud__state.win_width = lud__state.desc.width;
 	lud__state.win_height = lud__state.desc.height;
+	lud__state.gles_version = lud__state.desc.gles_version;
 	lud__state.time_init = lud__clock_now();
 	lud__state.time_prev = lud__state.time_init;
 
@@ -147,4 +150,10 @@ float
 lud_frame_time(void)
 {
 	return lud__state.frame_dt;
+}
+
+int
+lud_gles_version(void)
+{
+	return lud__state.gles_version;
 }

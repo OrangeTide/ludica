@@ -13,6 +13,7 @@
 #include <stdio.h>
 
 #include "ludica.h"
+#include "ludica_internal.h"
 #include "log.h"
 
 /**********************************************************************/
@@ -20,6 +21,11 @@
 #define EGL_PLATFORM_ANGLE_ANGLE                           0x3202
 #define EGL_PLATFORM_ANGLE_TYPE_ANGLE                      0x3203
 #define EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE               0x3450
+
+/* EGL 1.5 / EGL_KHR_create_context */
+#ifndef EGL_OPENGL_ES3_BIT
+#define EGL_OPENGL_ES3_BIT 0x00000040
+#endif
 
 #ifndef LUD_MAX_WINDOWS
 #define LUD_MAX_WINDOWS 4
@@ -362,7 +368,7 @@ window_new(const struct window_callback_functions *callback)
 		EGL_COLOR_BUFFER_TYPE, EGL_RGB_BUFFER,
 		EGL_DEPTH_SIZE, 24,
 		EGL_LEVEL, 0,
-		EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+		EGL_RENDERABLE_TYPE, (lud__state.gles_version >= 3) ? EGL_OPENGL_ES3_BIT : EGL_OPENGL_ES2_BIT,
 		EGL_SAMPLE_BUFFERS, 0,
 		EGL_SAMPLES, 0,
 		EGL_STENCIL_SIZE, 0,
@@ -390,7 +396,7 @@ window_new(const struct window_callback_functions *callback)
 
 	lud_egl_check();
 
-	EGLint contextAttributes[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
+	EGLint contextAttributes[] = { EGL_CONTEXT_CLIENT_VERSION, lud__state.gles_version, EGL_NONE };
 	EGLContext eglContext = eglCreateContext(eglDisplay, windowConfig, NULL, contextAttributes);
 
 	if (eglContext == EGL_NO_CONTEXT) {

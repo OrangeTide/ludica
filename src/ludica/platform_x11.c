@@ -20,6 +20,11 @@
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 
+/* EGL 1.5 / EGL_KHR_create_context */
+#ifndef EGL_OPENGL_ES3_BIT
+#define EGL_OPENGL_ES3_BIT 0x00000040
+#endif
+
 /* ---- X11 keysym to lud_keycode translation ---- */
 
 static enum lud_keycode
@@ -109,8 +114,9 @@ translate_modifiers(unsigned x11_state)
 
 /* ---- EGL config ---- */
 
-static const EGLint config_attribs[] = {
+static EGLint config_attribs[] = {
 	EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+	EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, /* patched for GLES3 */
 	EGL_RED_SIZE, 8,
 	EGL_GREEN_SIZE, 8,
 	EGL_BLUE_SIZE, 8,
@@ -122,8 +128,11 @@ static const EGLint config_attribs[] = {
 	EGL_NONE
 };
 
-static const EGLint gles_ctx_attribs[] = {
-	EGL_CONTEXT_CLIENT_VERSION, 2,
+/* Index of the EGL_RENDERABLE_TYPE value in config_attribs */
+#define CONFIG_RENDERABLE_IDX 3
+
+static EGLint gles_ctx_attribs[] = {
+	EGL_CONTEXT_CLIENT_VERSION, 2, /* patched at init */
 	EGL_NONE
 };
 
@@ -229,6 +238,13 @@ lud__platform_init(const lud_desc_t *desc)
 	/* Intern atoms */
 	wm_protocols = XInternAtom(xdisplay, "WM_PROTOCOLS", False);
 	wm_delete_window = XInternAtom(xdisplay, "WM_DELETE_WINDOW", False);
+
+	/* Configure EGL for requested GLES version */
+	gles_ctx_attribs[1] = desc->gles_version;
+	if (desc->gles_version >= 3)
+		config_attribs[CONFIG_RENDERABLE_IDX] = EGL_OPENGL_ES3_BIT;
+	else
+		config_attribs[CONFIG_RENDERABLE_IDX] = EGL_OPENGL_ES2_BIT;
 
 	/* Initialize EGL */
 	egl_display = eglGetDisplay((EGLNativeDisplayType)xdisplay);

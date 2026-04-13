@@ -1,7 +1,8 @@
 # Introduction
 
 This manual covers the game engine built on the `ludica` rendering framework.
-The engine provides a portal-based 3D rendering system using OpenGL ES 2.0.
+The engine provides a portal-based 3D rendering system with dual GLES2/GLES3
+support.
 
 # Getting Started
 
