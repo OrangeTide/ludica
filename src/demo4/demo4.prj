@@ -1,8 +1,0 @@
-$(BEGIN_TARGET)
-NAME = demo4
-TYPE = exe
-SRCS = demo4.c
-CFLAGS = -Wall -W -O2
-CFLAGS += -g
-USES = ludica
-$(END_TARGET)

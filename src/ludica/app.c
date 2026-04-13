@@ -92,6 +92,11 @@ lud_run(const lud_desc_t *desc)
 	lud__state.time_init = lud__clock_now();
 	lud__state.time_prev = lud__state.time_init;
 
+	if (lud__state.desc.fullscreen) {
+		lud__platform_set_fullscreen(1);
+		lud__state.is_fullscreen = 1;
+	}
+
 	if (lud__state.desc.init) {
 		lud__state.desc.init();
 	}
@@ -156,4 +161,20 @@ int
 lud_gles_version(void)
 {
 	return lud__state.gles_version;
+}
+
+void
+lud_set_fullscreen(int fullscreen)
+{
+	int want = !!fullscreen;
+	if (want == lud__state.is_fullscreen)
+		return;
+	lud__platform_set_fullscreen(want);
+	lud__state.is_fullscreen = want;
+}
+
+int
+lud_is_fullscreen(void)
+{
+	return lud__state.is_fullscreen;
 }

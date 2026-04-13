@@ -146,6 +146,8 @@ static EGLContext  egl_context = EGL_NO_CONTEXT;
 
 static Atom wm_protocols;
 static Atom wm_delete_window;
+static Atom net_wm_state;
+static Atom net_wm_state_fullscreen;
 
 /* Track key-repeat: X11 generates KeyRelease+KeyPress pairs for held keys */
 static int auto_repeat_detected;
@@ -238,6 +240,8 @@ lud__platform_init(const lud_desc_t *desc)
 	/* Intern atoms */
 	wm_protocols = XInternAtom(xdisplay, "WM_PROTOCOLS", False);
 	wm_delete_window = XInternAtom(xdisplay, "WM_DELETE_WINDOW", False);
+	net_wm_state = XInternAtom(xdisplay, "_NET_WM_STATE", False);
+	net_wm_state_fullscreen = XInternAtom(xdisplay, "_NET_WM_STATE_FULLSCREEN", False);
 
 	/* Configure EGL for requested GLES version */
 	gles_ctx_attribs[1] = desc->gles_version;
@@ -508,6 +512,46 @@ lud__platform_poll_events(void)
 			break;
 		}
 	}
+}
+
+void
+lud__platform_set_fullscreen(int fullscreen)
+{
+	if (!xdisplay || !xwindow)
+		return;
+
+	if (fullscreen) {
+		/* Save current windowed position and size */
+		XWindowAttributes wa;
+		XGetWindowAttributes(xdisplay, xwindow, &wa);
+
+		Window child;
+		int abs_x, abs_y;
+		XTranslateCoordinates(xdisplay, xwindow,
+			DefaultRootWindow(xdisplay),
+			0, 0, &abs_x, &abs_y, &child);
+
+		lud__state.saved_x = abs_x - wa.x;
+		lud__state.saved_y = abs_y - wa.y;
+		lud__state.saved_w = wa.width;
+		lud__state.saved_h = wa.height;
+	}
+
+	/* Send _NET_WM_STATE client message to the window manager */
+	XEvent xev;
+	memset(&xev, 0, sizeof(xev));
+	xev.type = ClientMessage;
+	xev.xclient.window = xwindow;
+	xev.xclient.message_type = net_wm_state;
+	xev.xclient.format = 32;
+	xev.xclient.data.l[0] = fullscreen ? 1 : 0; /* _NET_WM_STATE_ADD / _REMOVE */
+	xev.xclient.data.l[1] = (long)net_wm_state_fullscreen;
+	xev.xclient.data.l[2] = 0;
+	xev.xclient.data.l[3] = 1; /* source = normal application */
+
+	XSendEvent(xdisplay, DefaultRootWindow(xdisplay), False,
+		SubstructureNotifyMask | SubstructureRedirectMask, &xev);
+	XFlush(xdisplay);
 }
 
 void

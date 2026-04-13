@@ -17,6 +17,9 @@ typedef struct lud__state {
 	unsigned long long time_prev;   /* nanoseconds at previous frame */
 	float frame_dt;                 /* seconds */
 	int gles_version;               /* 2 or 3, resolved at init */
+	int is_fullscreen;
+	int saved_x, saved_y;           /* windowed geometry before fullscreen */
+	int saved_w, saved_h;
 } lud__state_t;
 
 extern lud__state_t lud__state;
@@ -40,5 +43,6 @@ int  lud__platform_init(const lud_desc_t *desc);
 void lud__platform_shutdown(void);
 void lud__platform_poll_events(void); /* push events via lud__event_push() */
 void lud__platform_swap(void);
+void lud__platform_set_fullscreen(int fullscreen);
 
 #endif /* LUDICA_INTERNAL_H_ */

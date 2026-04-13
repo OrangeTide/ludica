@@ -713,6 +713,10 @@ on_event(const lud_event_t *ev)
 			if (down && state.hfov > MIN_HFOV)
 				state.hfov -= HFOV_STEP;
 			return 1;
+		case LUD_KEY_F11:
+			if (down)
+				lud_set_fullscreen(!lud_is_fullscreen());
+			return 1;
 		case LUD_KEY_ESCAPE:
 			if (down) lud_quit();
 			return 1;

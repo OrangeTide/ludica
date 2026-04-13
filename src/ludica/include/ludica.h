@@ -46,6 +46,10 @@ double lud_time(void);        /* seconds since init */
 float  lud_frame_time(void);  /* dt of last frame */
 int    lud_gles_version(void); /* 2 or 3 */
 
+/* Fullscreen */
+void lud_set_fullscreen(int fullscreen); /* 0 = windowed, non-zero = fullscreen */
+int  lud_is_fullscreen(void);
+
 /* Logging */
 void lud_log(const char *msg, ...);
 void lud_err(const char *msg, ...);
