@@ -179,6 +179,13 @@ void lud_sprite_end(void);
 void lud_clear(float r, float g, float b, float a);
 void lud_viewport(int x, int y, int w, int h);
 
+/* --- Loading progress --- */
+
+/* Draw a progress bar and swap buffers.  Call during init() or frame()
+ * while loading assets.  step/total define progress (0..total).
+ * label is optional (may be NULL). */
+void lud_draw_progress(int step, int total, const char *label);
+
 /* --- Palette-indexed framebuffer --- */
 
 typedef struct { unsigned id; } lud_framebuffer_t;

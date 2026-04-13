@@ -256,6 +256,41 @@ lud_run(&(lud_desc_t){
 });
 ```
 
+### Loading Progress
+
+For applications with non-trivial loading times, ludica provides a
+progress bar that draws and swaps a frame immediately:
+
+```c
+void lud_draw_progress(int step, int total, const char *label);
+```
+
+Call this from `init()` or from `frame()` during a loading phase.
+It clears the screen, draws a centered progress bar with an optional
+text label, and swaps buffers.  The application controls the pacing —
+ludica draws whatever step/total you give it.
+
+A typical synchronous loading pattern:
+
+```c
+static void init(void) {
+    enum { LOAD_SHADERS, LOAD_TEX1, LOAD_TEX2, LOAD_MAP, LOAD_DONE };
+    lud_draw_progress(0, LOAD_DONE, "Compiling shaders...");
+    create_shaders();
+    lud_draw_progress(1, LOAD_DONE, "Loading textures...");
+    load_texture_set_1();
+    lud_draw_progress(2, LOAD_DONE, "Loading textures...");
+    load_texture_set_2();
+    lud_draw_progress(3, LOAD_DONE, "Building map...");
+    build_map();
+    lud_draw_progress(LOAD_DONE, LOAD_DONE, "Ready");
+}
+```
+
+Each call paints a frame to the screen, so the user sees the bar
+advance between heavy operations.  No threads, no callbacks — the
+application decides what work runs at each step.
+
 # Hero: Portal Rendering Engine
 
 The `hero` program implements a portal-based 3D rendering engine.

@@ -258,38 +258,53 @@ load_texture_set(const char *color_path, const char *normal_path,
 	return ts;
 }
 
+/* Load step table for progress reporting.  Each entry loads one texture set. */
+struct load_step {
+	const char *label;
+	const char *color, *normal, *roughness, *ao, *height;
+};
+
+static const struct load_step load_steps[] = {
+	{ "Loading ground textures...",
+	  "assets/textures/ground_color.jpg",
+	  "assets/textures/ground_normal.jpg",
+	  "assets/textures/ground_roughness.jpg",
+	  "assets/textures/ground_ao.jpg",
+	  "assets/textures/ground_height.jpg" },
+	{ "Loading ceiling textures...",
+	  "assets/textures/rock_dark_color.jpg",
+	  "assets/textures/rock_dark_normal.jpg",
+	  "assets/textures/rock_dark_roughness.jpg",
+	  "assets/textures/rock_dark_ao.jpg",
+	  "assets/textures/rock_dark_height.jpg" },
+	{ "Loading wall textures...",
+	  "assets/textures/brick_color.jpg",
+	  "assets/textures/brick_normal.jpg",
+	  "assets/textures/brick_roughness.jpg",
+	  "assets/textures/brick_ao.jpg",
+	  "assets/textures/brick_height.jpg" },
+	{ "Loading wall textures...",
+	  "assets/textures/rock_color.jpg",
+	  "assets/textures/rock_normal.jpg",
+	  "assets/textures/rock_roughness.jpg",
+	  "assets/textures/rock_ao.jpg",
+	  "assets/textures/rock_height.jpg" },
+};
+#define LOAD_STEP_COUNT ((int)ARRAY_SIZE(load_steps))
+
 static void
 create_textures(void)
 {
-	/* 0: floor - ground dirt */
-	world.textures[0] = load_texture_set(
-		"assets/textures/ground_color.jpg",
-		"assets/textures/ground_normal.jpg",
-		"assets/textures/ground_roughness.jpg",
-		"assets/textures/ground_ao.jpg",
-		"assets/textures/ground_height.jpg");
-	/* 1: ceiling - dark rock */
-	world.textures[1] = load_texture_set(
-		"assets/textures/rock_dark_color.jpg",
-		"assets/textures/rock_dark_normal.jpg",
-		"assets/textures/rock_dark_roughness.jpg",
-		"assets/textures/rock_dark_ao.jpg",
-		"assets/textures/rock_dark_height.jpg");
-	/* 2: walls - brick */
-	world.textures[2] = load_texture_set(
-		"assets/textures/brick_color.jpg",
-		"assets/textures/brick_normal.jpg",
-		"assets/textures/brick_roughness.jpg",
-		"assets/textures/brick_ao.jpg",
-		"assets/textures/brick_height.jpg");
-	/* 3: walls - rocky */
-	world.textures[3] = load_texture_set(
-		"assets/textures/rock_color.jpg",
-		"assets/textures/rock_normal.jpg",
-		"assets/textures/rock_roughness.jpg",
-		"assets/textures/rock_ao.jpg",
-		"assets/textures/rock_height.jpg");
-	world.num_textures = 4;
+	int i;
+	for (i = 0; i < LOAD_STEP_COUNT; i++) {
+		lud_draw_progress(i, LOAD_STEP_COUNT, load_steps[i].label);
+		world.textures[i] = load_texture_set(
+			load_steps[i].color, load_steps[i].normal,
+			load_steps[i].roughness, load_steps[i].ao,
+			load_steps[i].height);
+	}
+	world.num_textures = LOAD_STEP_COUNT;
+	lud_draw_progress(LOAD_STEP_COUNT, LOAD_STEP_COUNT, "Ready");
 }
 
 /* ------------------------------------------------------------------ */
