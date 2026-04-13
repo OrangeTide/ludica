@@ -147,13 +147,6 @@ struct game_state {
 	bool use_textures; /* runtime toggle */
 
 	float time;               /* accumulated time for torch flicker */
-
-	struct {
-		bool up, down, left, right;
-		bool turn_left, turn_right;
-		bool fly_up, fly_down;
-		bool look_up, look_down;
-	} act;
 };
 
 /* ------------------------------------------------------------------ */
@@ -165,6 +158,17 @@ static struct world world;
 static lud_shader_t shader_textured;
 static lud_shader_t shader_colored;
 static lud_font_t font;
+
+/* Action bindings */
+static lud_action_t act_forward, act_backward;
+static lud_action_t act_strafe_left, act_strafe_right;
+static lud_action_t act_turn_left, act_turn_right;
+static lud_action_t act_fly_up, act_fly_down;
+static lud_action_t act_look_up, act_look_down;
+static lud_action_t act_toggle_textures;
+static lud_action_t act_fov_increase, act_fov_decrease;
+static lud_action_t act_fullscreen;
+static lud_action_t act_quit;
 
 /* ------------------------------------------------------------------ */
 /* Shaders                                                            */
@@ -562,41 +566,41 @@ update_player(float dt)
 	float move = speed * dt;
 
 	/* forward / backward (along facing direction) */
-	if (state.act.up) {
+	if (lud_action_down(act_forward)) {
 		state.player_x -= move * cosf(theta + (float)M_PI / 2.0f);
 		state.player_y -= move * sinf(theta + (float)M_PI / 2.0f);
 	}
-	if (state.act.down) {
+	if (lud_action_down(act_backward)) {
 		state.player_x += move * cosf(theta + (float)M_PI / 2.0f);
 		state.player_y += move * sinf(theta + (float)M_PI / 2.0f);
 	}
 
 	/* strafe left / right */
-	if (state.act.left) {
+	if (lud_action_down(act_strafe_left)) {
 		state.player_x -= move * cosf(theta);
 		state.player_y -= move * sinf(theta);
 	}
-	if (state.act.right) {
+	if (lud_action_down(act_strafe_right)) {
 		state.player_x += move * cosf(theta);
 		state.player_y += move * sinf(theta);
 	}
 
 	/* turning */
-	if (state.act.turn_left)
+	if (lud_action_down(act_turn_left))
 		state.player_facing -= turn_speed * dt;
-	if (state.act.turn_right)
+	if (lud_action_down(act_turn_right))
 		state.player_facing += turn_speed * dt;
 
 	/* fly up/down */
-	if (state.act.fly_up)
+	if (lud_action_down(act_fly_up))
 		state.player_z += speed * dt;
-	if (state.act.fly_down)
+	if (lud_action_down(act_fly_down))
 		state.player_z -= speed * dt;
 
 	/* look up/down */
-	if (state.act.look_up)
+	if (lud_action_down(act_look_up))
 		state.player_tilt += turn_speed * dt;
-	if (state.act.look_down)
+	if (lud_action_down(act_look_down))
 		state.player_tilt -= turn_speed * dt;
 
 	/* wrap facing to [0, 360) */
@@ -654,82 +658,64 @@ init(void)
 	state.player_height = 1.0f;
 	state.hfov = DEFAULT_HFOV;
 	state.use_textures = true;
+
+	/* set up action bindings */
+	act_forward   = lud_make_action("forward");
+	act_backward  = lud_make_action("backward");
+	act_strafe_left  = lud_make_action("strafe_left");
+	act_strafe_right = lud_make_action("strafe_right");
+	act_turn_left    = lud_make_action("turn_left");
+	act_turn_right   = lud_make_action("turn_right");
+	act_fly_up    = lud_make_action("fly_up");
+	act_fly_down  = lud_make_action("fly_down");
+	act_look_up   = lud_make_action("look_up");
+	act_look_down = lud_make_action("look_down");
+	act_toggle_textures = lud_make_action("toggle_textures");
+	act_fov_increase = lud_make_action("fov_increase");
+	act_fov_decrease = lud_make_action("fov_decrease");
+	act_fullscreen = lud_make_action("fullscreen");
+	act_quit       = lud_make_action("quit");
+
+	lud_bind_key(LUD_KEY_W,         act_forward);
+	lud_bind_key(LUD_KEY_UP,        act_forward);
+	lud_bind_key(LUD_KEY_S,         act_backward);
+	lud_bind_key(LUD_KEY_DOWN,      act_backward);
+	lud_bind_key(LUD_KEY_Q,         act_strafe_left);
+	lud_bind_key(LUD_KEY_E,         act_strafe_right);
+	lud_bind_key(LUD_KEY_A,         act_turn_left);
+	lud_bind_key(LUD_KEY_LEFT,      act_turn_left);
+	lud_bind_key(LUD_KEY_D,         act_turn_right);
+	lud_bind_key(LUD_KEY_RIGHT,     act_turn_right);
+	lud_bind_key(LUD_KEY_HOME,      act_fly_up);
+	lud_bind_key(LUD_KEY_END,       act_fly_down);
+	lud_bind_key(LUD_KEY_PAGE_UP,   act_look_up);
+	lud_bind_key(LUD_KEY_PAGE_DOWN, act_look_down);
+	lud_bind_key(LUD_KEY_T,         act_toggle_textures);
+	lud_bind_key(LUD_KEY_EQUAL,     act_fov_increase);
+	lud_bind_key(LUD_KEY_MINUS,     act_fov_decrease);
+	lud_bind_key(LUD_KEY_F11,       act_fullscreen);
+	lud_bind_key(LUD_KEY_ESCAPE,    act_quit);
 }
 
-static int
-on_event(const lud_event_t *ev)
+static void
+process_actions(void)
 {
-	if (ev->type == LUD_EV_KEY_DOWN || ev->type == LUD_EV_KEY_UP) {
-		bool down = (ev->type == LUD_EV_KEY_DOWN);
-		switch (ev->key.keycode) {
-		/* WASD + arrows */
-		case LUD_KEY_W:
-		case LUD_KEY_UP:
-			state.act.up = down;
-			return 1;
-		case LUD_KEY_S:
-		case LUD_KEY_DOWN:
-			state.act.down = down;
-			return 1;
-		case LUD_KEY_Q:
-			state.act.left = down;
-			return 1;
-		case LUD_KEY_E:
-			state.act.right = down;
-			return 1;
-		case LUD_KEY_A:
-		case LUD_KEY_LEFT:
-			state.act.turn_left = down;
-			return 1;
-		case LUD_KEY_D:
-		case LUD_KEY_RIGHT:
-			state.act.turn_right = down;
-			return 1;
-		/* fly */
-		case LUD_KEY_HOME:
-			state.act.fly_up = down;
-			return 1;
-		case LUD_KEY_END:
-			state.act.fly_down = down;
-			return 1;
-		/* look */
-		case LUD_KEY_PAGE_UP:
-			state.act.look_up = down;
-			return 1;
-		case LUD_KEY_PAGE_DOWN:
-			state.act.look_down = down;
-			return 1;
-		/* toggle texture mode */
-		case LUD_KEY_T:
-			if (down)
-				state.use_textures = !state.use_textures;
-			return 1;
-		/* FOV adjustment */
-		case LUD_KEY_EQUAL: /* +/= key */
-			if (down && state.hfov < MAX_HFOV)
-				state.hfov += HFOV_STEP;
-			return 1;
-		case LUD_KEY_MINUS:
-			if (down && state.hfov > MIN_HFOV)
-				state.hfov -= HFOV_STEP;
-			return 1;
-		case LUD_KEY_F11:
-			if (down)
-				lud_set_fullscreen(!lud_is_fullscreen());
-			return 1;
-		case LUD_KEY_ESCAPE:
-			if (down) lud_quit();
-			return 1;
-		default:
-			break;
-		}
-	}
-	return 0;
+	if (lud_action_pressed(act_toggle_textures))
+		state.use_textures = !state.use_textures;
+	if (lud_action_pressed(act_fov_increase) && state.hfov < MAX_HFOV)
+		state.hfov += HFOV_STEP;
+	if (lud_action_pressed(act_fov_decrease) && state.hfov > MIN_HFOV)
+		state.hfov -= HFOV_STEP;
+	if (lud_action_pressed(act_fullscreen))
+		lud_set_fullscreen(!lud_is_fullscreen());
+	if (lud_action_pressed(act_quit))
+		lud_quit();
 }
 
 static void
 frame(float dt)
 {
+	process_actions();
 	update_player(dt);
 	state.time += dt;
 
@@ -836,7 +822,6 @@ main(void)
 		.gles_version = 3,
 		.init = init,
 		.frame = frame,
-		.event = on_event,
 		.cleanup = cleanup,
 	});
 }

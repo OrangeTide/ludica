@@ -188,6 +188,74 @@ lud_mouse_pos(&mx, &my);
 float axis = lud_gamepad_axis(0, 0);
 ```
 
+### Action Bindings
+
+Actions decouple game logic from physical keys. Instead of checking
+`lud_key_down(LUD_KEY_W)` directly, you create a named action, bind one or
+more keys to it, and poll the action each frame. This lets players rebind
+controls and lets the same action respond to both keyboard and gamepad input.
+
+```c
+/* Create actions (typically once in init) */
+lud_action_t act_forward = lud_make_action("forward");
+lud_action_t act_jump    = lud_make_action("jump");
+
+/* Bind keys — multiple bindings per action are allowed */
+lud_bind_key(LUD_KEY_W, act_forward);
+lud_bind_key(LUD_KEY_UP, act_forward);
+lud_bind_gamepad_button(0, 0, act_jump);  /* pad 0, button 0 */
+```
+
+Actions are updated automatically each frame before the `frame` callback.
+Three queries are available:
+
+| Function                | Returns true when                        |
+|-------------------------|------------------------------------------|
+| `lud_action_down(a)`    | Action is held this frame                |
+| `lud_action_pressed(a)` | Action went down this frame (edge)       |
+| `lud_action_released(a)`| Action went up this frame (edge)         |
+
+Use `lud_action_down()` for continuous movement and `lud_action_pressed()`
+for one-shot triggers like toggling a mode:
+
+```c
+static void frame(float dt) {
+    if (lud_action_down(act_forward))
+        move_player(dt);
+    if (lud_action_pressed(act_jump))
+        start_jump();
+}
+```
+
+Other action functions:
+
+- `lud_find_action(name)` — look up an existing action by name (returns
+  `{0}` if not found)
+- `lud_unbind_action(a)` — remove all bindings from an action
+
+Actions do not require an `event` callback — they work entirely through
+polling. This makes it straightforward to eliminate event-driven input
+handling in favor of a pure poll-based frame loop.
+
+### Fullscreen
+
+Toggle fullscreen mode at runtime:
+
+```c
+lud_set_fullscreen(1);          /* enter fullscreen */
+lud_set_fullscreen(0);          /* return to windowed */
+int fs = lud_is_fullscreen();   /* query current state */
+```
+
+Fullscreen can also be requested at startup via the descriptor:
+
+```c
+lud_run(&(lud_desc_t){
+    .fullscreen = 1,
+    /* ... */
+});
+```
+
 # Hero: Portal Rendering Engine
 
 The `hero` program implements a portal-based 3D rendering engine.
@@ -215,15 +283,22 @@ multi-texture rendering within a single sector.
 
 ## Controls
 
-| Key        | Action              |
-|------------|---------------------|
-| W / S      | Move forward / back |
-| A / D      | Turn left / right   |
-| Q / E      | Strafe left / right |
-| Page Up    | Look up             |
-| Page Down  | Look down           |
-| T          | Toggle texture/color mode |
-| Escape     | Quit                |
+| Key            | Action                    |
+|----------------|---------------------------|
+| W / Up         | Move forward              |
+| S / Down       | Move backward             |
+| A / Left       | Turn left                 |
+| D / Right      | Turn right                |
+| Q              | Strafe left               |
+| E              | Strafe right              |
+| Home           | Fly up                    |
+| End            | Fly down                  |
+| Page Up        | Look up                   |
+| Page Down      | Look down                 |
+| T              | Toggle texture/color mode |
+| = / -          | Adjust FOV                |
+| F11            | Toggle fullscreen         |
+| Escape         | Quit                      |
 
 # Appendix
 

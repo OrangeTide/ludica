@@ -47,6 +47,7 @@ frame_tick(void)
 	lud__state.frame_dt = (float)dt;
 
 	dispatch_events();
+	lud__action_update();
 
 	if (lud__state.desc.frame) {
 		lud__state.desc.frame(lud__state.frame_dt);
@@ -113,6 +114,7 @@ lud_run(const lud_desc_t *desc)
 	if (lud__state.desc.cleanup) {
 		lud__state.desc.cleanup();
 	}
+	lud__action_reset();
 	lud__platform_shutdown();
 #endif
 

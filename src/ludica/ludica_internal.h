@@ -33,6 +33,10 @@ int  lud__event_poll(lud_event_t *ev);
 void lud__input_init(void);
 void lud__input_update(const lud_event_t *ev);
 
+/* action.c */
+void lud__action_update(void);  /* call once per frame before frame callback */
+void lud__action_reset(void);   /* call on shutdown */
+
 /* timing.c */
 unsigned long long lud__clock_now(void);
 double lud__clock_diff(unsigned long long t1, unsigned long long t0);

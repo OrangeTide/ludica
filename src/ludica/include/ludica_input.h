@@ -163,4 +163,27 @@ int lud_gamepad_connected(int id);
 /* Named key lookup (returns LUD_KEY_UNKNOWN on failure) */
 enum lud_keycode lud_key_from_name(const char *name);
 
+/* ---- Action bindings ---- */
+
+/* Opaque action handle (id==0 is invalid) */
+typedef struct { unsigned id; } lud_action_t;
+
+/* Create or find a named action.  Returns existing handle if name matches. */
+lud_action_t lud_make_action(const char *name);
+
+/* Find an existing action by name.  Returns {0} if not found. */
+lud_action_t lud_find_action(const char *name);
+
+/* Bind a key or gamepad button to an action (multiple bindings allowed). */
+void lud_bind_key(enum lud_keycode key, lud_action_t action);
+void lud_bind_gamepad_button(int pad, int button, lud_action_t action);
+
+/* Remove all bindings from an action (keeps the action itself). */
+void lud_unbind_action(lud_action_t action);
+
+/* Poll action state (updated once per frame before the frame callback). */
+int lud_action_down(lud_action_t action);     /* held this frame */
+int lud_action_pressed(lud_action_t action);   /* just went down */
+int lud_action_released(lud_action_t action);  /* just went up */
+
 #endif /* LUDICA_INPUT_H_ */
