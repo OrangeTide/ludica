@@ -158,37 +158,11 @@ static lud_font_t font;
 /* Shaders                                                            */
 /* ------------------------------------------------------------------ */
 
-/* Shared vertex shader: passes position, texcoord, and color to fragment */
-static const char *vert_src =
-	"attribute vec3 a_position;\n"
-	"attribute vec2 a_texcoord;\n"
-	"attribute vec3 a_color;\n"
-	"uniform mat4 u_mvp;\n"
-	"varying vec2 v_texcoord;\n"
-	"varying vec3 v_color;\n"
-	"void main() {\n"
-	"    gl_Position = u_mvp * vec4(a_position, 1.0);\n"
-	"    v_texcoord = a_texcoord;\n"
-	"    v_color = a_color;\n"
-	"}\n";
+/* ---- Built-in shaders (generated from shaders/) ---------------------- */
 
-/* Textured fragment shader: samples texture with repeating UVs */
-static const char *frag_textured_src =
-	"precision mediump float;\n"
-	"uniform sampler2D u_texture;\n"
-	"varying vec2 v_texcoord;\n"
-	"varying vec3 v_color;\n"
-	"void main() {\n"
-	"    gl_FragColor = texture2D(u_texture, fract(v_texcoord));\n"
-	"}\n";
-
-/* Colored fragment shader: uses vertex color directly */
-static const char *frag_colored_src =
-	"precision mediump float;\n"
-	"varying vec3 v_color;\n"
-	"void main() {\n"
-	"    gl_FragColor = vec4(v_color, 1.0);\n"
-	"}\n";
+extern const char portal_vert[];
+extern const char portal_textured_frag[];
+extern const char portal_colored_frag[];
 
 /* ------------------------------------------------------------------ */
 /* Hardcoded test map (matches the original two-sector demo)          */
@@ -602,14 +576,14 @@ init(void)
 
 	/* create shaders */
 	shader_textured = lud_make_shader(&(lud_shader_desc_t){
-		.vert_src = vert_src,
-		.frag_src = frag_textured_src,
+		.vert_src = portal_vert,
+		.frag_src = portal_textured_frag,
 		.attrs = { "a_position", "a_texcoord", "a_color" },
 		.num_attrs = 3,
 	});
 	shader_colored = lud_make_shader(&(lud_shader_desc_t){
-		.vert_src = vert_src,
-		.frag_src = frag_colored_src,
+		.vert_src = portal_vert,
+		.frag_src = portal_colored_frag,
 		.attrs = { "a_position", "a_texcoord", "a_color" },
 		.num_attrs = 3,
 	});

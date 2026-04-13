@@ -1,0 +1,114 @@
+#!/bin/sh
+# glsl2h — Convert an annotated .glsl file to a C file with const char[] arrays.
+#
+# Annotations:
+#   @common        Shared code prepended to every @vs and @fs section.
+#   @vs <name>     Vertex shader section   → const char <name>_vert[]
+#   @fs <name>     Fragment shader section  → const char <name>_frag[]
+#   @end           Ends the current section.
+#
+# Usage: glsl2h <input.glsl>
+# Output goes to stdout.
+
+set -e
+
+if [ $# -lt 1 ]; then
+	echo "usage: glsl2h <file.glsl>" >&2
+	exit 1
+fi
+
+INPUT="$1"
+BASENAME=$(basename "$INPUT")
+
+awk '
+BEGIN {
+	section = ""
+	name = ""
+	common = ""
+	nsections = 0
+	filename = "'"$BASENAME"'"
+}
+
+/^@common[[:space:]]*$/ {
+	if (section != "") {
+		print "error: @common inside open section" > "/dev/stderr"
+		exit 1
+	}
+	section = "common"
+	next
+}
+
+/^@vs[[:space:]]+/ {
+	if (section != "") {
+		print "error: @vs inside open section" > "/dev/stderr"
+		exit 1
+	}
+	section = "vs"
+	name = $2
+	body[nsections] = ""
+	suffix[nsections] = "_vert"
+	varname[nsections] = name suffix[nsections]
+	nsections++
+	next
+}
+
+/^@fs[[:space:]]+/ {
+	if (section != "") {
+		print "error: @fs inside open section" > "/dev/stderr"
+		exit 1
+	}
+	section = "fs"
+	name = $2
+	body[nsections] = ""
+	suffix[nsections] = "_frag"
+	varname[nsections] = name suffix[nsections]
+	nsections++
+	next
+}
+
+/^@end[[:space:]]*$/ {
+	if (section == "") {
+		print "error: @end without open section" > "/dev/stderr"
+		exit 1
+	}
+	section = ""
+	next
+}
+
+{
+	if (section == "common") {
+		common = common $0 "\n"
+	} else if (section == "vs" || section == "fs") {
+		body[nsections - 1] = body[nsections - 1] $0 "\n"
+	}
+}
+
+END {
+	if (section != "") {
+		print "error: unterminated section" > "/dev/stderr"
+		exit 1
+	}
+	print "/* Auto-generated from " filename " — do not edit */"
+	for (i = 0; i < nsections; i++) {
+		print ""
+		print "const char " varname[i] "[] ="
+		# print common block
+		n = split(common, lines, "\n")
+		for (j = 1; j <= n; j++) {
+			gsub(/\\/, "\\\\", lines[j])
+			gsub(/"/, "\\\"", lines[j])
+			if (j < n || lines[j] != "")
+				printf "\t\"%s\\n\"\n", lines[j]
+		}
+		# print section body
+		n = split(body[i], lines, "\n")
+		for (j = 1; j <= n; j++) {
+			gsub(/\\/, "\\\\", lines[j])
+			gsub(/"/, "\\\"", lines[j])
+			if (j < n || lines[j] != "")
+				printf "\t\"%s\\n\"\n", lines[j]
+		}
+		print ";"
+	}
+}
+' "$INPUT"

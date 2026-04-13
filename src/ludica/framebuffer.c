@@ -15,61 +15,11 @@
 
 #define MAX_FRAMEBUFFERS 8
 
-/* ---- Built-in shaders ------------------------------------------------- */
+/* ---- Built-in shaders (generated from shaders/) ---------------------- */
 
-/* Shared vertex shader: full-screen quad [-1,1] → UV [0,1] */
-static const char fb_vert_src[] =
-	"#version 100\n"
-	"precision mediump float;\n"
-	"attribute vec4 vertex;\n"
-	"varying vec2 v_uv;\n"
-	"void main(void) {\n"
-	"  v_uv = vertex.xy * 0.5 + 0.5;\n"
-	"  gl_Position = vertex;\n"
-	"}\n";
-
-/* Flat palette lookup — no post-process */
-static const char fb_frag_flat[] =
-	"#version 100\n"
-	"precision mediump float;\n"
-	"uniform sampler2D u_screen;\n"
-	"uniform sampler2D u_palette;\n"
-	"varying vec2 v_uv;\n"
-	"void main(void) {\n"
-	"  float idx = texture2D(u_screen, v_uv).r;\n"
-	"  gl_FragColor = texture2D(u_palette, vec2(idx, 0.0));\n"
-	"}\n";
-
-/* CRT scanlines + barrel distortion */
-static const char fb_frag_crt[] =
-	"#version 100\n"
-	"precision mediump float;\n"
-	"uniform sampler2D u_screen;\n"
-	"uniform sampler2D u_palette;\n"
-	"uniform vec2 u_resolution;\n"
-	"varying vec2 v_uv;\n"
-	"\n"
-	"vec2 barrel(vec2 uv) {\n"
-	"  vec2 c = uv - 0.5;\n"
-	"  float r2 = dot(c, c);\n"
-	"  return uv + c * r2 * 0.15;\n"
-	"}\n"
-	"\n"
-	"void main(void) {\n"
-	"  vec2 uv = barrel(v_uv);\n"
-	"  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {\n"
-	"    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);\n"
-	"    return;\n"
-	"  }\n"
-	"  float idx = texture2D(u_screen, uv).r;\n"
-	"  vec4 col = texture2D(u_palette, vec2(idx, 0.0));\n"
-	"  /* scanlines: darken every other physical row */\n"
-	"  float scan = 0.85 + 0.15 * sin(uv.y * u_resolution.y * 3.14159);\n"
-	"  /* slight vignette */\n"
-	"  vec2 vig = uv * (1.0 - uv);\n"
-	"  float v = clamp(pow(vig.x * vig.y * 15.0, 0.25), 0.0, 1.0);\n"
-	"  gl_FragColor = vec4(col.rgb * scan * v, 1.0);\n"
-	"}\n";
+extern const char framebuffer_vert[];
+extern const char framebuffer_flat_frag[];
+extern const char framebuffer_crt_frag[];
 
 /* ---- Full-screen quad geometry ---------------------------------------- */
 
@@ -146,11 +96,11 @@ lud_make_framebuffer(const lud_framebuffer_desc_t *desc)
 	}
 
 	/* Choose fragment shader */
-	frag = (desc->crt == LUD_CRT_SCANLINES) ? fb_frag_crt : fb_frag_flat;
+	frag = (desc->crt == LUD_CRT_SCANLINES) ? framebuffer_crt_frag : framebuffer_flat_frag;
 
 	/* Compile shader */
 	s->shader = lud_make_shader(&(lud_shader_desc_t){
-		.vert_src = fb_vert_src,
+		.vert_src = framebuffer_vert,
 		.frag_src = frag,
 		.attrs = { "vertex" },
 		.num_attrs = 1,

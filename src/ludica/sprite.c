@@ -15,28 +15,10 @@
 #define VERTS_PER_QUAD 6
 #define FLOATS_PER_VERT 8  /* x, y, u, v, r, g, b, a */
 
-/* Built-in sprite shader sources */
-static const char sprite_vert_src[] =
-	"attribute vec2 a_pos;\n"
-	"attribute vec2 a_uv;\n"
-	"attribute vec4 a_color;\n"
-	"uniform mat4 u_proj;\n"
-	"varying vec2 v_uv;\n"
-	"varying vec4 v_color;\n"
-	"void main() {\n"
-	"    v_uv = a_uv;\n"
-	"    v_color = a_color;\n"
-	"    gl_Position = u_proj * vec4(a_pos, 0.0, 1.0);\n"
-	"}\n";
+/* ---- Built-in shaders (generated from shaders/) ---------------------- */
 
-static const char sprite_frag_src[] =
-	"precision mediump float;\n"
-	"varying vec2 v_uv;\n"
-	"varying vec4 v_color;\n"
-	"uniform sampler2D u_tex;\n"
-	"void main() {\n"
-	"    gl_FragColor = texture2D(u_tex, v_uv) * v_color;\n"
-	"}\n";
+extern const char sprite_vert[];
+extern const char sprite_frag[];
 
 /* Batch state */
 static struct {
@@ -75,8 +57,8 @@ sprite_init(void)
 		return;
 
 	batch.shader = lud_make_shader(&(lud_shader_desc_t){
-		.vert_src = sprite_vert_src,
-		.frag_src = sprite_frag_src,
+		.vert_src = sprite_vert,
+		.frag_src = sprite_frag,
 		.attrs = { "a_pos", "a_uv", "a_color" },
 		.num_attrs = 3,
 	});
