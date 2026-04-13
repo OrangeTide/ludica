@@ -20,6 +20,14 @@ typedef struct lud__state {
 	int is_fullscreen;
 	int saved_x, saved_y;           /* windowed geometry before fullscreen */
 	int saved_w, saved_h;
+
+	/* Automation (set by args.c, used by automation.c) */
+	int auto_port;                  /* TCP port for automation, 0 = disabled */
+	const char *auto_file;          /* replay command file, NULL = none */
+	const char *capture_dir;        /* output dir for captures, NULL = "." */
+	int paused;                     /* start paused, waiting for STEP */
+	int fixed_dt;                   /* use constant 1/60 dt */
+	unsigned long long frame_count; /* total frames rendered */
 } lud__state_t;
 
 extern lud__state_t lud__state;
@@ -32,6 +40,9 @@ int  lud__event_poll(lud_event_t *ev);
 /* input.c */
 void lud__input_init(void);
 void lud__input_update(const lud_event_t *ev);
+
+/* args.c */
+void lud__parse_args(lud_desc_t *desc);
 
 /* action.c */
 void lud__action_update(void);  /* call once per frame before frame callback */

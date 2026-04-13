@@ -44,7 +44,11 @@ frame_tick(void)
 	unsigned long long now = lud__clock_now();
 	double dt = lud__clock_diff(now, lud__state.time_prev);
 	lud__state.time_prev = now;
-	lud__state.frame_dt = (float)dt;
+
+	if (lud__state.fixed_dt)
+		lud__state.frame_dt = 1.0f / 60.0f;
+	else
+		lud__state.frame_dt = (float)dt;
 
 	dispatch_events();
 	lud__action_update();
@@ -54,6 +58,7 @@ frame_tick(void)
 	}
 
 	lud__platform_swap();
+	lud__state.frame_count++;
 }
 
 #if defined(__EMSCRIPTEN__)
@@ -79,6 +84,7 @@ lud_run(const lud_desc_t *desc)
 	memset(&lud__state, 0, sizeof(lud__state));
 	lud__state.desc = *desc;
 	apply_defaults(&lud__state.desc);
+	lud__parse_args(&lud__state.desc);
 
 	lud__event_init();
 	lud__input_init();

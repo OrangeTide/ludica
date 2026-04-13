@@ -31,6 +31,11 @@ typedef struct lud_desc {
 	int fullscreen;         /* non-zero = start fullscreen */
 	int resizable;          /* non-zero = allow resize */
 	int gles_version;       /* 2 or 3; 0 defaults to 2 */
+
+	/* Command-line arguments (optional).
+	 * Set argc/argv to enable --flag parsing in lud_run(). */
+	int argc;
+	const char *const *argv;
 } lud_desc_t;
 
 /* Entry point. Owns the main loop. Returns exit code.
