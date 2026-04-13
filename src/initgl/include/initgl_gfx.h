@@ -146,6 +146,13 @@ void initgl_sprite_draw_flip(initgl_texture_t tex,
                              float src_x, float src_y, float src_w, float src_h,
                              int flip_x);
 
+/* Draw with color tint (multiplied with texture color).
+ * Color is RGBA 0.0-1.0. */
+void initgl_sprite_draw_tinted(initgl_texture_t tex,
+                               float dst_x, float dst_y, float dst_w, float dst_h,
+                               float src_x, float src_y, float src_w, float src_h,
+                               float r, float g, float b, float a);
+
 /* Draw a filled rectangle with the given color.
  * Call between sprite_begin/end. Color is RGBA 0.0-1.0. */
 void initgl_sprite_rect(float x, float y, float w, float h,

@@ -241,6 +241,17 @@ initgl_sprite_draw_flip(initgl_texture_t tex,
 }
 
 void
+initgl_sprite_draw_tinted(initgl_texture_t tex,
+                          float dst_x, float dst_y, float dst_w, float dst_h,
+                          float src_x, float src_y, float src_w, float src_h,
+                          float r, float g, float b, float a)
+{
+	sprite_draw_internal(tex, dst_x, dst_y, dst_w, dst_h,
+	                     src_x, src_y, src_w, src_h, 0,
+	                     r, g, b, a);
+}
+
+void
 initgl_sprite_rect(float x, float y, float w, float h,
                    float r, float g, float b, float a)
 {
