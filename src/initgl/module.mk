@@ -1,15 +1,12 @@
 LIBRARIES += initgl
 initgl_DIR  := $(dir $(lastword $(MAKEFILE_LIST)))
 initgl_SRCS  = app.c event.c timing.c log.c input.c gamepad.c shader.c mesh.c texture.c framebuffer.c image.c sprite.c font.c
-initgl_CFLAGS = -Wall -W -O2 -g
 initgl_CPPFLAGS = -I$(initgl_DIR)include -I$(initgl_DIR)../thirdparty
 initgl_EXPORTED_CPPFLAGS = -I$(initgl_DIR)include -I$(initgl_DIR)
 
 ### Linux
 initgl_SRCS.Linux = platform_x11.c linux/gamepad-linux.c
-initgl_CFLAGS.Linux = -flto=auto
 initgl_EXPORTED_LDLIBS.Linux = -lm -ldl -lEGL -lGLESv2 -lX11
-initgl_EXPORTED_LDFLAGS.Linux = -flto=auto
 
 ### Windows (MSYS2/Cygwin uname -s reports something containing Windows_NT)
 initgl_SRCS.Windows_NT = win32/window.c win32/gamepad-windows.c
