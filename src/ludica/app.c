@@ -99,6 +99,8 @@ lud_run(const lud_desc_t *desc)
 	lud__state.time_init = lud__clock_now();
 	lud__state.time_prev = lud__state.time_init;
 
+	lud__auto_init();
+
 	if (lud__state.desc.fullscreen) {
 		lud__platform_set_fullscreen(1);
 		lud__state.is_fullscreen = 1;
@@ -114,12 +116,17 @@ lud_run(const lud_desc_t *desc)
 #else
 	while (!lud__state.quit_requested) {
 		lud__platform_poll_events();
-		frame_tick();
+		lud__auto_poll();
+		if (lud__auto_frame_allowed()) {
+			frame_tick();
+			lud__auto_post_frame();
+		}
 	}
 
 	if (lud__state.desc.cleanup) {
 		lud__state.desc.cleanup();
 	}
+	lud__auto_shutdown();
 	lud__action_reset();
 	lud__platform_shutdown();
 #endif

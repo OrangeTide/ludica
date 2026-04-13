@@ -35,6 +35,9 @@ struct lud__action {
 	/* frame state: two bits for edge detection */
 	unsigned char current;
 	unsigned char previous;
+	/* automation: virtual press state */
+	unsigned char virtual_down;
+	unsigned char auto_release;
 };
 
 static struct lud__action actions[MAX_ACTIONS];
@@ -89,6 +92,10 @@ lud__action_update(void)
 				}
 			}
 		}
+
+		/* include virtual press from automation */
+		if (a->virtual_down)
+			down = 1;
 
 		a->previous = a->current;
 		a->current = (unsigned char)down;
@@ -199,4 +206,73 @@ lud_action_released(lud_action_t action)
 {
 	struct lud__action *a = find_action(action.id);
 	return a ? (!a->current && a->previous) : 0;
+}
+
+/* ---- Internal API for automation ---- */
+
+int
+lud__action_count(void)
+{
+	return num_actions;
+}
+
+const char *
+lud__action_name(int index)
+{
+	if (index < 0 || index >= num_actions)
+		return NULL;
+	return actions[index].name;
+}
+
+int
+lud__action_key_count(int index)
+{
+	if (index < 0 || index >= num_actions)
+		return 0;
+	return actions[index].num_keys;
+}
+
+enum lud_keycode
+lud__action_key(int index, int ki)
+{
+	if (index < 0 || index >= num_actions)
+		return LUD_KEY_UNKNOWN;
+	if (ki < 0 || ki >= actions[index].num_keys)
+		return LUD_KEY_UNKNOWN;
+	return actions[index].keys[ki];
+}
+
+int
+lud__action_inject(const char *name, int mode)
+{
+	struct lud__action *a = find_by_name(name);
+	if (!a)
+		return -1;
+	switch (mode) {
+	case 0: /* press + auto-release next frame */
+		a->virtual_down = 1;
+		a->auto_release = 1;
+		break;
+	case 1: /* hold */
+		a->virtual_down = 1;
+		a->auto_release = 0;
+		break;
+	case 2: /* release */
+		a->virtual_down = 0;
+		a->auto_release = 0;
+		break;
+	}
+	return 0;
+}
+
+void
+lud__action_auto_release(void)
+{
+	int i;
+	for (i = 0; i < num_actions; i++) {
+		if (actions[i].auto_release) {
+			actions[i].virtual_down = 0;
+			actions[i].auto_release = 0;
+		}
+	}
 }

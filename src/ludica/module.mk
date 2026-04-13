@@ -1,6 +1,6 @@
 LIBRARIES += ludica
 ludica_DIR  := $(dir $(lastword $(MAKEFILE_LIST)))
-ludica_SRCS  = app.c args.c event.c timing.c log.c input.c action.c gamepad.c shader.c mesh.c texture.c framebuffer.c image.c sprite.c font.c progress.c anim.c
+ludica_SRCS  = app.c args.c event.c timing.c log.c input.c action.c gamepad.c shader.c mesh.c texture.c framebuffer.c image.c sprite.c font.c progress.c anim.c automation.c
 ludica_GENERATED_SRCS = shaders/framebuffer.c shaders/sprite.c
 ludica_CPPFLAGS = -I$(ludica_DIR)include -I$(ludica_DIR)../thirdparty -DLUD_VERSION='"$(shell cat $(ludica_DIR)../../VERSION 2>/dev/null || echo unknown)"'
 ludica_EXPORTED_CPPFLAGS = -I$(ludica_DIR)include -I$(ludica_DIR)

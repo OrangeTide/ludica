@@ -245,3 +245,16 @@ lud_key_from_name(const char *name)
 
 	return LUD_KEY_UNKNOWN;
 }
+
+const char *
+lud__key_name(enum lud_keycode code)
+{
+	const struct key_name_entry *e;
+	if (code == LUD_KEY_UNKNOWN)
+		return NULL;
+	for (e = key_names; e->name; e++) {
+		if (e->code == code)
+			return e->name;
+	}
+	return NULL;
+}

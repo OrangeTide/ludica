@@ -47,10 +47,26 @@ void lud__parse_args(lud_desc_t *desc);
 /* action.c */
 void lud__action_update(void);  /* call once per frame before frame callback */
 void lud__action_reset(void);   /* call on shutdown */
+int  lud__action_count(void);
+const char *lud__action_name(int index);
+int  lud__action_key_count(int index);
+enum lud_keycode lud__action_key(int index, int ki);
+int  lud__action_inject(const char *name, int mode); /* 0=press, 1=hold, 2=release */
+void lud__action_auto_release(void);
+
+/* input.c */
+const char *lud__key_name(enum lud_keycode code);
 
 /* timing.c */
 unsigned long long lud__clock_now(void);
 double lud__clock_diff(unsigned long long t1, unsigned long long t0);
+
+/* automation.c */
+void lud__auto_init(void);
+void lud__auto_poll(void);
+int  lud__auto_frame_allowed(void);  /* 0 = skip frame (paused, no steps) */
+void lud__auto_post_frame(void);
+void lud__auto_shutdown(void);
 
 /* Platform backend interface.
  * Each platform_*.c implements these. */
