@@ -1,6 +1,6 @@
 # Introduction
 
-This manual covers the game engine built on the `lithos` rendering framework.
+This manual covers the game engine built on the `ludica` rendering framework.
 The engine provides a portal-based 3D rendering system using OpenGL ES 2.0.
 
 # Getting Started
@@ -63,9 +63,9 @@ Per-target variables: `_SRCS`, `_CFLAGS`, `_CXXFLAGS`, `_CPPFLAGS`,
 (flags passed to dependents). Platform-specific suffixes like `.Linux` or
 `.Windows_NT` are appended automatically.
 
-## lithos Framework
+## ludica Framework
 
-`lithos` is the core rendering and platform abstraction library. It provides:
+`ludica` is the core rendering and platform abstraction library. It provides:
 
 - **Platform layer**: Window creation, EGL context, event loop (X11 on Linux,
   Win32 on Windows)
@@ -78,18 +78,18 @@ Per-target variables: `_SRCS`, `_CFLAGS`, `_CXXFLAGS`, `_CPPFLAGS`,
 
 ### Application Lifecycle
 
-An lithos application implements callback functions and passes them via
-a descriptor to `lithos_run()`:
+An ludica application implements callback functions and passes them via
+a descriptor to `lud_run()`:
 
 ```c
-#include <lithos.h>
+#include <ludica.h>
 
 static void init(void) { /* one-time setup after GL context ready */ }
 static void frame(float dt) { /* called each frame */ }
 static void cleanup(void) { /* teardown */ }
 
 int main(int argc, char **argv) {
-    return lithos_run(&(lithos_desc_t){
+    return lud_run(&(lud_desc_t){
         .app_name = "My App",
         .width = 800, .height = 600,
         .init = init,
@@ -99,21 +99,21 @@ int main(int argc, char **argv) {
 }
 ```
 
-`lithos_run()` owns the main loop. On WASM it never returns.
+`lud_run()` owns the main loop. On WASM it never returns.
 
 ### Shaders
 
 Shaders are compiled from GLSL ES source strings via a descriptor:
 
 ```c
-lithos_shader_t shader = lithos_make_shader(&(lithos_shader_desc_t){
+ludica_shader_t shader = lud_make_shader(&(ludica_shader_desc_t){
     .vert_src = vertex_src,
     .frag_src = fragment_src,
     .attrs = { "a_position", "a_texcoord" },
     .num_attrs = 2,
 });
-lithos_apply_shader(shader);
-lithos_uniform_mat4(shader, "u_mvp", matrix_data);
+lud_apply_shader(shader);
+lud_uniform_mat4(shader, "u_mvp", matrix_data);
 ```
 
 ### Meshes
@@ -121,7 +121,7 @@ lithos_uniform_mat4(shader, "u_mvp", matrix_data);
 Vertex data is uploaded to GPU via mesh descriptors:
 
 ```c
-lithos_mesh_t mesh = lithos_make_mesh(&(lithos_mesh_desc_t){
+ludica_mesh_t mesh = lud_make_mesh(&(ludica_mesh_desc_t){
     .vertices = verts,
     .vertex_count = n,
     .vertex_stride = sizeof(Vertex),
@@ -130,39 +130,39 @@ lithos_mesh_t mesh = lithos_make_mesh(&(lithos_mesh_desc_t){
         { .size = 2, .offset = offsetof(Vertex, u) },     /* texcoord */
     },
     .num_attrs = 2,
-    .usage = LITHOS_USAGE_STATIC,
-    .primitive = LITHOS_PRIM_TRIANGLES,
+    .usage = LUD_USAGE_STATIC,
+    .primitive = LUD_PRIM_TRIANGLES,
 });
-lithos_draw(mesh);
-lithos_draw_range(mesh, first, count);
+lud_draw(mesh);
+lud_draw_range(mesh, first, count);
 ```
 
 ### Textures
 
 ```c
-lithos_texture_t tex = lithos_load_texture("image.png",
-    LITHOS_FILTER_NEAREST, LITHOS_FILTER_NEAREST);
-lithos_bind_texture(tex, 0);
+ludica_texture_t tex = lud_load_texture("image.png",
+    LUD_FILTER_NEAREST, LUD_FILTER_NEAREST);
+lud_bind_texture(tex, 0);
 ```
 
 ### Sprite Batching
 
-For 2D rendering, lithos provides an immediate-mode sprite batch:
+For 2D rendering, ludica provides an immediate-mode sprite batch:
 
 ```c
-lithos_sprite_begin(0, 0, screen_w, screen_h);
-lithos_sprite_draw(tex, dx, dy, dw, dh, sx, sy, sw, sh);
-lithos_sprite_rect(x, y, w, h, r, g, b, a);
-lithos_sprite_end();
+lud_sprite_begin(0, 0, screen_w, screen_h);
+lud_sprite_draw(tex, dx, dy, dw, dh, sx, sy, sw, sh);
+ludica_sprite_rect(x, y, w, h, r, g, b, a);
+lud_sprite_end();
 ```
 
 ### Bitmap Fonts
 
 ```c
-lithos_font_t font = lithos_make_default_font();
-lithos_sprite_begin(0, 0, screen_w, screen_h);
-lithos_draw_text(font, x, y, scale, "Hello");
-lithos_sprite_end();
+ludica_font_t font = lud_make_default_font();
+lud_sprite_begin(0, 0, screen_w, screen_h);
+lud_draw_text(font, x, y, scale, "Hello");
+lud_sprite_end();
 ```
 
 ### Input
@@ -170,10 +170,10 @@ lithos_sprite_end();
 Events are delivered via the `event` callback in the descriptor:
 
 ```c
-static int on_event(const lithos_event_t *ev) {
+static int on_event(const lud_event_t *ev) {
     switch (ev->type) {
-    case LITHOS_EV_KEY_DOWN: /* ev->key.code */ break;
-    case LITHOS_EV_MOUSE_MOVE: /* ev->mouse.x, ev->mouse.y */ break;
+    case LUD_EV_KEY_DOWN: /* ev->key.code */ break;
+    case LUD_EV_MOUSE_MOVE: /* ev->mouse.x, ev->mouse.y */ break;
     }
     return 0;
 }
@@ -182,9 +182,9 @@ static int on_event(const lithos_event_t *ev) {
 Polled state is also available:
 
 ```c
-if (lithos_key_down(LITHOS_KEY_W)) { /* W held */ }
-lithos_mouse_pos(&mx, &my);
-float axis = lithos_gamepad_axis(0, 0);
+if (lud_key_down(LUD_KEY_W)) { /* W held */ }
+lud_mouse_pos(&mx, &my);
+float axis = lud_gamepad_axis(0, 0);
 ```
 
 # Hero: Portal Rendering Engine

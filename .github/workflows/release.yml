@@ -17,51 +17,51 @@ jobs:
         id: version
         run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
 
-      - name: Package lithos
+      - name: Package ludica
         run: |
           ver="${{ steps.version.outputs.version }}"
-          staging="lithos-${ver}"
+          staging="ludica-${ver}"
           mkdir -p "${staging}/include" "${staging}/unix" "${staging}/linux" "${staging}/win32"
 
-          # Public headers (lithos's own — not the vendored EGL/GLES/KHR)
-          cp src/lithos/include/lithos.h        "${staging}/include/"
-          cp src/lithos/include/lithos_input.h   "${staging}/include/"
-          cp src/lithos/include/lithos_gfx.h     "${staging}/include/"
-          cp src/lithos/include/lithos_font.h    "${staging}/include/"
-          cp src/lithos/include/gamepad.h        "${staging}/include/"
-          cp src/lithos/include/log.h            "${staging}/include/"
-          cp src/lithos/include/report.h         "${staging}/include/"
+          # Public headers (ludica's own — not the vendored EGL/GLES/KHR)
+          cp src/ludica/include/ludica.h        "${staging}/include/"
+          cp src/ludica/include/ludica_input.h   "${staging}/include/"
+          cp src/ludica/include/ludica_gfx.h     "${staging}/include/"
+          cp src/ludica/include/ludica_font.h    "${staging}/include/"
+          cp src/ludica/include/gamepad.h        "${staging}/include/"
+          cp src/ludica/include/log.h            "${staging}/include/"
+          cp src/ludica/include/report.h         "${staging}/include/"
 
           # Vendored GL/EGL headers (consumers may not have them)
-          cp -r src/lithos/include/EGL   "${staging}/include/"
-          cp -r src/lithos/include/GLES2 "${staging}/include/"
-          cp -r src/lithos/include/GLES3 "${staging}/include/"
-          cp -r src/lithos/include/KHR   "${staging}/include/"
+          cp -r src/ludica/include/EGL   "${staging}/include/"
+          cp -r src/ludica/include/GLES2 "${staging}/include/"
+          cp -r src/ludica/include/GLES3 "${staging}/include/"
+          cp -r src/ludica/include/KHR   "${staging}/include/"
 
           # Core sources
-          cp src/lithos/*.c              "${staging}/"
-          cp src/lithos/lithos_internal.h "${staging}/"
+          cp src/ludica/*.c              "${staging}/"
+          cp src/ludica/ludica_internal.h "${staging}/"
 
           # Platform sources
-          cp src/lithos/platform_x11.c   "${staging}/"
-          cp src/lithos/unix/*.c         "${staging}/unix/"
-          cp src/lithos/unix/*.h         "${staging}/unix/"
-          cp src/lithos/linux/*.c        "${staging}/linux/"
-          cp src/lithos/linux/*.h        "${staging}/linux/"
-          cp src/lithos/win32/*.c        "${staging}/win32/"
-          cp src/lithos/win32/*.h        "${staging}/win32/"
+          cp src/ludica/platform_x11.c   "${staging}/"
+          cp src/ludica/unix/*.c         "${staging}/unix/"
+          cp src/ludica/unix/*.h         "${staging}/unix/"
+          cp src/ludica/linux/*.c        "${staging}/linux/"
+          cp src/ludica/linux/*.h        "${staging}/linux/"
+          cp src/ludica/win32/*.c        "${staging}/win32/"
+          cp src/ludica/win32/*.h        "${staging}/win32/"
 
           # Build files
-          cp src/lithos/module.mk        "${staging}/"
+          cp src/ludica/module.mk        "${staging}/"
           cp VERSION                     "${staging}/"
           cp LICENSE                     "${staging}/" 2>/dev/null || true
 
           # Stamp version into header
-          sed -i "s/^#define LITHOS_VERSION.*/#define LITHOS_VERSION \"${ver}\"/" \
-              "${staging}/include/lithos.h"
+          sed -i "s/^#define LUD_VERSION.*/#define LUD_VERSION \"${ver}\"/" \
+              "${staging}/include/ludica.h"
 
-          tar czf "lithos-${ver}.tar.gz" "${staging}"
-          echo "TARBALL=lithos-${ver}.tar.gz" >> "$GITHUB_ENV"
+          tar czf "ludica-${ver}.tar.gz" "${staging}"
+          echo "TARBALL=ludica-${ver}.tar.gz" >> "$GITHUB_ENV"
 
       - name: Create GitHub Release
         env:

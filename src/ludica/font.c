@@ -6,15 +6,15 @@
  * Text drawing uses the sprite batch, so call between sprite_begin/end.
  */
 
-#include "lithos_gfx.h"
-#include "lithos_font.h"
+#include "ludica_gfx.h"
+#include "ludica_font.h"
 #include <string.h>
 
 #define MAX_FONTS 8
 
 typedef struct {
 	int used;
-	lithos_texture_t tex;
+	lud_texture_t tex;
 	int chars_wide;
 	int glyph_w, glyph_h;
 	int first_char;
@@ -33,7 +33,7 @@ alloc_slot(void)
 }
 
 static font_slot_t *
-get_slot(lithos_font_t font)
+get_slot(lud_font_t font)
 {
 	if (font.id == 0 || font.id > MAX_FONTS)
 		return NULL;
@@ -41,11 +41,11 @@ get_slot(lithos_font_t font)
 	return s->used ? s : NULL;
 }
 
-lithos_font_t
-lithos_make_font(lithos_texture_t tex, int chars_wide,
+lud_font_t
+lud_make_font(lud_texture_t tex, int chars_wide,
                  int glyph_w, int glyph_h, int first_char)
 {
-	lithos_font_t out = {0};
+	lud_font_t out = {0};
 	int idx = alloc_slot();
 	font_slot_t *s;
 
@@ -174,14 +174,14 @@ static const unsigned char font8x8_data[96][8] = {
 #define DEFAULT_FONT_GW 8
 #define DEFAULT_FONT_GH 8
 
-lithos_font_t
-lithos_make_default_font(void)
+lud_font_t
+lud_make_default_font(void)
 {
 	int tex_w = DEFAULT_FONT_COLS * DEFAULT_FONT_GW;  /* 128 */
 	int tex_h = ((DEFAULT_FONT_GLYPHS + DEFAULT_FONT_COLS - 1) / DEFAULT_FONT_COLS) * DEFAULT_FONT_GH;  /* 48 */
 	unsigned char pixels[128 * 48 * 4];
 	int i, row, col, px, py;
-	lithos_texture_t tex;
+	lud_texture_t tex;
 
 	memset(pixels, 0, sizeof(pixels));
 
@@ -204,29 +204,29 @@ lithos_make_default_font(void)
 		}
 	}
 
-	tex = lithos_make_texture(&(lithos_texture_desc_t){
+	tex = lud_make_texture(&(lud_texture_desc_t){
 		.width = tex_w,
 		.height = tex_h,
-		.format = LITHOS_PIXFMT_RGBA8,
-		.min_filter = LITHOS_FILTER_NEAREST,
-		.mag_filter = LITHOS_FILTER_NEAREST,
+		.format = LUD_PIXFMT_RGBA8,
+		.min_filter = LUD_FILTER_NEAREST,
+		.mag_filter = LUD_FILTER_NEAREST,
 		.data = pixels,
 	});
 
-	return lithos_make_font(tex, DEFAULT_FONT_COLS, DEFAULT_FONT_GW, DEFAULT_FONT_GH, DEFAULT_FONT_FIRST);
+	return lud_make_font(tex, DEFAULT_FONT_COLS, DEFAULT_FONT_GW, DEFAULT_FONT_GH, DEFAULT_FONT_FIRST);
 }
 
 void
-lithos_destroy_font(lithos_font_t font)
+lud_destroy_font(lud_font_t font)
 {
 	font_slot_t *s = get_slot(font);
 	if (!s) return;
-	lithos_destroy_texture(s->tex);
+	lud_destroy_texture(s->tex);
 	memset(s, 0, sizeof(*s));
 }
 
 int
-lithos_text_width(lithos_font_t font, const char *text)
+lud_text_width(lud_font_t font, const char *text)
 {
 	font_slot_t *s = get_slot(font);
 	if (!s || !text) return 0;
@@ -234,7 +234,7 @@ lithos_text_width(lithos_font_t font, const char *text)
 }
 
 void
-lithos_draw_text(lithos_font_t font, float x, float y,
+lud_draw_text(lud_font_t font, float x, float y,
                  float scale, const char *text)
 {
 	font_slot_t *s = get_slot(font);
@@ -263,14 +263,14 @@ lithos_draw_text(lithos_font_t font, float x, float y,
 		sx = (float)(col * s->glyph_w);
 		sy = (float)(row * s->glyph_h);
 
-		lithos_sprite_draw(s->tex, cx, y, gw, gh,
+		lud_sprite_draw(s->tex, cx, y, gw, gh,
 		                   sx, sy, (float)s->glyph_w, (float)s->glyph_h);
 		cx += gw;
 	}
 }
 
 void
-lithos_draw_text_centered(lithos_font_t font, float x, float y,
+lud_draw_text_centered(lud_font_t font, float x, float y,
                           float scale, const char *text)
 {
 	font_slot_t *s;
@@ -281,11 +281,11 @@ lithos_draw_text_centered(lithos_font_t font, float x, float y,
 	if (!s) return;
 
 	w = (float)strlen(text) * (float)s->glyph_w * scale;
-	lithos_draw_text(font, x - w / 2.0f, y, scale, text);
+	lud_draw_text(font, x - w / 2.0f, y, scale, text);
 }
 
 void
-lithos_draw_text_wrapped(lithos_font_t font, float x, float y,
+lud_draw_text_wrapped(lud_font_t font, float x, float y,
                          float scale, float max_width,
                          float line_spacing, const char *text)
 {
@@ -325,7 +325,7 @@ lithos_draw_text_wrapped(lithos_font_t font, float x, float y,
 			if (line_len > 0 && (unsigned)line_len < sizeof(line_buf)) {
 				memcpy(line_buf, line_start, line_len);
 				line_buf[line_len] = '\0';
-				lithos_draw_text(font, x, line_y, scale, line_buf);
+				lud_draw_text(font, x, line_y, scale, line_buf);
 			}
 			line_y += line_spacing;
 
@@ -345,6 +345,6 @@ lithos_draw_text_wrapped(lithos_font_t font, float x, float y,
 	if (line_len > 0 && (unsigned)line_len < sizeof(line_buf)) {
 		memcpy(line_buf, line_start, line_len);
 		line_buf[line_len] = '\0';
-		lithos_draw_text(font, x, line_y, scale, line_buf);
+		lud_draw_text(font, x, line_y, scale, line_buf);
 	}
 }

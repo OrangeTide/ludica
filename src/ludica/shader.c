@@ -1,5 +1,5 @@
-#include "lithos_internal.h"
-#include "lithos_gfx.h"
+#include "ludica_internal.h"
+#include "ludica_gfx.h"
 #include <GLES2/gl2.h>
 #include <stddef.h>
 
@@ -23,7 +23,7 @@ alloc_slot(void)
 }
 
 static shader_slot_t *
-get_slot(lithos_shader_t shd)
+get_slot(lud_shader_t shd)
 {
 	if (shd.id == 0 || shd.id > MAX_SHADERS)
 		return NULL;
@@ -42,34 +42,34 @@ compile_stage(GLuint shader, const char *source, const char *label)
 	if (status != GL_TRUE) {
 		char info[512];
 		glGetShaderInfoLog(shader, sizeof(info), NULL, info);
-		lithos_err("%s shader compile failed: %s", label, info);
-		return LITHOS_ERR;
+		lud_err("%s shader compile failed: %s", label, info);
+		return LUD_ERR;
 	}
-	return LITHOS_OK;
+	return LUD_OK;
 }
 
-lithos_shader_t
-lithos_make_shader(const lithos_shader_desc_t *desc)
+lud_shader_t
+lud_make_shader(const lud_shader_desc_t *desc)
 {
-	lithos_shader_t out = {0};
+	lud_shader_t out = {0};
 	GLuint vs, fs, prog;
 	GLint status;
 	int idx, i;
 
 	idx = alloc_slot();
 	if (idx < 0) {
-		lithos_err("shader pool exhausted");
+		lud_err("shader pool exhausted");
 		return out;
 	}
 
 	vs = glCreateShader(GL_VERTEX_SHADER);
-	if (compile_stage(vs, desc->vert_src, "vertex") != LITHOS_OK) {
+	if (compile_stage(vs, desc->vert_src, "vertex") != LUD_OK) {
 		glDeleteShader(vs);
 		return out;
 	}
 
 	fs = glCreateShader(GL_FRAGMENT_SHADER);
-	if (compile_stage(fs, desc->frag_src, "fragment") != LITHOS_OK) {
+	if (compile_stage(fs, desc->frag_src, "fragment") != LUD_OK) {
 		glDeleteShader(vs);
 		glDeleteShader(fs);
 		return out;
@@ -80,7 +80,7 @@ lithos_make_shader(const lithos_shader_desc_t *desc)
 	glAttachShader(prog, fs);
 
 	/* Bind attribute locations before linking */
-	for (i = 0; i < desc->num_attrs && i < LITHOS_MAX_VERTEX_ATTRS; i++) {
+	for (i = 0; i < desc->num_attrs && i < LUD_MAX_VERTEX_ATTRS; i++) {
 		if (desc->attrs[i])
 			glBindAttribLocation(prog, i, desc->attrs[i]);
 	}
@@ -93,7 +93,7 @@ lithos_make_shader(const lithos_shader_desc_t *desc)
 	if (status != GL_TRUE) {
 		char info[512];
 		glGetProgramInfoLog(prog, sizeof(info), NULL, info);
-		lithos_err("shader link failed: %s", info);
+		lud_err("shader link failed: %s", info);
 		glDeleteProgram(prog);
 		return out;
 	}
@@ -105,7 +105,7 @@ lithos_make_shader(const lithos_shader_desc_t *desc)
 }
 
 void
-lithos_destroy_shader(lithos_shader_t shd)
+lud_destroy_shader(lud_shader_t shd)
 {
 	shader_slot_t *s = get_slot(shd);
 	if (!s) return;
@@ -115,14 +115,14 @@ lithos_destroy_shader(lithos_shader_t shd)
 }
 
 void
-lithos_apply_shader(lithos_shader_t shd)
+lud_apply_shader(lud_shader_t shd)
 {
 	shader_slot_t *s = get_slot(shd);
 	glUseProgram(s ? s->program : 0);
 }
 
 void
-lithos_uniform_int(lithos_shader_t shd, const char *name, int val)
+lud_uniform_int(lud_shader_t shd, const char *name, int val)
 {
 	shader_slot_t *s = get_slot(shd);
 	GLint loc;
@@ -132,7 +132,7 @@ lithos_uniform_int(lithos_shader_t shd, const char *name, int val)
 }
 
 void
-lithos_uniform_float(lithos_shader_t shd, const char *name, float val)
+lud_uniform_float(lud_shader_t shd, const char *name, float val)
 {
 	shader_slot_t *s = get_slot(shd);
 	GLint loc;
@@ -142,7 +142,7 @@ lithos_uniform_float(lithos_shader_t shd, const char *name, float val)
 }
 
 void
-lithos_uniform_vec2(lithos_shader_t shd, const char *name, float x, float y)
+lud_uniform_vec2(lud_shader_t shd, const char *name, float x, float y)
 {
 	shader_slot_t *s = get_slot(shd);
 	GLint loc;
@@ -152,7 +152,7 @@ lithos_uniform_vec2(lithos_shader_t shd, const char *name, float x, float y)
 }
 
 void
-lithos_uniform_vec3(lithos_shader_t shd, const char *name, float x, float y, float z)
+lud_uniform_vec3(lud_shader_t shd, const char *name, float x, float y, float z)
 {
 	shader_slot_t *s = get_slot(shd);
 	GLint loc;
@@ -162,7 +162,7 @@ lithos_uniform_vec3(lithos_shader_t shd, const char *name, float x, float y, flo
 }
 
 void
-lithos_uniform_vec4(lithos_shader_t shd, const char *name, float x, float y, float z, float w)
+lud_uniform_vec4(lud_shader_t shd, const char *name, float x, float y, float z, float w)
 {
 	shader_slot_t *s = get_slot(shd);
 	GLint loc;
@@ -172,7 +172,7 @@ lithos_uniform_vec4(lithos_shader_t shd, const char *name, float x, float y, flo
 }
 
 void
-lithos_uniform_mat4(lithos_shader_t shd, const char *name, const float m[16])
+lud_uniform_mat4(lud_shader_t shd, const char *name, const float m[16])
 {
 	shader_slot_t *s = get_slot(shd);
 	GLint loc;

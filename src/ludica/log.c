@@ -1,4 +1,4 @@
-#include "lithos.h"
+#include "ludica.h"
 #include <stdio.h>
 #include <stdarg.h>
 
@@ -10,7 +10,7 @@
 #endif
 
 void
-lithos_log(const char *msg, ...)
+lud_log(const char *msg, ...)
 {
 	va_list ap;
 	va_start(ap, msg);
@@ -20,7 +20,7 @@ lithos_log(const char *msg, ...)
 }
 
 void
-lithos_err(const char *msg, ...)
+lud_err(const char *msg, ...)
 {
 	va_list ap;
 	va_start(ap, msg);

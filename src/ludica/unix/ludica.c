@@ -1,4 +1,4 @@
-#include "lithos.h"
+#include "ludica.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -142,7 +142,7 @@ display_init(void)
 
 	xdisplay = XOpenDisplay(NULL);
 	if (!xdisplay) {
-		return LITHOS_ERR;
+		return LUD_ERR;
 	}
 
 	XInternAtoms(xdisplay, atom_names, NUM_ATOMS, True, atoms);
@@ -153,7 +153,7 @@ display_init(void)
 	if (display == EGL_NO_DISPLAY) {
 		report_error("No EGL display available.");
 		XCloseDisplay(xdisplay);
-		return LITHOS_ERR;
+		return LUD_ERR;
 	}
 
 	EGLint major, minor;
@@ -161,7 +161,7 @@ display_init(void)
 		report_error("Unable to initialize EGL.");
 		eglTerminate(display);
 		XCloseDisplay(xdisplay);
-		return LITHOS_ERR;
+		return LUD_ERR;
 	}
 
 	log_debug("EGL %u.%u version: %s (%s)", major, minor,
@@ -177,20 +177,20 @@ display_init(void)
 	if (!result || !num_config) {
 		report_error("No EGL configs available");
 		terminate_flag = 1;
-		return LITHOS_ERR;
+		return LUD_ERR;
 	}
 
 	EGLConfig *configs = malloc(sizeof(EGLConfig) * num_config);
 	if (!configs) {
 		report_error("Out of memory for EGL configs");
 		terminate_flag = 1;
-		return LITHOS_ERR;
+		return LUD_ERR;
 	}
 	result = eglGetConfigs(display, configs, num_config, &num_config);
 	if (!result || !num_config) {
 		report_error("No EGL configs available");
 		terminate_flag = 1;
-		return LITHOS_ERR;
+		return LUD_ERR;
 	}
 
 	int i;
@@ -220,7 +220,7 @@ display_init(void)
 	FD_ZERO(&readfds);
 	max_fd = XConnectionNumber(xdisplay);
 
-	return LITHOS_OK;
+	return LUD_OK;
 }
 
 /* NOTE: window cannot be current */
@@ -256,7 +256,7 @@ window_new(const struct window_callback_functions *callbacks)
 	if (!result || !num_config) {
 		report_error("No EGL configs available");
 		terminate_flag = 1;
-		return LITHOS_ERR;
+		return LUD_ERR;
 	}
 	struct xwindow_info *info = malloc(sizeof(*info));
 	*info = (struct xwindow_info){
@@ -273,7 +273,7 @@ window_new(const struct window_callback_functions *callbacks)
 
 	log_debug("OpenGL version: %s (%s)", glGetString(GL_VERSION), glGetString(GL_VENDOR));
 
-	return LITHOS_OK;
+	return LUD_OK;
 }
 
 unsigned long long
@@ -293,7 +293,7 @@ clock_diff(unsigned long long t1, unsigned long long t0)
 }
 
 static void
-lithos_wait(void)
+lud_wait(void)
 {
 	static long long prev;
 	unsigned long long now = clock_now();
@@ -314,7 +314,7 @@ lithos_wait(void)
 void
 surface_swap(struct xwindow_info *info)
 {
-	lithos_wait();
+	lud_wait();
 	eglSwapBuffers(display, info->surface);
 	XSync(xdisplay, False);
 #if 0

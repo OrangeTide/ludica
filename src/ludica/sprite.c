@@ -5,8 +5,8 @@
  * Flushes when texture changes or batch is full.
  */
 
-#include "lithos_internal.h"
-#include "lithos_gfx.h"
+#include "ludica_internal.h"
+#include "ludica_gfx.h"
 #include <GLES2/gl2.h>
 #include <string.h>
 
@@ -41,27 +41,27 @@ static const char sprite_frag_src[] =
 /* Batch state */
 static struct {
 	int initialized;
-	lithos_shader_t shader;
+	lud_shader_t shader;
 	GLuint vbo;
 	float verts[MAX_QUADS * VERTS_PER_QUAD * FLOATS_PER_VERT];
 	int quad_count;
-	lithos_texture_t current_tex;
+	lud_texture_t current_tex;
 	float proj[16];
 } batch;
 
 /* 1x1 white pixel texture for solid-color drawing */
-static lithos_texture_t white_tex;
+static lud_texture_t white_tex;
 
-static lithos_texture_t
+static lud_texture_t
 get_white_tex(void)
 {
 	if (white_tex.id == 0) {
 		unsigned char pixel[4] = { 255, 255, 255, 255 };
-		white_tex = lithos_make_texture(&(lithos_texture_desc_t){
+		white_tex = lud_make_texture(&(lud_texture_desc_t){
 			.width = 1, .height = 1,
-			.format = LITHOS_PIXFMT_RGBA8,
-			.min_filter = LITHOS_FILTER_NEAREST,
-			.mag_filter = LITHOS_FILTER_NEAREST,
+			.format = LUD_PIXFMT_RGBA8,
+			.min_filter = LUD_FILTER_NEAREST,
+			.mag_filter = LUD_FILTER_NEAREST,
 			.data = pixel,
 		});
 	}
@@ -74,7 +74,7 @@ sprite_init(void)
 	if (batch.initialized)
 		return;
 
-	batch.shader = lithos_make_shader(&(lithos_shader_desc_t){
+	batch.shader = lud_make_shader(&(lud_shader_desc_t){
 		.vert_src = sprite_vert_src,
 		.frag_src = sprite_frag_src,
 		.attrs = { "a_pos", "a_uv", "a_color" },
@@ -98,10 +98,10 @@ flush(void)
 	vert_count = batch.quad_count * VERTS_PER_QUAD;
 	stride = FLOATS_PER_VERT * (int)sizeof(float);
 
-	lithos_apply_shader(batch.shader);
-	lithos_uniform_mat4(batch.shader, "u_proj", batch.proj);
-	lithos_uniform_int(batch.shader, "u_tex", 0);
-	lithos_bind_texture(batch.current_tex, 0);
+	lud_apply_shader(batch.shader);
+	lud_uniform_mat4(batch.shader, "u_proj", batch.proj);
+	lud_uniform_int(batch.shader, "u_tex", 0);
+	lud_bind_texture(batch.current_tex, 0);
 
 	glBindBuffer(GL_ARRAY_BUFFER, batch.vbo);
 	glBufferData(GL_ARRAY_BUFFER,
@@ -142,7 +142,7 @@ push_vertex(float *dst, float x, float y, float u, float v,
 }
 
 void
-lithos_sprite_begin(float x, float y, float w, float h)
+lud_sprite_begin(float x, float y, float w, float h)
 {
 	sprite_init();
 
@@ -163,7 +163,7 @@ lithos_sprite_begin(float x, float y, float w, float h)
 }
 
 static void
-sprite_draw_internal(lithos_texture_t tex,
+sprite_draw_internal(lud_texture_t tex,
                      float dst_x, float dst_y, float dst_w, float dst_h,
                      float src_x, float src_y, float src_w, float src_h,
                      int flip_x,
@@ -181,8 +181,8 @@ sprite_draw_internal(lithos_texture_t tex,
 	}
 
 	/* Compute UVs */
-	tw = (float)lithos_texture_width(tex);
-	th = (float)lithos_texture_height(tex);
+	tw = (float)lud_texture_width(tex);
+	th = (float)lud_texture_height(tex);
 	if (tw <= 0.0f || th <= 0.0f)
 		return;
 
@@ -220,7 +220,7 @@ sprite_draw_internal(lithos_texture_t tex,
 }
 
 void
-lithos_sprite_draw(lithos_texture_t tex,
+lud_sprite_draw(lud_texture_t tex,
                    float dst_x, float dst_y, float dst_w, float dst_h,
                    float src_x, float src_y, float src_w, float src_h)
 {
@@ -230,7 +230,7 @@ lithos_sprite_draw(lithos_texture_t tex,
 }
 
 void
-lithos_sprite_draw_flip(lithos_texture_t tex,
+lud_sprite_draw_flip(lud_texture_t tex,
                         float dst_x, float dst_y, float dst_w, float dst_h,
                         float src_x, float src_y, float src_w, float src_h,
                         int flip_x)
@@ -241,7 +241,7 @@ lithos_sprite_draw_flip(lithos_texture_t tex,
 }
 
 void
-lithos_sprite_draw_tinted(lithos_texture_t tex,
+lud_sprite_draw_tinted(lud_texture_t tex,
                           float dst_x, float dst_y, float dst_w, float dst_h,
                           float src_x, float src_y, float src_w, float src_h,
                           float r, float g, float b, float a)
@@ -252,20 +252,20 @@ lithos_sprite_draw_tinted(lithos_texture_t tex,
 }
 
 void
-lithos_sprite_rect(float x, float y, float w, float h,
+lud_sprite_rect(float x, float y, float w, float h,
                    float r, float g, float b, float a)
 {
-	lithos_texture_t wt = get_white_tex();
+	lud_texture_t wt = get_white_tex();
 	sprite_draw_internal(wt, x, y, w, h,
 	                     0, 0, 1, 1, 0,
 	                     r, g, b, a);
 }
 
 void
-lithos_sprite_rect_lines(float x, float y, float w, float h,
+lud_sprite_rect_lines(float x, float y, float w, float h,
                          float r, float g, float b, float a)
 {
-	lithos_texture_t wt = get_white_tex();
+	lud_texture_t wt = get_white_tex();
 	/* top */
 	sprite_draw_internal(wt, x, y, w, 1, 0, 0, 1, 1, 0, r, g, b, a);
 	/* bottom */
@@ -277,7 +277,7 @@ lithos_sprite_rect_lines(float x, float y, float w, float h,
 }
 
 void
-lithos_sprite_end(void)
+lud_sprite_end(void)
 {
 	flush();
 	glDisable(GL_BLEND);

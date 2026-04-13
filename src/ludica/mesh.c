@@ -1,5 +1,5 @@
-#include "lithos_internal.h"
-#include "lithos_gfx.h"
+#include "ludica_internal.h"
+#include "ludica_gfx.h"
 #include <GLES2/gl2.h>
 #include <string.h>
 
@@ -16,7 +16,7 @@ typedef struct {
 	struct {
 		GLint size;
 		int offset;
-	} attrs[LITHOS_MAX_VERTEX_ATTRS];
+	} attrs[LUD_MAX_VERTEX_ATTRS];
 	int vertex_stride;
 } mesh_slot_t;
 
@@ -33,7 +33,7 @@ alloc_slot(void)
 }
 
 static mesh_slot_t *
-get_slot(lithos_mesh_t mesh)
+get_slot(lud_mesh_t mesh)
 {
 	if (mesh.id == 0 || mesh.id > MAX_MESHES)
 		return NULL;
@@ -42,39 +42,39 @@ get_slot(lithos_mesh_t mesh)
 }
 
 static GLenum
-translate_primitive(enum lithos_primitive p)
+translate_primitive(enum lud_primitive p)
 {
 	switch (p) {
-	case LITHOS_PRIM_TRIANGLES:      return GL_TRIANGLES;
-	case LITHOS_PRIM_TRIANGLE_FAN:   return GL_TRIANGLE_FAN;
-	case LITHOS_PRIM_TRIANGLE_STRIP: return GL_TRIANGLE_STRIP;
-	case LITHOS_PRIM_LINES:          return GL_LINES;
+	case LUD_PRIM_TRIANGLES:      return GL_TRIANGLES;
+	case LUD_PRIM_TRIANGLE_FAN:   return GL_TRIANGLE_FAN;
+	case LUD_PRIM_TRIANGLE_STRIP: return GL_TRIANGLE_STRIP;
+	case LUD_PRIM_LINES:          return GL_LINES;
 	default:                         return GL_TRIANGLES;
 	}
 }
 
 static GLenum
-translate_usage(enum lithos_usage u)
+translate_usage(enum lud_usage u)
 {
 	switch (u) {
-	case LITHOS_USAGE_STATIC:  return GL_STATIC_DRAW;
-	case LITHOS_USAGE_DYNAMIC: return GL_DYNAMIC_DRAW;
-	case LITHOS_USAGE_STREAM:  return GL_STREAM_DRAW;
+	case LUD_USAGE_STATIC:  return GL_STATIC_DRAW;
+	case LUD_USAGE_DYNAMIC: return GL_DYNAMIC_DRAW;
+	case LUD_USAGE_STREAM:  return GL_STREAM_DRAW;
 	default:                   return GL_STATIC_DRAW;
 	}
 }
 
-lithos_mesh_t
-lithos_make_mesh(const lithos_mesh_desc_t *desc)
+lud_mesh_t
+lud_make_mesh(const lud_mesh_desc_t *desc)
 {
-	lithos_mesh_t out = {0};
+	lud_mesh_t out = {0};
 	mesh_slot_t *s;
 	GLenum usage;
 	int idx, i;
 
 	idx = alloc_slot();
 	if (idx < 0) {
-		lithos_err("mesh pool exhausted");
+		lud_err("mesh pool exhausted");
 		return out;
 	}
 
@@ -86,7 +86,7 @@ lithos_make_mesh(const lithos_mesh_desc_t *desc)
 	s->primitive = translate_primitive(desc->primitive);
 	s->num_attrs = desc->num_attrs;
 
-	for (i = 0; i < desc->num_attrs && i < LITHOS_MAX_VERTEX_ATTRS; i++) {
+	for (i = 0; i < desc->num_attrs && i < LUD_MAX_VERTEX_ATTRS; i++) {
 		s->attrs[i].size = desc->layout[i].size;
 		s->attrs[i].offset = desc->layout[i].offset;
 	}
@@ -118,7 +118,7 @@ lithos_make_mesh(const lithos_mesh_desc_t *desc)
 }
 
 void
-lithos_destroy_mesh(lithos_mesh_t mesh)
+lud_destroy_mesh(lud_mesh_t mesh)
 {
 	mesh_slot_t *s = get_slot(mesh);
 	if (!s) return;
@@ -159,7 +159,7 @@ bind_and_draw(mesh_slot_t *s, int first, int count)
 }
 
 void
-lithos_draw(lithos_mesh_t mesh)
+lud_draw(lud_mesh_t mesh)
 {
 	mesh_slot_t *s = get_slot(mesh);
 	if (!s) return;
@@ -167,7 +167,7 @@ lithos_draw(lithos_mesh_t mesh)
 }
 
 void
-lithos_draw_range(lithos_mesh_t mesh, int first, int count)
+lud_draw_range(lud_mesh_t mesh, int first, int count)
 {
 	mesh_slot_t *s = get_slot(mesh);
 	if (!s) return;

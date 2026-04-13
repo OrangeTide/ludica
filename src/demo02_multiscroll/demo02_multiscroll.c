@@ -1,12 +1,12 @@
 /*
  * demo02_multiscroll — Multi-layer parallax scrolling with tilemap.
  *
- * Demonstrates lithos's sprite batch, image loading, and 2D rendering.
+ * Demonstrates ludica's sprite batch, image loading, and 2D rendering.
  * Arrow keys to scroll, Escape to quit.
  */
 
-#include "lithos.h"
-#include "lithos_gfx.h"
+#include "ludica.h"
+#include "ludica_gfx.h"
 #include <math.h>
 #include <string.h>
 
@@ -26,8 +26,8 @@
 #define TILE_MC   22    /* middle center (dirt fill) */
 #define TILE_MR   24    /* middle right edge */
 
-static lithos_texture_t bg[3];
-static lithos_texture_t tileset;
+static lud_texture_t bg[3];
+static lud_texture_t tileset;
 static int tilemap[MAP_H][MAP_W];
 static float cam_x;
 static int scroll_left, scroll_right;
@@ -103,24 +103,24 @@ tilemap_init(void)
 static void
 init(void)
 {
-	bg[0] = lithos_load_texture("src/demo02_multiscroll/assets/background_layer_1.png",
-	                            LITHOS_FILTER_NEAREST, LITHOS_FILTER_NEAREST);
-	bg[1] = lithos_load_texture("src/demo02_multiscroll/assets/background_layer_2.png",
-	                            LITHOS_FILTER_NEAREST, LITHOS_FILTER_NEAREST);
-	bg[2] = lithos_load_texture("src/demo02_multiscroll/assets/background_layer_3.png",
-	                            LITHOS_FILTER_NEAREST, LITHOS_FILTER_NEAREST);
-	tileset = lithos_load_texture("src/demo02_multiscroll/assets/oak_woods_tileset.png",
-	                              LITHOS_FILTER_NEAREST, LITHOS_FILTER_NEAREST);
+	bg[0] = lud_load_texture("src/demo02_multiscroll/assets/background_layer_1.png",
+	                            LUD_FILTER_NEAREST, LUD_FILTER_NEAREST);
+	bg[1] = lud_load_texture("src/demo02_multiscroll/assets/background_layer_2.png",
+	                            LUD_FILTER_NEAREST, LUD_FILTER_NEAREST);
+	bg[2] = lud_load_texture("src/demo02_multiscroll/assets/background_layer_3.png",
+	                            LUD_FILTER_NEAREST, LUD_FILTER_NEAREST);
+	tileset = lud_load_texture("src/demo02_multiscroll/assets/oak_woods_tileset.png",
+	                              LUD_FILTER_NEAREST, LUD_FILTER_NEAREST);
 
 	tilemap_init();
 	cam_x = 0.0f;
 }
 
 static void
-draw_parallax(lithos_texture_t tex, float rate)
+draw_parallax(lud_texture_t tex, float rate)
 {
-	float tw = (float)lithos_texture_width(tex);
-	float th = (float)lithos_texture_height(tex);
+	float tw = (float)lud_texture_width(tex);
+	float th = (float)lud_texture_height(tex);
 	float offset;
 
 	if (tw <= 0.0f)
@@ -130,8 +130,8 @@ draw_parallax(lithos_texture_t tex, float rate)
 	if (offset < 0.0f)
 		offset += tw;
 
-	lithos_sprite_draw(tex, -offset, 0, tw, th, 0, 0, 0, 0);
-	lithos_sprite_draw(tex, tw - offset, 0, tw, th, 0, 0, 0, 0);
+	lud_sprite_draw(tex, -offset, 0, tw, th, 0, 0, 0, 0);
+	lud_sprite_draw(tex, tw - offset, 0, tw, th, 0, 0, 0, 0);
 }
 
 static void
@@ -140,7 +140,7 @@ draw_tile(int idx, float wx, float wy)
 	int col = idx % TILESET_COLS;
 	int row = idx / TILESET_COLS;
 
-	lithos_sprite_draw(tileset,
+	lud_sprite_draw(tileset,
 	                   wx, wy, TILE_SIZE, TILE_SIZE,
 	                   (float)(col * TILE_SIZE), (float)(row * TILE_SIZE),
 	                   TILE_SIZE, TILE_SIZE);
@@ -167,21 +167,21 @@ draw_tilemap_visible(void)
 }
 
 static int
-on_event(const lithos_event_t *ev)
+on_event(const lud_event_t *ev)
 {
 	switch (ev->type) {
-	case LITHOS_EV_KEY_DOWN:
-		if (ev->key.keycode == LITHOS_KEY_ESCAPE)
-			lithos_quit();
-		else if (ev->key.keycode == LITHOS_KEY_LEFT)
+	case LUD_EV_KEY_DOWN:
+		if (ev->key.keycode == LUD_KEY_ESCAPE)
+			lud_quit();
+		else if (ev->key.keycode == LUD_KEY_LEFT)
 			scroll_left = 1;
-		else if (ev->key.keycode == LITHOS_KEY_RIGHT)
+		else if (ev->key.keycode == LUD_KEY_RIGHT)
 			scroll_right = 1;
 		return 1;
-	case LITHOS_EV_KEY_UP:
-		if (ev->key.keycode == LITHOS_KEY_LEFT)
+	case LUD_EV_KEY_UP:
+		if (ev->key.keycode == LUD_KEY_LEFT)
 			scroll_left = 0;
-		else if (ev->key.keycode == LITHOS_KEY_RIGHT)
+		else if (ev->key.keycode == LUD_KEY_RIGHT)
 			scroll_right = 0;
 		return 1;
 	default:
@@ -209,20 +209,20 @@ frame(float dt)
 	if (cam_x < 0.0f) cam_x = 0.0f;
 	if (cam_x > max_cam_x) cam_x = max_cam_x;
 
-	lithos_viewport(0, 0, lithos_width(), lithos_height());
-	lithos_clear(0.0f, 0.0f, 0.0f, 1.0f);
+	lud_viewport(0, 0, lud_width(), lud_height());
+	lud_clear(0.0f, 0.0f, 0.0f, 1.0f);
 
 	/* Draw parallax backgrounds (fixed camera) */
-	lithos_sprite_begin(0, 0, VIRTUAL_W, VIRTUAL_H);
+	lud_sprite_begin(0, 0, VIRTUAL_W, VIRTUAL_H);
 	draw_parallax(bg[0], 0.0f);
 	draw_parallax(bg[1], 0.3f);
 	draw_parallax(bg[2], 0.6f);
-	lithos_sprite_end();
+	lud_sprite_end();
 
 	/* Draw tilemap (world camera) */
-	lithos_sprite_begin(cam_x, 0, VIRTUAL_W, VIRTUAL_H);
+	lud_sprite_begin(cam_x, 0, VIRTUAL_W, VIRTUAL_H);
 	draw_tilemap_visible();
-	lithos_sprite_end();
+	lud_sprite_end();
 }
 
 static void
@@ -230,14 +230,14 @@ cleanup(void)
 {
 	int i;
 	for (i = 0; i < 3; i++)
-		lithos_destroy_texture(bg[i]);
-	lithos_destroy_texture(tileset);
+		lud_destroy_texture(bg[i]);
+	lud_destroy_texture(tileset);
 }
 
 int
 main(void)
 {
-	return lithos_run(&(lithos_desc_t){
+	return lud_run(&(lud_desc_t){
 		.app_name = "demo02 — parallax multiscroll",
 		.width = 960,
 		.height = 540,

@@ -1,21 +1,21 @@
-#include "lithos_internal.h"
+#include "ludica_internal.h"
 #include <string.h>
 
 #define EVENT_QUEUE_SIZE 256
 
-static lithos_event_t queue[EVENT_QUEUE_SIZE];
+static lud_event_t queue[EVENT_QUEUE_SIZE];
 static unsigned head;
 static unsigned count;
 
 void
-lithos__event_init(void)
+lud__event_init(void)
 {
 	head = 0;
 	count = 0;
 }
 
 void
-lithos__event_push(const lithos_event_t *ev)
+lud__event_push(const lud_event_t *ev)
 {
 	if (count >= EVENT_QUEUE_SIZE) {
 		/* queue full — drop oldest */
@@ -28,7 +28,7 @@ lithos__event_push(const lithos_event_t *ev)
 }
 
 int
-lithos__event_poll(lithos_event_t *ev)
+lud__event_poll(lud_event_t *ev)
 {
 	if (count == 0) {
 		return 0;

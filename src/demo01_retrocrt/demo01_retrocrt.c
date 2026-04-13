@@ -5,8 +5,8 @@
  * quits on Escape or window close.
  */
 
-#include "lithos.h"
-#include "lithos_gfx.h"
+#include "ludica.h"
+#include "ludica_gfx.h"
 #include <GLES2/gl2.h>
 #include <stdio.h>
 
@@ -14,7 +14,7 @@
 #define SCREEN_W 320
 #define SCREEN_H 240
 
-static lithos_framebuffer_t fb;
+static lud_framebuffer_t fb;
 static unsigned int palette[256];
 static unsigned tick;
 
@@ -62,14 +62,14 @@ palette_init(void)
 static void
 init(void)
 {
-	fb = lithos_make_framebuffer(&(lithos_framebuffer_desc_t){
+	fb = lud_make_framebuffer(&(lud_framebuffer_desc_t){
 		.width = SCREEN_W,
 		.height = SCREEN_H,
-		.crt = LITHOS_CRT_SCANLINES,
+		.crt = LUD_CRT_SCANLINES,
 	});
 
 	palette_init();
-	lithos_framebuffer_palette(fb, palette);
+	lud_framebuffer_palette(fb, palette);
 }
 
 static void
@@ -79,7 +79,7 @@ animate(void)
 	int x, y;
 
 	tick++;
-	pixels = lithos_framebuffer_lock(fb);
+	pixels = lud_framebuffer_lock(fb);
 	if (!pixels) return;
 
 	for (y = 0; y < SCREEN_H; y++) {
@@ -89,43 +89,43 @@ animate(void)
 		}
 	}
 
-	lithos_framebuffer_unlock(fb);
+	lud_framebuffer_unlock(fb);
 }
 
 static int
-on_event(const lithos_event_t *ev)
+on_event(const lud_event_t *ev)
 {
 	switch (ev->type) {
-	case LITHOS_EV_KEY_DOWN:
+	case LUD_EV_KEY_DOWN:
 		fprintf(stderr, "key down: %d%s\n", ev->key.keycode,
 			ev->key.repeat ? " (repeat)" : "");
-		if (ev->key.keycode == LITHOS_KEY_ESCAPE)
-			lithos_quit();
+		if (ev->key.keycode == LUD_KEY_ESCAPE)
+			lud_quit();
 		return 1;
-	case LITHOS_EV_KEY_UP:
+	case LUD_EV_KEY_UP:
 		fprintf(stderr, "key up: %d\n", ev->key.keycode);
 		return 1;
-	case LITHOS_EV_MOUSE_MOVE:
+	case LUD_EV_MOUSE_MOVE:
 		fprintf(stderr, "mouse: %d,%d\n", ev->mouse_move.x, ev->mouse_move.y);
 		return 1;
-	case LITHOS_EV_MOUSE_DOWN:
+	case LUD_EV_MOUSE_DOWN:
 		fprintf(stderr, "mouse down: btn=%d at %d,%d\n",
 			ev->mouse_button.button, ev->mouse_button.x, ev->mouse_button.y);
 		return 1;
-	case LITHOS_EV_MOUSE_UP:
+	case LUD_EV_MOUSE_UP:
 		fprintf(stderr, "mouse up: btn=%d at %d,%d\n",
 			ev->mouse_button.button, ev->mouse_button.x, ev->mouse_button.y);
 		return 1;
-	case LITHOS_EV_MOUSE_SCROLL:
+	case LUD_EV_MOUSE_SCROLL:
 		fprintf(stderr, "scroll: dx=%.1f dy=%.1f\n", ev->scroll.dx, ev->scroll.dy);
 		return 1;
-	case LITHOS_EV_RESIZED:
+	case LUD_EV_RESIZED:
 		fprintf(stderr, "resize: %dx%d\n", ev->resize.width, ev->resize.height);
 		return 1;
-	case LITHOS_EV_FOCUS:
+	case LUD_EV_FOCUS:
 		fprintf(stderr, "focus\n");
 		return 1;
-	case LITHOS_EV_UNFOCUS:
+	case LUD_EV_UNFOCUS:
 		fprintf(stderr, "unfocus\n");
 		return 1;
 	default:
@@ -140,9 +140,9 @@ frame(float dt)
 
 	animate();
 
-	lithos_viewport(0, 0, lithos_width(), lithos_height());
-	lithos_clear(0.0f, 0.0f, 0.0f, 1.0f);
-	lithos_framebuffer_blit(fb);
+	lud_viewport(0, 0, lud_width(), lud_height());
+	lud_clear(0.0f, 0.0f, 0.0f, 1.0f);
+	lud_framebuffer_blit(fb);
 
 	glFlush();
 }
@@ -150,14 +150,14 @@ frame(float dt)
 static void
 cleanup(void)
 {
-	lithos_destroy_framebuffer(fb);
+	lud_destroy_framebuffer(fb);
 }
 
 int
 main(void)
 {
-	return lithos_run(&(lithos_desc_t){
-		.app_name = "lithos gfx test",
+	return lud_run(&(lud_desc_t){
+		.app_name = "ludica gfx test",
 		.width = 640,
 		.height = 480,
 		.resizable = 1,

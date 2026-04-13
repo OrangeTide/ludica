@@ -1,7 +1,7 @@
 /*
  * demo03_text_dialogs — Bitmap font text rendering and dialog boxes.
  *
- * Demonstrates lithos's text rendering, rectangle primitives, and
+ * Demonstrates ludica's text rendering, rectangle primitives, and
  * a multi-page dialog box system.
  *
  * Enter/Space: advance dialog or select menu item
@@ -9,9 +9,9 @@
  * Escape: quit
  */
 
-#include "lithos.h"
-#include "lithos_gfx.h"
-#include "lithos_font.h"
+#include "ludica.h"
+#include "ludica_gfx.h"
+#include "ludica_font.h"
 #include <math.h>
 
 #define VIRTUAL_W  320
@@ -20,7 +20,7 @@
 /* Scenes */
 enum scene { SCENE_TITLE, SCENE_DIALOG, SCENE_MENU };
 
-static lithos_font_t font;
+static lud_font_t font;
 static enum scene scene;
 static float time_acc;
 
@@ -52,16 +52,16 @@ draw_title(void)
 {
 	float blink;
 
-	lithos_draw_text_centered(font, VIRTUAL_W / 2, 50, 2, "Text Demo");
-	lithos_draw_text_centered(font, VIRTUAL_W / 2, 80, 1, "Bitmap Font & Dialog Boxes");
+	lud_draw_text_centered(font, VIRTUAL_W / 2, 50, 2, "Text Demo");
+	lud_draw_text_centered(font, VIRTUAL_W / 2, 80, 1, "Bitmap Font & Dialog Boxes");
 
 	/* blinking prompt — sine wave alpha, 2 Hz */
 	blink = (sinf(time_acc * 2.0f * 3.14159f * 2.0f) + 1.0f) * 0.5f;
 	if (blink > 0.3f)
-		lithos_draw_text_centered(font, VIRTUAL_W / 2, 120, 1, "Press Enter");
+		lud_draw_text_centered(font, VIRTUAL_W / 2, 120, 1, "Press Enter");
 
 	/* key hints at bottom */
-	lithos_draw_text(font, 4, VIRTUAL_H - 12, 1, "Enter=dialog  M=menu  Esc=quit");
+	lud_draw_text(font, 4, VIRTUAL_H - 12, 1, "Enter=dialog  M=menu  Esc=quit");
 }
 
 static void
@@ -70,17 +70,17 @@ draw_dialog(void)
 	float blink;
 
 	/* scene label */
-	lithos_draw_text(font, 4, 4, 1, "Dialog Mode");
+	lud_draw_text(font, 4, 4, 1, "Dialog Mode");
 
 	/* dialog box background */
-	lithos_sprite_rect(DIALOG_X, DIALOG_Y, DIALOG_W, DIALOG_H,
+	lud_sprite_rect(DIALOG_X, DIALOG_Y, DIALOG_W, DIALOG_H,
 	                   0.0f, 0.0f, 0.0f, 0.85f);
 	/* border */
-	lithos_sprite_rect_lines(DIALOG_X, DIALOG_Y, DIALOG_W, DIALOG_H,
+	lud_sprite_rect_lines(DIALOG_X, DIALOG_Y, DIALOG_W, DIALOG_H,
 	                         1.0f, 1.0f, 1.0f, 1.0f);
 
 	/* word-wrapped text */
-	lithos_draw_text_wrapped(font,
+	lud_draw_text_wrapped(font,
 	                         DIALOG_X + DIALOG_PAD,
 	                         DIALOG_Y + DIALOG_PAD / 2 + 2,
 	                         1,
@@ -91,7 +91,7 @@ draw_dialog(void)
 	/* blinking advance indicator */
 	blink = (sinf(time_acc * 2.0f * 3.14159f * 2.0f) + 1.0f) * 0.5f;
 	if (blink > 0.3f)
-		lithos_draw_text(font,
+		lud_draw_text(font,
 		                 DIALOG_X + DIALOG_W - DIALOG_PAD - 8,
 		                 DIALOG_Y + DIALOG_H - 10,
 		                 1, ">");
@@ -105,10 +105,10 @@ draw_dialog(void)
 		buf[len++] = '/';
 		buf[len++] = '0' + DIALOG_PAGE_COUNT;
 		buf[len] = '\0';
-		lithos_draw_text(font, DIALOG_X + DIALOG_PAD, DIALOG_Y + DIALOG_H - 10, 1, buf);
+		lud_draw_text(font, DIALOG_X + DIALOG_PAD, DIALOG_Y + DIALOG_H - 10, 1, buf);
 	}
 
-	lithos_draw_text(font, 4, VIRTUAL_H - 12, 1, "Space/Enter=next  Esc=quit");
+	lud_draw_text(font, 4, VIRTUAL_H - 12, 1, "Space/Enter=next  Esc=quit");
 }
 
 static void
@@ -117,49 +117,49 @@ draw_menu(void)
 	float start_y;
 	int i;
 
-	lithos_draw_text_centered(font, VIRTUAL_W / 2, 40, 2, "Pause Menu");
+	lud_draw_text_centered(font, VIRTUAL_W / 2, 40, 2, "Pause Menu");
 
 	/* menu background */
-	lithos_sprite_rect(80, 65, 160, 70, 0.0f, 0.0f, 0.0f, 0.75f);
-	lithos_sprite_rect_lines(80, 65, 160, 70, 1.0f, 1.0f, 1.0f, 1.0f);
+	lud_sprite_rect(80, 65, 160, 70, 0.0f, 0.0f, 0.0f, 0.75f);
+	lud_sprite_rect_lines(80, 65, 160, 70, 1.0f, 1.0f, 1.0f, 1.0f);
 
 	start_y = 75.0f;
 	for (i = 0; i < MENU_ITEM_COUNT; i++) {
 		float y = start_y + (float)i * 18.0f;
 		if (i == menu_sel) {
-			lithos_draw_text(font, 95, y, 1, ">");
+			lud_draw_text(font, 95, y, 1, ">");
 		}
-		lithos_draw_text(font, 110, y, 1, menu_items[i]);
+		lud_draw_text(font, 110, y, 1, menu_items[i]);
 	}
 
-	lithos_draw_text(font, 4, VIRTUAL_H - 12, 1, "Up/Down=select  Enter=choose  Esc=quit");
+	lud_draw_text(font, 4, VIRTUAL_H - 12, 1, "Up/Down=select  Enter=choose  Esc=quit");
 }
 
 static int
-on_event(const lithos_event_t *ev)
+on_event(const lud_event_t *ev)
 {
-	if (ev->type != LITHOS_EV_KEY_DOWN)
+	if (ev->type != LUD_EV_KEY_DOWN)
 		return 0;
 
-	if (ev->key.keycode == LITHOS_KEY_ESCAPE) {
-		lithos_quit();
+	if (ev->key.keycode == LUD_KEY_ESCAPE) {
+		lud_quit();
 		return 1;
 	}
 
 	switch (scene) {
 	case SCENE_TITLE:
-		if (ev->key.keycode == LITHOS_KEY_ENTER) {
+		if (ev->key.keycode == LUD_KEY_ENTER) {
 			scene = SCENE_DIALOG;
 			dialog_page = 0;
-		} else if (ev->key.keycode == LITHOS_KEY_M) {
+		} else if (ev->key.keycode == LUD_KEY_M) {
 			scene = SCENE_MENU;
 			menu_sel = 0;
 		}
 		return 1;
 
 	case SCENE_DIALOG:
-		if (ev->key.keycode == LITHOS_KEY_ENTER ||
-		    ev->key.keycode == LITHOS_KEY_SPACE) {
+		if (ev->key.keycode == LUD_KEY_ENTER ||
+		    ev->key.keycode == LUD_KEY_SPACE) {
 			dialog_page++;
 			if (dialog_page >= DIALOG_PAGE_COUNT) {
 				dialog_page = 0;
@@ -169,19 +169,19 @@ on_event(const lithos_event_t *ev)
 		return 1;
 
 	case SCENE_MENU:
-		if (ev->key.keycode == LITHOS_KEY_UP) {
+		if (ev->key.keycode == LUD_KEY_UP) {
 			menu_sel--;
 			if (menu_sel < 0) menu_sel = MENU_ITEM_COUNT - 1;
-		} else if (ev->key.keycode == LITHOS_KEY_DOWN) {
+		} else if (ev->key.keycode == LUD_KEY_DOWN) {
 			menu_sel++;
 			if (menu_sel >= MENU_ITEM_COUNT) menu_sel = 0;
-		} else if (ev->key.keycode == LITHOS_KEY_ENTER) {
+		} else if (ev->key.keycode == LUD_KEY_ENTER) {
 			if (menu_sel == 0) {
 				/* Resume */
 				scene = SCENE_TITLE;
 			} else if (menu_sel == 2) {
 				/* Quit */
-				lithos_quit();
+				lud_quit();
 			}
 		}
 		return 1;
@@ -193,7 +193,7 @@ on_event(const lithos_event_t *ev)
 static void
 init(void)
 {
-	font = lithos_make_default_font();
+	font = lud_make_default_font();
 	scene = SCENE_TITLE;
 	time_acc = 0.0f;
 }
@@ -203,10 +203,10 @@ frame(float dt)
 {
 	time_acc += dt;
 
-	lithos_viewport(0, 0, lithos_width(), lithos_height());
-	lithos_clear(0.08f, 0.08f, 0.12f, 1.0f);
+	lud_viewport(0, 0, lud_width(), lud_height());
+	lud_clear(0.08f, 0.08f, 0.12f, 1.0f);
 
-	lithos_sprite_begin(0, 0, VIRTUAL_W, VIRTUAL_H);
+	lud_sprite_begin(0, 0, VIRTUAL_W, VIRTUAL_H);
 
 	switch (scene) {
 	case SCENE_TITLE:  draw_title();  break;
@@ -229,22 +229,22 @@ frame(float dt)
 		if (fps >= 10)  fps_buf[len++] = '0' + (fps / 10) % 10;
 		fps_buf[len++] = '0' + fps % 10;
 		fps_buf[len] = '\0';
-		lithos_draw_text(font, VIRTUAL_W - 8 * len - 2, 2, 1, fps_buf);
+		lud_draw_text(font, VIRTUAL_W - 8 * len - 2, 2, 1, fps_buf);
 	}
 
-	lithos_sprite_end();
+	lud_sprite_end();
 }
 
 static void
 cleanup(void)
 {
-	lithos_destroy_font(font);
+	lud_destroy_font(font);
 }
 
 int
 main(void)
 {
-	return lithos_run(&(lithos_desc_t){
+	return lud_run(&(lud_desc_t){
 		.app_name = "demo03 — text & dialogs",
 		.width = 960,
 		.height = 540,

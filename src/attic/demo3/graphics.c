@@ -10,7 +10,7 @@
 #include "palette.glsl.gl.h"
 #endif
 
-#include <lithos.h>
+#include <ludica.h>
 
 void
 gfx_init(void)

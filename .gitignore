@@ -6,17 +6,17 @@
 
 /config.mk
 
-/src/lithos/include/EGL/
-/src/lithos/include/GLES2/
-/src/lithos/include/GLES3/
-/src/lithos/include/KHR/
+/src/ludica/include/EGL/
+/src/ludica/include/GLES2/
+/src/ludica/include/GLES3/
+/src/ludica/include/KHR/
 
-/src/lithos/win32libs/chrome.zip
-/src/lithos/win32libs/d3dcompiler_47.dll
-/src/lithos/win32libs/libEGL.dll
-/src/lithos/win32libs/libGLESv2.dll
-/src/lithos/win32libs/vk_swiftshader.dll
-/src/lithos/win32libs/vk_swiftshader_icd.json
+/src/ludica/win32libs/chrome.zip
+/src/ludica/win32libs/d3dcompiler_47.dll
+/src/ludica/win32libs/libEGL.dll
+/src/ludica/win32libs/libGLESv2.dll
+/src/ludica/win32libs/vk_swiftshader.dll
+/src/ludica/win32libs/vk_swiftshader_icd.json
 
 /JUNK
 /OLD

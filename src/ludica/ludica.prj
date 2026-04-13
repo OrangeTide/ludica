@@ -1,5 +1,5 @@
 $(BEGIN_TARGET)
-NAME = lithos
+NAME = ludica
 TYPE = lib
 SRCS = *.c
 INCLUDEDIR = include

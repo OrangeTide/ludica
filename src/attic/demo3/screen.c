@@ -10,7 +10,7 @@
 #endif
 
 #include <stdlib.h>
-#include <lithos.h>
+#include <ludica.h>
 
 void
 screen_init(int width, int height)
