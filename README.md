@@ -1,79 +1,90 @@
-# Game Dev experiments [![CI](https://github.com/OrangeTide/gamedev/workflows/CI/badge.svg)](https://github.com/OrangeTide/gamedev/actions)
+# Ludica [![CI](https://github.com/OrangeTide/gamedev/workflows/CI/badge.svg)](https://github.com/OrangeTide/gamedev/actions)
 
-Collection of my studies in game development.
+A lightweight cross-platform graphics library for games and demos,
+built on OpenGL ES 2.0.
 
-## Description
+Ludica provides a minimal C API for windowing, input, shaders, meshes,
+textures, sprites, fonts, and framebuffer effects. Several demo programs
+and a portal-based 3D engine (`hero`) are included.
 
-## Getting Started
+## Programs
 
-## Installation & Development
+| Program | Description |
+|---------|-------------|
+| `hero` | Portal-based 3D engine with normal-mapped PBR textures |
+| `demo01_retrocrt` | Palette framebuffer with CRT post-processing |
+| `demo02_multiscroll` | Parallax scrolling and sprite batching |
+| `demo03_text_dialogs` | Font rendering and dialog box UI |
+| `ansiview` | ANSI art viewer |
 
-### Dependencies
+## Building
 
-  * Linux x86-64/ARM64 or Windows x86-64
-  * GCC or MSYS2/[MinGW-w64](https://www.mingw-w64.org/) or equivalent
-  * GNU Make
-  * If building on Windows:
-    * MinGW-w64 or [w64devkit](https://github.com/skeeto/w64devkit)
-    * ANGLE libaries - see `update-binaries.sh`
-    * [DirectX End-User Runtime Web Installer](https://answers.microsoft.com/en-us/windows/forum/all/xinput13dll-is-missing/b6566b88-b8dd-4dd3-abc5-2efac787a93a)
+Requires GCC (or MinGW-w64 on Windows) and GNU Make.
 
-#### Ubuntu 22.04 x86-64 / Raspbian (64-bit aarch64)
+```sh
+make                # default build
+make RELEASE=1      # optimized (-O2, LTO)
+make DEBUG=1        # debug symbols
+```
 
-  ```sh
-  sudo apt-get install -y build-essential git cmake
-  sudo apt-get install -y libx11-dev libxext-dev libxfixes-dev libxi-dev \
-      libxcursor-dev libgl1-mesa-dev libglfw3-dev libasound2-dev
-  ```
+Output goes to `_out/<triplet>/bin/` (e.g. `_out/x86_64-linux-gnu/bin/hero`).
 
-#### Windows x86-64
+Cross compile for Windows:
 
-Install MSYS2 and MINGW64.
+```sh
+make CONFIG=configs/mingw32_config.mk
+```
 
-Install headers and libraries, from MSYS2 shell:
+### Linux dependencies
 
-  ```sh
-  cd src/ludica
-  download-headers.sh
-  cd win32libs
-  update-binaries.sh
-  ```
+Ubuntu / Debian:
 
-### Building
+```sh
+sudo apt-get install -y build-essential git \
+    libx11-dev libxext-dev libxfixes-dev libxi-dev \
+    libxcursor-dev libegl1-mesa-dev libgles2-mesa-dev
+```
 
-  * Run `make`
+### Windows dependencies
 
-Cross compile:
+Install [MSYS2](https://www.msys2.org/) with MINGW64, or
+[w64devkit](https://github.com/skeeto/w64devkit). Then fetch headers
+and ANGLE libraries:
 
-  ```sh
-  make CONFIG=configs/mingw32_config.mk
-  ```
+```sh
+cd src/ludica
+./download-headers.sh
+cd win32libs
+./update-binaries.sh
+```
 
 ## Running
 
-  * Run `./bin/Linux-aarch64/demo4` or any of the other built programs.
+```sh
+_out/x86_64-linux-gnu/bin/hero
+```
 
-## Status & Known Bugs
+## Directory layout
 
-Win32 support is incomplete. The following are missing or broken:
-
-  * Empty window. nothing sems to render.
-  * key event callbacks are not being called.
-
-## Help
-
-Create a new issue at https://github.com/OrangeTide/gamedev/issues
+- `src/ludica/` -- Core library (platform, shaders, meshes, textures, sprites, fonts)
+- `src/hero/` -- Portal-based 3D engine
+- `src/demo01_retrocrt/` -- CRT post-processing demo
+- `src/demo02_multiscroll/` -- Parallax scrolling demo
+- `src/demo03_text_dialogs/` -- Font and dialog demo
+- `src/ansiview/` -- ANSI art viewer
+- `src/thirdparty/` -- Header-only dependencies (stb_image, stb_ds, miniaudio)
+- `assets/textures/` -- PBR textures (CC0, see [CREDIT.md](CREDIT.md))
+- `tools/` -- Build-time code generators
 
 ## License
 
-This project is licensed under the [0BSD License](LICENSE)
+This project is licensed under the [0BSD License](LICENSE).
 
 ## Acknowledgments
 
-  * [Dear ImGui](https://github.com/ocornut/imgui)
-  * [cimgui](https://github.com/cimgui/cimgui)
-  * [bq_websocket](https://github.com/bqqbarbhg/bq_websocket)
-  * [native-activity example](https://github.com/android/ndk-samples/tree/main/native-activity)
-  * [stb](https://github.com/nothings/stb)
-  * [Chromium browser compiled with the Clang/LLVM compiler](https://github.com/RobRich999/Chromium_Clang)
-  * [Using OpenGL ES on windows desktops via EGL](https://www.saschawillems.de/blog/2015/04/19/using-opengl-es-on-windows-desktops-via-egl/)
+- [ambientCG](https://ambientcg.com/) -- CC0 PBR textures
+- [Dear ImGui](https://github.com/ocornut/imgui) / [cimgui](https://github.com/cimgui/cimgui)
+- [stb](https://github.com/nothings/stb) -- stb_image, stb_ds
+- [HandmadeMath](https://github.com/HandmadeMath/HandmadeMath) -- single-header math library
+- [miniaudio](https://miniaud.io/) -- single-header audio library
+- [Using OpenGL ES on Windows via EGL](https://www.saschawillems.de/blog/2015/04/19/using-opengl-es-on-windows-desktops-via-egl/)
