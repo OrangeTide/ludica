@@ -2,6 +2,7 @@
 #define LUDICA_H_
 
 #include "ludica_input.h"
+#include "ludica_anim.h"
 
 #ifndef LUD_VERSION
 #define LUD_VERSION "unknown"
