@@ -36,6 +36,10 @@
 #define MAX_TEXTURES  8
 #define MAX_DRAW_GROUPS (MAX_SIDES + 2)
 #define PORTAL_DEPTH  10
+#define DEFAULT_HFOV  80.0f   /* horizontal FOV in degrees */
+#define MIN_HFOV      50.0f
+#define MAX_HFOV      120.0f
+#define HFOV_STEP      5.0f
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -129,6 +133,7 @@ struct game_state {
 	float player_tilt;        /* pitch, degrees */
 	unsigned player_sector;
 
+	float hfov;               /* horizontal FOV, degrees */
 	bool use_textures; /* runtime toggle */
 
 	struct {
@@ -511,8 +516,18 @@ build_projection_matrix(void)
 	float h = (float)lud_height();
 	if (h < 1.0f) h = 1.0f;
 	float aspect = w / h;
-	/* ~80 degree vertical FOV, matching the original frustum */
-	return HMM_Perspective(80.0f, aspect, 0.125f, 1000.0f);
+	/*
+	 * Fix horizontal FOV at 90° and derive vertical FOV from aspect ratio.
+	 * This keeps ultra-wide (21:9, 32:9) from getting a fisheye effect,
+	 * and narrow screens (3:2, 4:3) from losing vertical space.
+	 *
+	 * hfov_rad = horizontal FOV in radians
+	 * vfov = 2 * atan(tan(hfov/2) / aspect)
+	 */
+	float hfov_rad = state.hfov * (float)M_PI / 180.0f;
+	float vfov_deg = 2.0f * atanf(tanf(hfov_rad * 0.5f) / aspect)
+	               * 180.0f / (float)M_PI;
+	return HMM_Perspective(vfov_deg, aspect, 0.125f, 1000.0f);
 }
 
 /* ------------------------------------------------------------------ */
@@ -617,6 +632,7 @@ init(void)
 	                   &state.player_x, &state.player_y);
 	state.player_facing = 180.0f;
 	state.player_height = 1.0f;
+	state.hfov = DEFAULT_HFOV;
 	state.use_textures = true;
 }
 
@@ -667,6 +683,15 @@ on_event(const lud_event_t *ev)
 		case LUD_KEY_T:
 			if (down)
 				state.use_textures = !state.use_textures;
+			return 1;
+		/* FOV adjustment */
+		case LUD_KEY_EQUAL: /* +/= key */
+			if (down && state.hfov < MAX_HFOV)
+				state.hfov += HFOV_STEP;
+			return 1;
+		case LUD_KEY_MINUS:
+			if (down && state.hfov > MIN_HFOV)
+				state.hfov -= HFOV_STEP;
 			return 1;
 		case LUD_KEY_ESCAPE:
 			if (down) lud_quit();
@@ -719,12 +744,12 @@ frame(float dt)
 	lud_sprite_begin(0, 0, vw, vh);
 
 	char buf[128];
-	snprintf(buf, sizeof(buf), "pos: %.1f, %.1f  facing: %.0f  [T]extures: %s",
+	snprintf(buf, sizeof(buf), "pos: %.1f, %.1f  facing: %.0f  hfov: %.0f  [T]extures: %s",
 	         state.player_x, state.player_y, state.player_facing,
-	         state.use_textures ? "on" : "off");
+	         state.hfov, state.use_textures ? "on" : "off");
 	lud_draw_text(font, 4, 4, 1, buf);
 
-	snprintf(buf, sizeof(buf), "WASD/arrows: move  Q/E: strafe  PgUp/Dn: look  Home/End: fly");
+	snprintf(buf, sizeof(buf), "WASD/arrows: move  Q/E: strafe  PgUp/Dn: look  Home/End: fly  +/-: fov");
 	lud_draw_text(font, 4, vh - 12, 1, buf);
 
 	lud_sprite_end();
