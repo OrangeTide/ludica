@@ -3,6 +3,7 @@
 
 #include "ludica_input.h"
 #include "ludica_anim.h"
+#include "ludica_audio.h"
 #include "ludica_auto.h"
 
 #ifndef LUD_VERSION
