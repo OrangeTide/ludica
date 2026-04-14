@@ -58,6 +58,8 @@ make CONFIG=configs/mingw32_config.mk
 
 ### WebAssembly (Emscripten)
 
+Requires the [Emscripten SDK](https://emscripten.org/).
+
 Build any sample for the browser:
 
 ```sh
