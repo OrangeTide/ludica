@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -20,11 +20,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install pandoc
-        run: sudo apt-get update && sudo apt-get -y install pandoc
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install pandoc
 
-      - name: Build site
-        run: make -C doc/manual
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.61
+
+      - name: Build all samples (Emscripten)
+        run: make CC=emcc CXX=em++ AR=emar RELEASE=1
+
+      - name: Generate site
+        run: ./scripts/gen-pages.sh _site
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
