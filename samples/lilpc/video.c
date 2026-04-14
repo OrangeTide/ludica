@@ -4,7 +4,7 @@
 #include <string.h>
 
 /* CGA RGBI palette (RGBA, little-endian on x86 = 0xAABBGGRR in memory) */
-static const uint32_t cga_palette[16] = {
+const uint32_t cga_palette[16] = {
 	0xFF000000, /* 0  black */
 	0xFFAA0000, /* 1  blue */
 	0xFF00AA00, /* 2  green */
@@ -23,8 +23,8 @@ static const uint32_t cga_palette[16] = {
 	0xFFFFFFFF, /* 15 white */
 };
 
-/* Hercules monochrome palette: black and green/amber/white */
-static const uint32_t herc_palette[2] = {
+/* Hercules monochrome palette (RGBA, little-endian = 0xAABBGGRR) */
+const uint32_t herc_palette[2] = {
 	0xFF000000, /* black */
 	0xFF33FF33, /* green phosphor */
 };
@@ -489,14 +489,12 @@ static void render_cga_text(video_t *vid, bus_t *bus)
 			uint8_t ch = bus_read8(bus, addr);
 			uint8_t attr = bus_read8(bus, addr + 1);
 
-			uint32_t fg = cga_palette[attr & 0x0F];
-			uint32_t bg = cga_palette[(attr >> 4) & 0x0F];
+			uint8_t fg = attr & 0x0F;
+			uint8_t bg = (attr >> 4) & 0x0F;
 
 			/* blink mode: if mode_ctrl bit 5, bit 7 of attr = blink */
 			if ((vid->mode_ctrl & 0x20) && (attr & 0x80)) {
-				/* blink: toggle fg/bg based on frame counter */
-				/* use scanline counter as crude blink timer */
-				bg = cga_palette[(attr >> 4) & 0x07];
+				bg = (attr >> 4) & 0x07;
 			}
 
 			const uint8_t *glyph = &cga_font_8x8[ch * 8];
@@ -504,18 +502,17 @@ static void render_cga_text(video_t *vid, bus_t *bus)
 			for (int y = 0; y < char_h; y++) {
 				uint8_t bits = glyph[y];
 				for (int x = 0; x < 8; x++) {
-					uint32_t color = (bits & (0x80 >> x)) ? fg : bg;
+					uint8_t cidx = (bits & (0x80 >> x)) ? fg : bg;
 
 					if (cols == 40) {
-						/* double-width pixels */
 						int px = col * 16 + x * 2;
 						int py = row * 8 + y;
-						vid->pixels[py * vid->render_w + px] = color;
-						vid->pixels[py * vid->render_w + px + 1] = color;
+						vid->pixels[py * vid->render_w + px] = cidx;
+						vid->pixels[py * vid->render_w + px + 1] = cidx;
 					} else {
 						int px = col * 8 + x;
 						int py = row * 8 + y;
-						vid->pixels[py * vid->render_w + px] = color;
+						vid->pixels[py * vid->render_w + px] = cidx;
 					}
 				}
 			}
@@ -555,7 +552,7 @@ static void render_cga_320(video_t *vid, bus_t *bus)
 	bool bright = (vid->color_sel & 0x10) != 0;
 	int bg_color = vid->color_sel & 0x0F;
 
-	int pal[4];
+	uint8_t pal[4];
 	pal[0] = bg_color;
 	for (int i = 1; i < 4; i++) {
 		pal[i] = cga_gfx_pal[pal_idx][i];
@@ -574,7 +571,7 @@ static void render_cga_320(video_t *vid, bus_t *bus)
 			uint8_t byte = bus_read8(bus, row_addr + (x >> 2));
 			for (int px = 0; px < 4; px++) {
 				int cidx = (byte >> (6 - px * 2)) & 3;
-				vid->pixels[y * 320 + x + px] = cga_palette[pal[cidx]];
+				vid->pixels[y * 320 + x + px] = pal[cidx];
 			}
 		}
 	}
@@ -588,8 +585,8 @@ static void render_cga_640(video_t *vid, bus_t *bus)
 	vid->render_w = 640;
 	vid->render_h = 200;
 
-	uint32_t fg = cga_palette[vid->color_sel & 0x0F];
-	uint32_t bg = cga_palette[0];
+	uint8_t fg = vid->color_sel & 0x0F;
+	uint8_t bg = 0;
 
 	for (int y = 0; y < 200; y++) {
 		uint32_t row_addr = CGA_VRAM_BASE;
@@ -600,8 +597,8 @@ static void render_cga_640(video_t *vid, bus_t *bus)
 		for (int x = 0; x < 640; x += 8) {
 			uint8_t byte = bus_read8(bus, row_addr + (x >> 3));
 			for (int px = 0; px < 8; px++) {
-				uint32_t color = (byte & (0x80 >> px)) ? fg : bg;
-				vid->pixels[y * 640 + x + px] = color;
+				vid->pixels[y * 640 + x + px] =
+					(byte & (0x80 >> px)) ? fg : bg;
 			}
 		}
 	}
@@ -627,8 +624,9 @@ static void render_herc_text(video_t *vid, bus_t *bus)
 	uint8_t cursor_end = vid->crtc.reg[11] & 0x1F;
 	bool cursor_enabled = !(vid->crtc.reg[10] & 0x20);
 
-	uint32_t fg_color = herc_palette[1];
-	uint32_t bg_color = herc_palette[0];
+	/* Hercules uses index 0 = off, 1 = on (phosphor color in shader) */
+	uint8_t fg_idx = 1;
+	uint8_t bg_idx = 0;
 
 	memset(vid->pixels, 0, sizeof(vid->pixels));
 
@@ -642,16 +640,16 @@ static void render_herc_text(video_t *vid, bus_t *bus)
 			 * 00 = invisible, 01 = underline, 07 = normal, 0F = bright
 			 * 70 = reverse, 87/8F = blink
 			 */
-			uint32_t fg, bg;
+			uint8_t fg, bg;
 			if (attr == 0x00 || attr == 0x08 || attr == 0x80) {
-				fg = bg_color;
-				bg = bg_color;
+				fg = bg_idx;
+				bg = bg_idx;
 			} else if ((attr & 0x77) == 0x70) {
-				fg = bg_color;
-				bg = fg_color;
+				fg = bg_idx;
+				bg = fg_idx;
 			} else {
-				fg = fg_color;
-				bg = bg_color;
+				fg = fg_idx;
+				bg = bg_idx;
 			}
 
 			const uint8_t *glyph = &cga_font_8x8[ch * 8];
@@ -666,21 +664,21 @@ static void render_herc_text(video_t *vid, bus_t *bus)
 					bits = 0xFF;
 
 				for (int x = 0; x < 8; x++) {
-					uint32_t color = (bits & (0x80 >> x)) ? fg : bg;
+					uint8_t cidx = (bits & (0x80 >> x)) ? fg : bg;
 					int px = col * char_w + x;
 					int py = row * char_h + y;
 					if (px < VIDEO_MAX_W && py < VIDEO_MAX_H)
-						vid->pixels[py * vid->render_w + px] = color;
+						vid->pixels[py * vid->render_w + px] = cidx;
 				}
 				/* 9th pixel column: repeat column 8 for box-drawing (C0-DF) */
 				{
 					int px = col * char_w + 8;
 					int py = row * char_h + y;
-					uint32_t color = bg;
+					uint8_t cidx = bg;
 					if (ch >= 0xC0 && ch <= 0xDF)
-						color = (bits & 0x01) ? fg : bg;
+						cidx = (bits & 0x01) ? fg : bg;
 					if (px < VIDEO_MAX_W && py < VIDEO_MAX_H)
-						vid->pixels[py * vid->render_w + px] = color;
+						vid->pixels[py * vid->render_w + px] = cidx;
 				}
 			}
 
@@ -719,51 +717,11 @@ static void render_herc_gfx(video_t *vid, bus_t *bus)
 		for (int x = 0; x < 720; x += 8) {
 			uint8_t byte = bus_read8(bus, row_addr + (x >> 3));
 			for (int px = 0; px < 8; px++) {
-				uint32_t color = (byte & (0x80 >> px))
-					? herc_palette[1] : herc_palette[0];
-				vid->pixels[y * 720 + x + px] = color;
+				vid->pixels[y * 720 + x + px] =
+					(byte & (0x80 >> px)) ? 1 : 0;
 			}
 		}
 	}
-}
-
-/*
- * CGA scanline doubling: expand native 200-line output to 400 lines
- * with blank (black) odd scanlines, simulating NTSC non-interlaced
- * CGA output where only one field is sent repeatedly.
- *
- * For 320-wide modes, also doubles horizontally to produce 640x400.
- * Works in-place by processing rows bottom-to-top.
- */
-static void cga_scanline_double(video_t *vid)
-{
-	int src_w = vid->render_w;
-	int src_h = vid->render_h;
-	int dst_w = (src_w <= 320) ? 640 : src_w;
-
-	/* expand bottom-to-top so we don't overwrite unread source data */
-	for (int y = src_h - 1; y >= 0; y--) {
-		uint32_t *src_row = &vid->pixels[y * src_w];
-		uint32_t *dst_even = &vid->pixels[(y * 2) * dst_w];
-		uint32_t *dst_odd = &vid->pixels[(y * 2 + 1) * dst_w];
-
-		/* blank the odd scanline */
-		memset(dst_odd, 0, dst_w * sizeof(uint32_t));
-
-		/* copy/expand the even scanline */
-		if (src_w <= 320) {
-			/* double horizontally: 320 → 640 */
-			for (int x = src_w - 1; x >= 0; x--) {
-				dst_even[x * 2] = src_row[x];
-				dst_even[x * 2 + 1] = src_row[x];
-			}
-		} else if (dst_even != src_row) {
-			memmove(dst_even, src_row, src_w * sizeof(uint32_t));
-		}
-	}
-
-	vid->render_w = dst_w;
-	vid->render_h = src_h * 2;
 }
 
 void video_render(video_t *vid, lilpc_t *pc)
@@ -782,11 +740,13 @@ void video_render(video_t *vid, lilpc_t *pc)
 		 * Bit 4: 640x200 graphics
 		 * Bit 5: blink enable
 		 */
+		vid->border_color = vid->color_sel & 0x0F;
+
 		if (!(vid->mode_ctrl & 0x08)) {
 			/* display disabled - black screen */
 			vid->render_w = 640;
-			vid->render_h = 400;
-			memset(vid->pixels, 0, 640 * 400 * sizeof(uint32_t));
+			vid->render_h = 200;
+			memset(vid->pixels, 0, 640 * 200);
 			return;
 		}
 
@@ -799,9 +759,6 @@ void video_render(video_t *vid, lilpc_t *pc)
 		} else {
 			render_cga_text(vid, &pc->bus);
 		}
-
-		/* apply NTSC-style scanline doubling */
-		cga_scanline_double(vid);
 	}
 }
 

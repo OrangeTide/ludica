@@ -11,7 +11,111 @@
 
 static lilpc_t pc;
 static lud_texture_t screen_tex;
+static lud_shader_t crt_shader;
+static lud_mesh_t crt_quad;
 static int tex_w, tex_h;
+
+/* ======================================================================== */
+/* CRT display shader (GLES3)                                               */
+/* ======================================================================== */
+
+static const char crt_vert_src[] =
+	"#version 300 es\n"
+	"in vec4 a_pos;\n"
+	"out vec2 v_uv;\n"
+	"void main() {\n"
+	"    v_uv = vec2(a_pos.x * 0.5 + 0.5, 0.5 - a_pos.y * 0.5);\n"
+	"    gl_Position = a_pos;\n"
+	"}\n";
+
+static const char crt_frag_src[] =
+	"#version 300 es\n"
+	"precision mediump float;\n"
+	"in vec2 v_uv;\n"
+	"out vec4 frag_color;\n"
+	"\n"
+	"uniform sampler2D u_screen;\n"
+	"uniform vec4 u_palette[16];\n"
+	"uniform vec2 u_src_size;\n"    /* source texture size (e.g. 640, 200) */
+	"uniform vec2 u_tex_size;\n"    /* allocated texture size (720, 350) */
+	"uniform int u_border_idx;\n"   /* border palette index */
+	"uniform float u_curvature;\n"  /* barrel distortion strength */
+	"\n"
+	"const float OVERSCAN = 0.92;\n"  /* visible area fraction */
+	"\n"
+	"vec2 barrel(vec2 uv, float k) {\n"
+	"    vec2 c = uv - 0.5;\n"
+	"    float r2 = dot(c, c);\n"
+	"    return uv + c * r2 * k;\n"
+	"}\n"
+	"\n"
+	"vec4 fetch(vec2 uv) {\n"
+	"    /* map from display UV to texture UV (handle sub-allocation) */\n"
+	"    vec2 tex_uv = uv * u_src_size / u_tex_size;\n"
+	"    float idx = texture(u_screen, tex_uv).r * 255.0 + 0.5;\n"
+	"    return u_palette[int(idx) & 15];\n"
+	"}\n"
+	"\n"
+	"void main() {\n"
+	"    /* barrel distortion */\n"
+	"    vec2 uv = barrel(v_uv, u_curvature);\n"
+	"\n"
+	"    /* outside the curved screen = black (monitor housing) */\n"
+	"    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {\n"
+	"        frag_color = vec4(0.0, 0.0, 0.0, 1.0);\n"
+	"        return;\n"
+	"    }\n"
+	"\n"
+	"    /* overscan: map the visible area to the center portion */\n"
+	"    vec2 os = (uv - 0.5) / OVERSCAN + 0.5;\n"
+	"\n"
+	"    /* outside active area = border color */\n"
+	"    if (os.x < 0.0 || os.x > 1.0 || os.y < 0.0 || os.y > 1.0) {\n"
+	"        frag_color = u_palette[u_border_idx];\n"
+	"        /* apply vignette to border too */\n"
+	"        vec2 vig = uv * (1.0 - uv);\n"
+	"        frag_color.rgb *= clamp(pow(vig.x * vig.y * 15.0, 0.25), 0.0, 1.0);\n"
+	"        frag_color.a = 1.0;\n"
+	"        return;\n"
+	"    }\n"
+	"\n"
+	"    /* scanline phosphor glow.\n"
+	"     * Each source texel maps to ~2 output pixels vertically (200->400).\n"
+	"     * At the center of a source scanline: sharp, no blur.\n"
+	"     * Between scanlines: blend from neighbors with exponential falloff\n"
+	"     * so the glow tapers quickly — phosphor light, not vaseline. */\n"
+	"    float src_y = os.y * u_src_size.y;\n"
+	"    float texel_h = 1.0 / u_src_size.y;\n"
+	"    float frac_y = fract(src_y);  /* 0=scanline center, 0.5=gap */\n"
+	"    float dist = abs(frac_y - 0.5) * 2.0; /* 1=center, 0=gap */\n"
+	"\n"
+	"    vec4 center = fetch(os);\n"
+	"    /* only blend when away from scanline center */\n"
+	"    float blur_amt = 1.0 - dist * dist; /* quadratic: sharp center */\n"
+	"    vec4 above = fetch(vec2(os.x, clamp(os.y - texel_h, 0.0, 1.0)));\n"
+	"    vec4 below = fetch(vec2(os.x, clamp(os.y + texel_h, 0.0, 1.0)));\n"
+	"    vec4 glow = (above + below) * 0.5;\n"
+	"    vec4 color = mix(center, glow, blur_amt * 0.5);\n"
+	"\n"
+	"    /* scanline darkening: exponential falloff from center */\n"
+	"    float scanline = 0.42 + 0.58 * dist * dist;\n"
+	"    color.rgb *= scanline;\n"
+	"\n"
+	"    /* vignette */\n"
+	"    vec2 vig = uv * (1.0 - uv);\n"
+	"    float v = clamp(pow(vig.x * vig.y * 15.0, 0.25), 0.0, 1.0);\n"
+	"    color.rgb *= v;\n"
+	"\n"
+	"    frag_color = vec4(color.rgb, 1.0);\n"
+	"}\n";
+
+/* fullscreen quad vertices: x, y, z, w */
+static const float crt_quad_verts[] = {
+	-1.0f, -1.0f, 0.0f, 1.0f,
+	 1.0f, -1.0f, 0.0f, 1.0f,
+	 1.0f,  1.0f, 0.0f, 1.0f,
+	-1.0f,  1.0f, 0.0f, 1.0f,
+};
 
 /*
  * Map ludica keycodes to XT scan code set 1 (make codes).
@@ -321,14 +425,31 @@ static void init(void)
 		return;
 	}
 
-	/* create display texture */
+	/* create display texture (single-channel palette indices) */
 	video_get_size(&pc.video, &tex_w, &tex_h);
 	screen_tex = lud_make_texture(&(lud_texture_desc_t){
 		.width = VIDEO_MAX_W,
 		.height = VIDEO_MAX_H,
-		.format = LUD_PIXFMT_RGBA8,
+		.format = LUD_PIXFMT_R8,
 		.min_filter = LUD_FILTER_NEAREST,
 		.mag_filter = LUD_FILTER_NEAREST,
+	});
+
+	/* CRT shader and fullscreen quad */
+	crt_shader = lud_make_shader(&(lud_shader_desc_t){
+		.vert_src = crt_vert_src,
+		.frag_src = crt_frag_src,
+		.attrs = { "a_pos" },
+		.num_attrs = 1,
+	});
+	crt_quad = lud_make_mesh(&(lud_mesh_desc_t){
+		.vertices = crt_quad_verts,
+		.vertex_count = 4,
+		.vertex_stride = 16,
+		.layout = { { .size = 4, .offset = 0 } },
+		.num_attrs = 1,
+		.primitive = LUD_PRIM_TRIANGLE_FAN,
+		.usage = LUD_USAGE_STATIC,
 	});
 
 	pc.debug = debug_flags;
@@ -360,42 +481,70 @@ static void frame(float dt)
 	video_render(&pc.video, &pc);
 	video_get_size(&pc.video, &tex_w, &tex_h);
 
-	/* upload pixels to GPU texture */
+	/* upload palette-indexed pixels to GPU texture */
 	lud_update_texture(screen_tex, 0, 0, tex_w, tex_h, pc.video.pixels);
 
-	/* draw to screen */
+	/* draw to screen via CRT shader */
 	int win_w = lud_width();
 	int win_h = lud_height();
-	lud_viewport(0, 0, win_w, win_h);
-	lud_clear(0.0f, 0.0f, 0.0f, 1.0f);
 
-	/* fit display to window maintaining aspect ratio
-	 * CGA/NTSC displays at 4:3 regardless of pixel dimensions.
-	 * Hercules (MDA) uses pixel aspect from native 720x350.
-	 */
+	/* fit display to window maintaining 4:3 (CGA) or native (Herc) aspect */
 	float src_aspect = pc.video.hercules
 		? (float)tex_w / (float)tex_h
 		: 4.0f / 3.0f;
 	float dst_aspect = (float)win_w / (float)win_h;
-	float dst_w, dst_h, dst_x, dst_y;
+	int vp_x, vp_y, vp_w, vp_h;
 
 	if (src_aspect > dst_aspect) {
-		dst_w = (float)win_w;
-		dst_h = dst_w / src_aspect;
-		dst_x = 0;
-		dst_y = ((float)win_h - dst_h) * 0.5f;
+		vp_w = win_w;
+		vp_h = (int)((float)win_w / src_aspect);
+		vp_x = 0;
+		vp_y = (win_h - vp_h) / 2;
 	} else {
-		dst_h = (float)win_h;
-		dst_w = dst_h * src_aspect;
-		dst_x = ((float)win_w - dst_w) * 0.5f;
-		dst_y = 0;
+		vp_h = win_h;
+		vp_w = (int)((float)win_h * src_aspect);
+		vp_x = (win_w - vp_w) / 2;
+		vp_y = 0;
 	}
 
-	lud_sprite_begin(0, 0, (float)win_w, (float)win_h);
-	lud_sprite_draw(screen_tex,
-		dst_x, dst_y, dst_w, dst_h,
-		0, 0, (float)tex_w, (float)tex_h);
-	lud_sprite_end();
+	lud_viewport(0, 0, win_w, win_h);
+	lud_clear(0.0f, 0.0f, 0.0f, 1.0f);
+	lud_viewport(vp_x, vp_y, vp_w, vp_h);
+
+	/* build palette uniform from RGBA palette table */
+	const uint32_t *pal = pc.video.hercules ? herc_palette : cga_palette;
+	int pal_count = pc.video.hercules ? 2 : 16;
+	float pal_uniform[16 * 4];
+	memset(pal_uniform, 0, sizeof(pal_uniform));
+	for (int i = 0; i < pal_count; i++) {
+		uint32_t c = pal[i];
+		pal_uniform[i * 4 + 0] = (float)((c >>  0) & 0xFF) / 255.0f;
+		pal_uniform[i * 4 + 1] = (float)((c >>  8) & 0xFF) / 255.0f;
+		pal_uniform[i * 4 + 2] = (float)((c >> 16) & 0xFF) / 255.0f;
+		pal_uniform[i * 4 + 3] = 1.0f;
+	}
+
+	lud_apply_shader(crt_shader);
+	lud_bind_texture(screen_tex, 0);
+	lud_uniform_int(crt_shader, "u_screen", 0);
+	lud_uniform_vec2(crt_shader, "u_src_size", (float)tex_w, (float)tex_h);
+	lud_uniform_vec2(crt_shader, "u_tex_size",
+		(float)VIDEO_MAX_W, (float)VIDEO_MAX_H);
+	lud_uniform_int(crt_shader, "u_border_idx",
+		pc.video.hercules ? 0 : pc.video.border_color);
+	lud_uniform_float(crt_shader, "u_curvature",
+		pc.video.hercules ? 0.1f : 0.15f);
+
+	/* upload palette as individual vec4 uniforms */
+	for (int i = 0; i < 16; i++) {
+		char name[16];
+		snprintf(name, sizeof(name), "u_palette[%d]", i);
+		lud_uniform_vec4(crt_shader, name,
+			pal_uniform[i*4+0], pal_uniform[i*4+1],
+			pal_uniform[i*4+2], pal_uniform[i*4+3]);
+	}
+
+	lud_draw(crt_quad);
 
 	/* drain serial output to stderr (debug console) */
 	while (uart_has_output(&pc.com1)) {
@@ -518,6 +667,8 @@ static void cleanup(void)
 		dump_cpu_state();
 	}
 	debugmon_cleanup(&pc.debugmon);
+	lud_destroy_mesh(crt_quad);
+	lud_destroy_shader(crt_shader);
 	lud_destroy_texture(screen_tex);
 	lilpc_cleanup(&pc);
 }
@@ -583,6 +734,7 @@ int main(int argc, char **argv)
 		.app_name = "lilpc",
 		.width = 800,
 		.height = 600,
+		.gles_version = 3,
 		.resizable = 1,
 		.argc = argc,
 		.argv = argv,

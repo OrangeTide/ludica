@@ -10,6 +10,12 @@
 #ifndef GL_SRGB8_ALPHA8
 #define GL_SRGB8_ALPHA8 0x8C43
 #endif
+#ifndef GL_R8
+#define GL_R8          0x8229
+#endif
+#ifndef GL_RED
+#define GL_RED         0x1903
+#endif
 
 #define MAX_TEXTURES 64
 
@@ -49,7 +55,12 @@ format_to_gl(enum lud_pixel_format fmt, GLenum *gl_fmt, GLenum *gl_internal,
 {
 	switch (fmt) {
 	case LUD_PIXFMT_R8:
-		*gl_fmt = GL_LUMINANCE; *gl_internal = GL_LUMINANCE; *bpp = 1;
+		if (lud__state.gles_version >= 3) {
+			*gl_fmt = GL_RED; *gl_internal = GL_R8;
+		} else {
+			*gl_fmt = GL_LUMINANCE; *gl_internal = GL_LUMINANCE;
+		}
+		*bpp = 1;
 		break;
 	case LUD_PIXFMT_RGB8:
 		*gl_fmt = GL_RGB; *gl_internal = GL_RGB; *bpp = 3;
