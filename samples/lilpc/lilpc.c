@@ -8,6 +8,9 @@
 #include <stdio.h>
 #include <signal.h>
 #include <unistd.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
 
 static lilpc_t pc;
 static lud_texture_t screen_tex;
@@ -403,6 +406,29 @@ void lilpc_reset(lilpc_t *lpc)
 	/* re-seed BDA */
 	setup_bda(lpc);
 }
+
+/* ======================================================================== */
+/* JS-callable disk loading (Emscripten)                                    */
+/* ======================================================================== */
+
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+int lilpc_load_disk(int drive, const uint8_t *data, int size)
+{
+	return fdc_load_image_mem(&pc.fdc, drive, (uint8_t *)data, (size_t)size);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void lilpc_eject_disk(int drive)
+{
+	if (drive < 0 || drive >= FDC_MAX_DRIVES)
+		return;
+	free(pc.fdc.drive[drive].data);
+	pc.fdc.drive[drive].data = NULL;
+	pc.fdc.drive[drive].size = 0;
+	pc.fdc.drive[drive].inserted = false;
+}
+#endif
 
 /* ======================================================================== */
 /* ludica frontend                                                          */
