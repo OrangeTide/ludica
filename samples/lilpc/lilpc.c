@@ -285,13 +285,16 @@ static char disk_path[512];
 static bool use_hercules;
 static bool start_trace;
 
-static void parse_args(void);
+static int parse_args(void);
 
 static void init(void)
 {
 	int ram = 640;
 
-	parse_args();
+	if (parse_args() != 0) {
+		lud_quit();
+		return;
+	}
 
 	if (lilpc_init(&pc, ram, use_hercules, bios_path, disk_path) != 0) {
 		fprintf(stderr, "lilpc: init failed\n");
@@ -495,7 +498,19 @@ static void usage(const char *prog)
 	fprintf(stderr, "  -trace         Enable CPU trace at startup\n");
 }
 
-static void
+enum { OPT_BIOS = 'b', OPT_DISK = 'd', OPT_HERC = 'H',
+       OPT_TRACE = 't', OPT_HELP = 'h' };
+
+static const lud_option longopts[] = {
+	{ "bios",  LUD_REQUIRED_ARG, NULL, OPT_BIOS  },
+	{ "disk",  LUD_REQUIRED_ARG, NULL, OPT_DISK  },
+	{ "herc",  LUD_NO_ARG,       NULL, OPT_HERC  },
+	{ "trace", LUD_NO_ARG,       NULL, OPT_TRACE },
+	{ "help",  LUD_NO_ARG,       NULL, OPT_HELP  },
+	{ 0 },
+};
+
+static int
 parse_args(void)
 {
 	int argc = lud_argc();
@@ -505,23 +520,26 @@ parse_args(void)
 	bios_path[0] = 0;
 	disk_path[0] = 0;
 	use_hercules = false;
+	start_trace = false;
 
-	while ((ch = lud_getopt(argc, argv, "b:d:hHt")) != -1) {
+	while ((ch = lud_getopt_long(argc, argv, "b:d:Hth", longopts, NULL)) != -1) {
 		switch (ch) {
-		case 'b': snprintf(bios_path, sizeof(bios_path), "%s", lud_optarg); break;
-		case 'd': snprintf(disk_path, sizeof(disk_path), "%s", lud_optarg); break;
-		case 'H': use_hercules = true; break;
-		case 't': start_trace = true; break;
-		case 'h': usage(argv[0]); lud_quit(); return;
-		default:  usage(argv[0]); lud_quit(); return;
+		case OPT_BIOS:  snprintf(bios_path, sizeof(bios_path), "%s", lud_optarg); break;
+		case OPT_DISK:  snprintf(disk_path, sizeof(disk_path), "%s", lud_optarg); break;
+		case OPT_HERC:  use_hercules = true; break;
+		case OPT_TRACE: start_trace = true; break;
+		case OPT_HELP:  usage(argv[0]); return -1;
+		default:        usage(argv[0]); return -1;
 		}
 	}
 
 	if (!bios_path[0]) {
-		fprintf(stderr, "Error: -b <bios> is required\n");
+		fprintf(stderr, "Error: -bios is required\n");
 		usage(argv[0]);
-		lud_quit();
+		return -1;
 	}
+
+	return 0;
 }
 
 int main(int argc, char **argv)
