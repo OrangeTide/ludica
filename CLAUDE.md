@@ -1,7 +1,7 @@
-# Project: gamedev
+# Project: ludica
 
-A collection of game development experiments built on `ludica`, a lightweight
-cross-platform OpenGL ES 2.0/3.0 rendering framework.
+A lightweight cross-platform OpenGL ES 2.0/3.0 rendering framework for
+game development experiments.
 
 ## Build
 
@@ -21,7 +21,7 @@ Each `module.mk` declares targets via `EXECUTABLES`, `LIBRARIES`, and
 ## Directory Layout
 
 - `src/ludica/` — Core library: platform, shaders, meshes, textures, sprites, fonts
-  - `src/ludica/include/` — Public headers (`ludica.h`, `ludica_gfx.h`, `ludica_input.h`, `ludica_font.h`)
+  - `src/ludica/include/` — Public headers (`ludica.h`, `ludica_gfx.h`, `ludica_input.h`, `ludica_font.h`, `ludica_anim.h`, `ludica_audio.h`, `ludica_auto.h`)
   - `src/ludica/platform_x11.c` — Linux/X11 backend
   - `src/ludica/win32/` — Windows backend
 - `src/thirdparty/` — Header-only deps (stb_image, stb_ds, miniaudio)
@@ -31,10 +31,14 @@ Each `module.mk` declares targets via `EXECUTABLES`, `LIBRARIES`, and
 - `samples/demo01_retrocrt/` — Palette framebuffer + CRT post-processing
 - `samples/demo02_multiscroll/` — Parallax scrolling + sprite batching
 - `samples/demo03_text_dialogs/` — Font rendering + dialog box UI
+- `samples/demo04_sprites/` — Sprite rendering demo
 - `samples/demo05_audio/` — Multi-channel audio mixer demo
+- `samples/lilpc/` — 286 XT PC emulator with CGA display
+- `samples/tridrop/` — Triangle drop demo
 - `samples/ansiview/` — ANSI art viewer
 - `doc/manual/` — Manual (markdown, build with `make` in that directory)
 - `doc/notes/` — R&D notes
+- `doc/game-ideas/` — Game concept notes
 
 ## ludica Quick Reference
 
@@ -62,6 +66,17 @@ receives input events (key, mouse, gamepad, resize, focus).
 - Fonts: `lud_make_default_font()`, `lud_draw_text()`
 - Framebuffer: `lud_make_framebuffer()`, palette + lock/unlock + blit
 - Loading: `lud_draw_progress()` — progress bar with swap, for use during init
+
+### Audio API (`ludica_audio.h`)
+
+- `lud_audio_init()`, `lud_audio_shutdown()`
+- `lud_audio_play()`, `lud_audio_stop()`, `lud_audio_set_master()`
+- Capture: `lud_audio_capture_start()`, `lud_audio_capture_stop()`
+
+### Animation API (`ludica_anim.h`)
+
+- `lud_anim_init()`, `lud_anim_play()`, `lud_anim_update()`
+- `lud_anim_frame()`, `lud_anim_finished()`
 
 ### GLES Version Architecture
 
