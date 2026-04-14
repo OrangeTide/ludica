@@ -56,6 +56,29 @@ Cross compile for Windows:
 make CONFIG=configs/mingw32_config.mk
 ```
 
+### WebAssembly (Emscripten)
+
+Build any sample for the browser:
+
+```sh
+make <target> CC=emcc CXX=em++ AR=emar          # debug
+make <target> CC=emcc CXX=em++ AR=emar RELEASE=1 # optimized
+```
+
+Output goes to `_out/wasm32-unknown-emscripten/bin/<target>.html`
+(with `.js`, `.wasm`, and `.data` sidecar files).
+
+Serve the output directory over HTTP and open the `.html` file:
+
+```sh
+cd _out/wasm32-unknown-emscripten/bin
+python3 -m http.server 8000
+# open http://localhost:8000/tridrop.html
+```
+
+Samples that load assets (textures, fonts) use `--preload-file` in their
+`module.mk` to bundle assets into the `.data` file automatically.
+
 ### Linux dependencies
 
 Ubuntu / Debian:
