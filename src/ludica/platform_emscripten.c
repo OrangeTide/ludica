@@ -166,6 +166,31 @@ translate_mouse_modifiers(const EmscriptenMouseEvent *e)
 }
 
 /****************************************************************
+ * Audio unlock — resume suspended AudioContexts on first gesture
+ ****************************************************************/
+
+static int audio_unlocked;
+
+static void
+try_unlock_audio(void)
+{
+	if (audio_unlocked)
+		return;
+	audio_unlocked = 1;
+	EM_ASM({
+		if (typeof miniaudio !== 'undefined' && miniaudio.devices) {
+			for (var i = 0; i < miniaudio.devices.length; ++i) {
+				var d = miniaudio.devices[i];
+				if (d != null && d.webaudio != null &&
+				    d.webaudio.state === 'suspended') {
+					d.webaudio.resume();
+				}
+			}
+		}
+	});
+}
+
+/****************************************************************
  * HTML5 event callbacks
  ****************************************************************/
 
@@ -205,6 +230,8 @@ on_key_down(int type, const EmscriptenKeyboardEvent *e, void *ud)
 {
 	(void)type;
 	(void)ud;
+
+	try_unlock_audio();
 
 	enum lud_keycode kc = translate_code(e->code);
 	lud_event_t ev;
@@ -292,6 +319,8 @@ on_mouse_down(int type, const EmscriptenMouseEvent *e, void *ud)
 {
 	(void)type;
 	(void)ud;
+
+	try_unlock_audio();
 
 	lud_event_t ev;
 	memset(&ev, 0, sizeof(ev));
