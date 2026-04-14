@@ -1,6 +1,7 @@
 #!/bin/sh
 # bump-version.sh — update VERSION, commit, and tag.
-# Usage: ./scripts/bump-version.sh [YYYY.MM.DD]
+# Usage: ./scripts/bump-version.sh [YY.MM.patch]
+# CalVer style version with Year, month, and patch number.
 # Omit the argument to use today's date.
 
 set -e
