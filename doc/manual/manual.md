@@ -237,6 +237,150 @@ Actions do not require an `event` callback — they work entirely through
 polling. This makes it straightforward to eliminate event-driven input
 handling in favor of a pure poll-based frame loop.
 
+### Fonts
+
+Ludica provides bitmap fonts rendered through the sprite batch system.
+A built-in 8x8 font is available with no file loading:
+
+```c
+lud_font_t font = lud_make_default_font();
+```
+
+Custom fonts can be created from a texture atlas where glyphs are arranged
+in a grid:
+
+```c
+lud_font_t font = lud_make_font(atlas_tex,
+    chars_wide,    /* columns in the atlas */
+    glyph_w, glyph_h,  /* cell size in pixels */
+    first_char);   /* ASCII code of first glyph (typically 32) */
+```
+
+All text drawing must occur between `lud_sprite_begin()` / `lud_sprite_end()`:
+
+```c
+lud_sprite_begin(0, 0, screen_w, screen_h);
+lud_draw_text(font, x, y, scale, "Hello");
+lud_draw_text_centered(font, center_x, y, scale, "Centered");
+lud_draw_text_wrapped(font, x, y, scale, max_width, line_spacing,
+                      "Long text that wraps...");
+lud_sprite_end();
+```
+
+`lud_text_width()` measures text width in pixels without drawing, useful
+for layout calculations.
+
+### Animation
+
+Frame-based sprite animation player for flipbook-style sprite sheets:
+
+```c
+lud_anim_t anim;
+lud_anim_init(&anim, 0, 5, 8.0f, 1);  /* frames 0-5, 8 FPS, looping */
+```
+
+Each frame, advance the timer and read the current frame index:
+
+```c
+lud_anim_update(&anim, dt);
+int frame = lud_anim_frame(&anim);
+/* Use frame index to compute spritesheet source rect */
+int src_x = (frame % cols) * cell_w;
+int src_y = (frame / cols) * cell_h;
+```
+
+To switch animations without resetting if the parameters match (useful in
+a state machine where the same animation may be requested each frame):
+
+```c
+/* Returns 1 if the animation changed, 0 if already playing this one */
+lud_anim_play(&anim, 0, 3, 12.0f, 1);
+```
+
+For one-shot animations (e.g., death, attack), set looping to 0 and check
+completion:
+
+```c
+lud_anim_init(&anim, 0, 7, 10.0f, 0);  /* one-shot */
+/* ... later ... */
+if (lud_anim_finished(&anim)) {
+    /* animation complete, transition to next state */
+}
+```
+
+### Audio
+
+Ludica includes a 16-channel PCM audio mixer with support for PCM16,
+PCM8, and IMA ADPCM sample formats. It uses miniaudio for the platform
+audio device.
+
+Initialize the audio system (typically in `init()`):
+
+```c
+lud_audio_init();
+```
+
+Play a sample on a channel (0-15):
+
+```c
+static int16_t samples[44100];  /* 1 second at 44100 Hz */
+
+lud_audio_play(0, &(lud_audio_desc_t){
+    .data = samples,
+    .length = 44100,
+    .volume_l = 255,
+    .volume_r = 255,
+    .pitch = 256,       /* 8.8 fixed-point: 256 = normal speed */
+    .format = LUD_AUDIO_PCM16,
+});
+```
+
+Pitch is 8.8 fixed-point: 256 = normal speed, 512 = double speed, 128 =
+half speed. Volume is 0-255 per channel.
+
+Looping samples specify a loop region:
+
+```c
+lud_audio_play(1, &(lud_audio_desc_t){
+    .data = music_data,
+    .length = total_frames,
+    .loop_start = intro_end,
+    .loop_length = loop_frames,  /* non-zero enables looping */
+    .volume_l = 200, .volume_r = 200,
+    .pitch = 256,
+    .format = LUD_AUDIO_PCM16,
+});
+```
+
+Other operations:
+
+```c
+lud_audio_stop(0);                  /* stop channel 0 */
+lud_audio_set_master(128, 128);     /* half master volume */
+lud_audio_shutdown();               /* shut down (in cleanup) */
+```
+
+#### Audio Capture
+
+The mixer output can be captured to a WAV file:
+
+```c
+lud_audio_capture_start();
+/* ... play audio, advance frames ... */
+lud_audio_capture_stop("output.wav");  /* writes 44100 Hz stereo WAV */
+```
+
+This is also available via the automation command `CAPAUDIO START` /
+`CAPAUDIO STOP`.
+
+#### Sample Formats
+
+| Format | Description |
+|--------|-------------|
+| `LUD_AUDIO_PCM16` | Signed 16-bit, native endian |
+| `LUD_AUDIO_PCM8` | Signed 8-bit (expanded to 16-bit internally) |
+| `LUD_AUDIO_ADPCM` | IMA ADPCM, 4-bit, high nibble first |
+
 ### Fullscreen
 
 Toggle fullscreen mode at runtime:
@@ -291,6 +435,73 @@ Each call paints a frame to the screen, so the user sees the bar
 advance between heavy operations.  No threads, no callbacks — the
 application decides what work runs at each step.
 
+# Automation
+
+Ludica includes a TCP automation server and an MCP bridge for AI agent
+integration and scripted testing. See `doc/manual/automation.md` for the
+full protocol reference and MCP tool documentation.
+
+## Quick Start
+
+Launch any ludica game with automation enabled:
+
+```sh
+_out/x86_64-linux-gnu/bin/hero --auto-port 4000 --paused --fixed-dt
+```
+
+| Flag | Description |
+|------|-------------|
+| `--auto-port PORT` | Enable TCP automation on PORT |
+| `--auto-file FILE` | Replay commands from a text file |
+| `--capture-dir DIR` | Output directory for captures |
+| `--paused` | Start frozen, wait for STEP commands |
+| `--fixed-dt` | Constant 1/60s timestep for determinism |
+
+## Making Games Automation-Friendly
+
+Register named actions so agents can discover inputs semantically:
+
+```c
+lud_action_t a_jump = lud_make_action("jump");
+lud_bind_key(LUD_KEY_SPACE, a_jump);
+```
+
+Register state variables so agents can query game state:
+
+```c
+static int score, level;
+static const char *scene = "intro";
+
+lud_auto_register_int("score", &score);
+lud_auto_register_int("level", &level);
+lud_auto_register_str("scene", &scene);
+```
+
+Variables must remain valid until shutdown. They are read via the
+`QUERY VAR <name>` command or the MCP `query` tool.
+
+## MCP Server
+
+The `ludica-mcp` tool bridges MCP JSON-RPC (stdio) to the TCP protocol:
+
+```sh
+ludica-mcp [--port PORT]
+```
+
+It is built by `make` and output to `_out/<triplet>/bin/ludica-mcp`.
+Configure it in Claude Code via `.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "ludica": {
+      "command": "_out/x86_64-linux-gnu/bin/ludica-mcp",
+      "args": ["--port", "4000"]
+    }
+  }
+}
+```
+
 # Hero: Portal Rendering Engine
 
 The `hero` program implements a portal-based 3D rendering engine.
@@ -344,3 +555,4 @@ multi-texture rendering within a single sector.
 - **stb_image** — Single-header image loading library
 - **Dear ImGui** — Immediate-mode GUI library
 - **miniaudio** — Single-header audio playback/capture library
+- **jsmn** — Minimal header-only JSON parser (used by ludica-mcp)
