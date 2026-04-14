@@ -6,13 +6,14 @@
  * Applications read config with lud_get_config().
  */
 
-#include "include/ludica.h"
+#include "ludica_internal.h"
 #include <stdlib.h>
 #include <string.h>
 
 typedef struct {
 	char *key;
 	char *value;
+	int argv_index;	/* >0 = index into argv this came from, 0 = not from argv */
 } config_entry_t;
 
 #define CONFIG_MAX 256
@@ -26,8 +27,11 @@ lud_get_config(const char *key)
 	int i;
 
 	for (i = 0; i < count; i++) {
-		if (strcmp(store[i].key, key) == 0)
+		if (strcmp(store[i].key, key) == 0) {
+			if (store[i].argv_index > 0)
+				lud__args_mark_read(store[i].argv_index);
 			return store[i].value;
+		}
 	}
 
 	return NULL;
@@ -35,6 +39,12 @@ lud_get_config(const char *key)
 
 int
 lud_set_config(const char *key, const char *value)
+{
+	return lud__set_config_source(key, value, 0);
+}
+
+int
+lud__set_config_source(const char *key, const char *value, int argv_index)
 {
 	int i;
 	char *vdup;
@@ -50,6 +60,8 @@ lud_set_config(const char *key, const char *value)
 				return -1;
 			free(store[i].value);
 			store[i].value = vdup;
+			if (argv_index > 0)
+				store[i].argv_index = argv_index;
 			return 0;
 		}
 	}
@@ -65,6 +77,7 @@ lud_set_config(const char *key, const char *value)
 		free(store[count].value);
 		return -1;
 	}
+	store[count].argv_index = argv_index;
 	count++;
 
 	return 0;

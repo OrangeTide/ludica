@@ -73,6 +73,7 @@ em_frame(void)
 		emscripten_cancel_main_loop();
 		if (lud__state.desc.cleanup)
 			lud__state.desc.cleanup();
+		lud__args_warn_unused();
 		lud__platform_shutdown();
 		lud__config_cleanup();
 		EM_ASM({
@@ -140,6 +141,7 @@ lud_run(const lud_desc_t *desc)
 		lud__state.desc.cleanup();
 	}
 	lud__auto_shutdown();
+	lud__args_warn_unused();
 	lud__action_reset();
 	lud__platform_shutdown();
 	lud__config_cleanup();

@@ -43,8 +43,11 @@ void lud__input_update(const lud_event_t *ev);
 
 /* args.c */
 void lud__parse_args(lud_desc_t *desc);
+void lud__args_mark_read(int index);
+void lud__args_warn_unused(void);
 
 /* config.c */
+int  lud__set_config_source(const char *key, const char *value, int argv_index);
 void lud__config_cleanup(void);
 
 /* action.c */
