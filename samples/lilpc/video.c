@@ -431,10 +431,57 @@ static void herc_write(lilpc_t *pc, uint16_t port, uint8_t val)
 	}
 }
 
+/*
+ * CGA snow: the original IBM CGA uses single-ported DRAM shared between
+ * the CPU and the MC6845 CRTC.  When the CPU accesses VRAM during active
+ * display (not during retrace), the CRTC's address lines are momentarily
+ * corrupted, causing it to fetch the wrong character/attribute pair for
+ * one cell.  The result is a brief flash of garbage — "snow."
+ *
+ * We detect these conflicting accesses via the bus write hook and mark
+ * which character cell was hit.  During rendering, snowed cells read
+ * from a nearby wrong address, simulating the address bus corruption.
+ */
+static void cga_snow_hook(void *ctx, uint32_t addr, uint8_t val)
+{
+	(void)val;
+	video_t *vid = ctx;
+
+	/* snow only affects CGA, not Hercules */
+	if (vid->hercules)
+		return;
+
+	/* compute current scanline from CPU cycle count */
+	uint64_t cycles = *vid->cpu_cycles_ptr;
+	int frame_cycles = 382 * 262;
+	int pos = (int)(cycles % (uint64_t)frame_cycles);
+	int scanline = pos / 382;
+
+	/* snow only during active display (scanlines 0-199) */
+	if (scanline >= 200)
+		return;
+
+	/* also skip if in horizontal retrace portion of the line */
+	int hpos = pos % 382;
+	if (hpos > 320)
+		return;
+
+	/* map VRAM address to character cell index.
+	 * CGA text: each cell is 2 bytes (char + attr) at B8000-BBFFF.
+	 * The CRTC reads character cells sequentially, so the cell index
+	 * is simply the byte offset divided by 2. */
+	uint16_t vram_offset = (addr - CGA_VRAM_BASE) & 0x3FFF;
+	int cell = vram_offset / 2;
+	if (cell < 80 * 25)
+		vid->snow[cell] = 1;
+}
+
 void video_init(video_t *vid, lilpc_t *pc, bool hercules)
 {
 	memset(vid, 0, sizeof(*vid));
 	vid->hercules = hercules;
+	vid->snow_seed = 12345;
+	vid->cpu_cycles_ptr = &pc->cpu.cycles;
 
 	if (hercules) {
 		/* MDA/Hercules CRTC defaults (720x350 text) */
@@ -457,7 +504,24 @@ void video_init(video_t *vid, lilpc_t *pc, bool hercules)
 		vid->render_h = 200;
 		vid->mode_ctrl = 0x29; /* 80-col text, enable display */
 		bus_register_io(&pc->bus, 0x3D0, 16, cga_read, cga_write);
+
+		/* install snow detection hook on CGA VRAM range */
+		pc->bus.write_hook = cga_snow_hook;
+		pc->bus.write_hook_ctx = vid;
+		pc->bus.write_hook_base = CGA_VRAM_BASE;
+		pc->bus.write_hook_end = CGA_VRAM_BASE + CGA_VRAM_SIZE;
 	}
+}
+
+/* xorshift16 PRNG for snow corruption */
+static uint16_t snow_rand(uint16_t *state)
+{
+	uint16_t x = *state;
+	x ^= x << 7;
+	x ^= x >> 9;
+	x ^= x << 8;
+	*state = x;
+	return x;
 }
 
 /*
@@ -488,6 +552,17 @@ static void render_cga_text(video_t *vid, bus_t *bus)
 			uint32_t addr = CGA_VRAM_BASE + offset;
 			uint8_t ch = bus_read8(bus, addr);
 			uint8_t attr = bus_read8(bus, addr + 1);
+
+			/* CGA snow: if this cell was written during active
+			 * display, the CRTC fetches from a corrupted address.
+			 * Simulate by reading from a random nearby offset. */
+			int cell = row * cols + col;
+			if (cell < 80 * 25 && vid->snow[cell]) {
+				uint16_t r = snow_rand(&vid->snow_seed);
+				uint16_t snow_off = (offset + (r & 0xFE)) & 0x3FFF;
+				ch = bus_read8(bus, CGA_VRAM_BASE + snow_off);
+				attr = bus_read8(bus, CGA_VRAM_BASE + snow_off + 1);
+			}
 
 			uint8_t fg = attr & 0x0F;
 			uint8_t bg = (attr >> 4) & 0x0F;
@@ -742,6 +817,8 @@ void video_render(video_t *vid, lilpc_t *pc)
 		 */
 		vid->border_color = vid->color_sel & 0x0F;
 
+		/* consume snow bitmap — render will use it, then clear */
+
 		if (!(vid->mode_ctrl & 0x08)) {
 			/* display disabled - black screen */
 			vid->render_w = 640;
@@ -759,6 +836,9 @@ void video_render(video_t *vid, lilpc_t *pc)
 		} else {
 			render_cga_text(vid, &pc->bus);
 		}
+
+		/* clear snow bitmap for next frame */
+		memset(vid->snow, 0, sizeof(vid->snow));
 	}
 }
 

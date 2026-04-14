@@ -53,6 +53,13 @@ typedef struct video {
 	int scanline;		/* current scanline for status register */
 	uint64_t last_tick;
 
+	/* CGA snow emulation: bitmap of character cells corrupted by CPU
+	 * writes to VRAM during active display.  Each byte is non-zero if
+	 * the cell was touched.  Cleared at start of each render. */
+	uint8_t snow[80 * 25];
+	uint64_t *cpu_cycles_ptr;	/* points to cpu.cycles for timing */
+	uint16_t snow_seed;		/* PRNG state for snow corruption */
+
 	/* pixel render buffer (palette indices for CGA, RGBA for Hercules) */
 	uint8_t pixels[VIDEO_MAX_W * VIDEO_MAX_H];
 	int render_w, render_h;

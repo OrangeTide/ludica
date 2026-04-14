@@ -21,6 +21,9 @@ typedef struct {
 	io_write_fn write;
 } io_handler_t;
 
+/* Optional callback invoked on memory writes to a watched region */
+typedef void (*bus_write_hook_fn)(void *ctx, uint32_t addr, uint8_t val);
+
 typedef struct bus {
 	uint8_t *ram;		/* main RAM */
 	size_t ram_size;	/* in bytes, up to 1MB for XT */
@@ -32,6 +35,12 @@ typedef struct bus {
 	/* I/O port handlers */
 	io_handler_t io[IO_MAX_HANDLERS];
 	int io_count;
+
+	/* memory write hook (for CGA snow, etc.) */
+	bus_write_hook_fn write_hook;
+	void *write_hook_ctx;
+	uint32_t write_hook_base;	/* start of watched range */
+	uint32_t write_hook_end;	/* end of watched range (exclusive) */
 } bus_t;
 
 int bus_init(bus_t *bus, size_t ram_kb);

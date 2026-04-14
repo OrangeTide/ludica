@@ -111,6 +111,10 @@ void bus_write8(bus_t *bus, uint32_t addr, uint8_t val)
 		return;
 
 	bus->ram[addr] = val;
+
+	if (bus->write_hook &&
+	    addr >= bus->write_hook_base && addr < bus->write_hook_end)
+		bus->write_hook(bus->write_hook_ctx, addr, val);
 }
 
 void bus_write16(bus_t *bus, uint32_t addr, uint16_t val)
