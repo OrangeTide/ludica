@@ -24,6 +24,7 @@ Usage:
 - [ ] Ethernet IPX networking over virtual IPX switch server that people can share.
   - [ ] easy model, use UDP-based daemon at a known location that bridges IPX tunnels together like (RFC 1234](https://datatracker.ietf.org/doc/html/rfc1234)
 - [ ] Covox Speech Thing / Disney Sound Source. with DSS being a bit less finicky but fixed and very limited sample rate. Covox could theoretically offer a very high sampling rate, but in practice it tended to be a CPU hog
+
 ## Research Items
 
 - [ ] can we use option ROM to hold emulator specific hardware and extensions?
