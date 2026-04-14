@@ -574,6 +574,20 @@ void cpu286_interrupt(lilpc_t *pc, int num)
 	uint16_t off = bus_read16(&pc->bus, num * 4);
 	uint16_t seg = bus_read16(&pc->bus, num * 4 + 2);
 
+	if (num == 0) {
+		static int div_trace = 0;
+		if (div_trace < 3) {
+			uint32_t addr = cpu->seg[SEG_CS].base + cpu->ip;
+			fprintf(stderr, "TRACE: DIV exception at %04X:%04X AX=%04X DX=%04X CX=%04X BX=%04X bytes:",
+				cpu->seg[SEG_CS].sel, cpu->ip,
+				cpu->ax, cpu->dx, cpu->cx, cpu->bx);
+			for (int i = -4; i < 8; i++)
+				fprintf(stderr, " %02X", bus_read8(&pc->bus, addr + i));
+			fprintf(stderr, "\n");
+		}
+		div_trace++;
+	}
+
 	push16(pc, cpu->flags | FLAGS_ALWAYS_ON);
 	push16(pc, cpu->seg[SEG_CS].sel);
 	push16(pc, cpu->ip);
@@ -819,11 +833,20 @@ static int handle_0f(lilpc_t *pc)
 	case 0x06: /* CLTS */
 		cpu->msw &= ~MSW_TS;
 		return 2;
-	default:
-		fprintf(stderr, "lilpc: unknown 0F %02Xh at %04X:%04X\n",
-			op2, cpu->seg[SEG_CS].sel, cpu->ip - 2);
-		break;
+	case 0x18: case 0x19: case 0x1A: case 0x1B:
+	case 0x1C: case 0x1D: case 0x1E: case 0x1F:
+		/* PREFETCH/NOP — hint instructions, consume ModR/M and ignore */
+		decode_modrm(pc);
+		return 3;
+	default: {
+		static int of_count = 0;
+		if (of_count < 5)
+			fprintf(stderr, "lilpc: unknown 0F %02Xh at %04X:%04X\n",
+				op2, cpu->seg[SEG_CS].sel, cpu->ip - 2);
+		of_count++;
+		return 3;
 	}
+	} /* switch */
 	return 3;
 }
 
@@ -1379,8 +1402,7 @@ int cpu286_step(lilpc_t *pc)
 		cycles += 3;
 		break;
 	case 0x9D: /* POPF */
-		cpu->flags = pop16(pc) | FLAGS_ALWAYS_ON;
-		/* 286: mask off bits 15-12 in real mode? Actually keep IOPL/NT */
+		cpu->flags = (pop16(pc) & 0x0FFF) | FLAGS_ALWAYS_ON;
 		cycles += 5;
 		break;
 
@@ -1800,7 +1822,7 @@ int cpu286_step(lilpc_t *pc)
 		cpu->ip = pop16(pc);
 		cpu->seg[SEG_CS].sel = pop16(pc);
 		cpu->seg[SEG_CS].base = (uint32_t)cpu->seg[SEG_CS].sel << 4;
-		cpu->flags = pop16(pc) | FLAGS_ALWAYS_ON;
+		cpu->flags = (pop16(pc) & 0x0FFF) | FLAGS_ALWAYS_ON;
 		cycles += 17;
 		break;
 
@@ -2278,24 +2300,29 @@ int cpu286_step(lilpc_t *pc)
 			cycles += 15;
 			break;
 		}
-		case 6: { /* PUSH r/m16 */
+		case 6: /* PUSH r/m16 */
+		case 7: /* undocumented alias for PUSH (used by 8086 DOS) */
 			push16(pc, read_rm16(pc, &m));
 			cycles += m.is_mem ? 5 : 3;
-			break;
-		}
-		default:
-			fprintf(stderr, "lilpc: bad FF /%d at %04X:%04X\n",
-				m.reg, cpu->seg[SEG_CS].sel, cpu->ip);
 			break;
 		}
 		break;
 	}
 
-	default:
-		fprintf(stderr, "lilpc: unknown opcode %02Xh at %04X:%04X\n",
-			op, cpu->seg[SEG_CS].sel, cpu->ip - 1);
+	default: {
+		static int ud_count = 0;
+		if (ud_count < 3) {
+			uint32_t addr = cpu->seg[SEG_CS].base + cpu->ip - 1;
+			fprintf(stderr, "lilpc: unknown opcode %02Xh at %04X:%04X bytes:",
+				op, cpu->seg[SEG_CS].sel, cpu->ip - 1);
+			for (int i = 0; i < 16; i++)
+				fprintf(stderr, " %02X", bus_read8(&pc->bus, addr + i));
+			fprintf(stderr, "\n");
+		}
+		ud_count++;
 		cycles += 1;
 		break;
+	}
 
 	case_0x80: { /* aliased from 0x82 */
 		modrm_t m = decode_modrm(pc);

@@ -72,6 +72,9 @@ typedef struct cpu286 {
 	/* prefix state (reset each instruction) */
 	int seg_override;	/* SEG_NONE or SEG_ES/CS/SS/DS */
 	int rep_mode;		/* 0=none, 1=REP/REPZ, 2=REPNZ */
+
+	/* debug: previous instruction location */
+	uint16_t prev_cs, prev_ip;
 } cpu286_t;
 
 /* MSW bits */

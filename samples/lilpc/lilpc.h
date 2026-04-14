@@ -11,6 +11,7 @@
 #include "serial.h"
 #include "parallel.h"
 #include "speaker.h"
+#include "debugmon.h"
 
 /* 286 XT clock speed: 6 MHz (some XTs ran 8 MHz turbo) */
 #define LILPC_CLOCK_HZ		6000000
@@ -42,6 +43,7 @@ typedef struct lilpc {
 	/* debug */
 	bool trace;		/* log instructions to stderr */
 	uint64_t total_cycles;
+	debugmon_t debugmon;	/* TCP debug monitor */
 } lilpc_t;
 
 int lilpc_init(lilpc_t *pc, int ram_kb, bool hercules,

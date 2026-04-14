@@ -16,6 +16,8 @@
  *   3F7h: Digital Input Register (DIR) / Data Rate Select (AT only)
  */
 
+#define FDC_DEBUG 0
+
 /* FDC command bytes (bits 4:0) */
 #define FDC_CMD_READ_DATA	0x06
 #define FDC_CMD_READ_DELETED	0x0C
@@ -139,12 +141,19 @@ static void fdc_write(lilpc_t *pc, uint16_t port, uint8_t val)
 			/* coming out of reset */
 			fdc->phase = FDC_PHASE_IDLE;
 			fdc->msr = 0x80; /* RQM */
+			fdc->st[0] = 0xC0; /* polling status (reset) */
 			fdc->irq_pending = true;
+#if FDC_DEBUG
+			fprintf(stderr, "FDC: reset release DOR=%02X\n", val);
+#endif
 			if (val & 0x08) /* DMA enable? */
 				pic_raise_irq(&pc->pic, 6);
 		}
 		if (!(val & 0x04)) {
 			/* entering reset */
+#if FDC_DEBUG
+			fprintf(stderr, "FDC: entering reset DOR=%02X\n", val);
+#endif
 			fdc->phase = FDC_PHASE_IDLE;
 			fdc->msr = 0x00;
 		}
@@ -199,6 +208,25 @@ static void fdc_start_command(fdc_t *fdc, lilpc_t *pc)
 {
 	int cmd = fdc->cmd_buf[0] & 0x1F;
 
+#if FDC_DEBUG
+	{
+		static const char *cmd_names[] = {
+			[0x02] = "READ_TRACK", [0x03] = "SPECIFY",
+			[0x04] = "SENSE_DRIVE", [0x05] = "WRITE_DATA",
+			[0x06] = "READ_DATA", [0x07] = "RECALIBRATE",
+			[0x08] = "SENSE_INT", [0x09] = "WRITE_DEL",
+			[0x0C] = "READ_DEL", [0x0D] = "FORMAT_TRACK",
+			[0x0F] = "SEEK",
+		};
+		const char *name = (cmd < 0x10 && cmd_names[cmd]) ?
+			cmd_names[cmd] : "???";
+		fprintf(stderr, "FDC: cmd %02X (%s)", cmd, name);
+		for (int i = 1; i < fdc->cmd_len; i++)
+			fprintf(stderr, " %02X", fdc->cmd_buf[i]);
+		fprintf(stderr, "\n");
+	}
+#endif
+
 	switch (cmd) {
 	case FDC_CMD_SENSE_INT:
 	{
@@ -211,6 +239,10 @@ static void fdc_start_command(fdc_t *fdc, lilpc_t *pc)
 		fdc->msr = 0xD0; /* RQM + DIO + CB */
 		fdc->irq_pending = false;
 		pic_lower_irq(&pc->pic, 6);
+#if FDC_DEBUG
+		fprintf(stderr, "FDC: SENSE_INT -> ST0=%02X cyl=%d\n",
+			fdc->result_buf[0], fdc->result_buf[1]);
+#endif
 		break;
 	}
 
@@ -268,8 +300,13 @@ static void fdc_start_command(fdc_t *fdc, lilpc_t *pc)
 		int cyl     = fdc->cmd_buf[2];
 		int sector  = fdc->cmd_buf[4];
 		int eot     = fdc->cmd_buf[6]; /* end of track */
+		int end_sector = sector; /* updated after DMA transfer */
 
 		fdc_drive_t *drv = &fdc->drive[drv_num];
+#if FDC_DEBUG
+		fprintf(stderr, "FDC: READ drv=%d C=%d H=%d S=%d EOT=%d inserted=%d\n",
+			drv_num, cyl, head, sector, eot, drv->inserted);
+#endif
 		if (!drv->inserted) {
 			fdc->st[0] = 0x48 | drv_num; /* abnormal, not ready */
 			fdc->st[1] = 0x01; /* missing address mark */
@@ -277,25 +314,42 @@ static void fdc_start_command(fdc_t *fdc, lilpc_t *pc)
 			goto read_result;
 		}
 
-		/* read sectors from disk image */
+		/* read sectors from disk image.
+		 * Real NEC 765 always reads at least the starting sector,
+		 * then continues until EOT. EOT only limits continuation,
+		 * not the initial read. */
 		fdc->dma_len = 0;
-		for (int s = sector; s <= eot; s++) {
+		for (int s = sector; ; s++) {
 			long offset = chs_to_offset(drv, cyl, head, s);
 			if (offset < 0 || offset + FDC_SECTOR_SIZE > (long)drv->size)
 				break;
 			memcpy(fdc->dma_buf + fdc->dma_len, drv->data + offset,
 				FDC_SECTOR_SIZE);
 			fdc->dma_len += FDC_SECTOR_SIZE;
+			if (s >= eot)
+				break;
 		}
 
-		/* transfer via DMA */
+		/* transfer via DMA - on real hardware, DMA's terminal count
+		 * (TC) signal tells the FDC to stop reading. We emulate this
+		 * by checking how many bytes dma_transfer() actually moved. */
+		int xfer = 0;
 		if (fdc->dma_mode && fdc->dma_len > 0) {
-			dma_transfer(&pc->dma, pc, 2, fdc->dma_buf, fdc->dma_len, true);
+			xfer = dma_transfer(&pc->dma, pc, 2, fdc->dma_buf,
+				fdc->dma_len, true);
 		}
+
+		/* compute ending sector from actual bytes transferred */
+		end_sector = sector +
+			(xfer + FDC_SECTOR_SIZE - 1) / FDC_SECTOR_SIZE;
 
 		fdc->st[0] = 0x00 | drv_num | (head << 2);
 		fdc->st[1] = 0x00;
 		fdc->st[2] = 0x00;
+#if FDC_DEBUG
+		fprintf(stderr, "FDC: READ result ST0=%02X xfer=%d/%d end_sec=%d\n",
+			fdc->st[0], xfer, fdc->dma_len, end_sector);
+#endif
 
 read_result:
 		/* set up result phase (7 bytes) */
@@ -304,7 +358,7 @@ read_result:
 		fdc->result_buf[2] = fdc->st[2];
 		fdc->result_buf[3] = cyl;
 		fdc->result_buf[4] = head;
-		fdc->result_buf[5] = eot + 1; /* next sector */
+		fdc->result_buf[5] = end_sector; /* next sector after last transferred */
 		fdc->result_buf[6] = 2; /* sector size code (512) */
 		fdc->result_len = 7;
 		fdc->result_pos = 0;
@@ -323,6 +377,7 @@ read_result:
 		int cyl     = fdc->cmd_buf[2];
 		int sector  = fdc->cmd_buf[4];
 		int eot     = fdc->cmd_buf[6];
+		int end_sector = sector;
 
 		fdc_drive_t *drv = &fdc->drive[drv_num];
 		if (!drv->inserted || drv->write_protect) {
@@ -334,16 +389,20 @@ read_result:
 			int total = (eot - sector + 1) * FDC_SECTOR_SIZE;
 			if (fdc->dma_mode && total > 0) {
 				memset(fdc->dma_buf, 0, total);
-				dma_transfer(&pc->dma, pc, 2, fdc->dma_buf, total, false);
+				int xfer = dma_transfer(&pc->dma, pc, 2,
+					fdc->dma_buf, total, false);
+				int nsec = xfer / FDC_SECTOR_SIZE;
 
-				for (int s = sector; s <= eot; s++) {
-					long offset = chs_to_offset(drv, cyl, head, s);
+				for (int s = 0; s < nsec; s++) {
+					long offset = chs_to_offset(drv, cyl, head,
+						sector + s);
 					if (offset >= 0 && offset + FDC_SECTOR_SIZE <= (long)drv->size) {
 						memcpy(drv->data + offset,
-							fdc->dma_buf + (s - sector) * FDC_SECTOR_SIZE,
+							fdc->dma_buf + s * FDC_SECTOR_SIZE,
 							FDC_SECTOR_SIZE);
 					}
 				}
+				end_sector = sector + nsec;
 			}
 			fdc->st[0] = 0x00 | drv_num | (head << 2);
 			fdc->st[1] = 0x00;
@@ -355,7 +414,7 @@ read_result:
 		fdc->result_buf[2] = fdc->st[2];
 		fdc->result_buf[3] = cyl;
 		fdc->result_buf[4] = head;
-		fdc->result_buf[5] = eot + 1;
+		fdc->result_buf[5] = end_sector;
 		fdc->result_buf[6] = 2;
 		fdc->result_len = 7;
 		fdc->result_pos = 0;

@@ -2,6 +2,7 @@
 #include "chipset.h"
 #include "lilpc.h"
 #include <string.h>
+#include <stdio.h>
 
 /* ========================================================================
  * 8259A PIC - Programmable Interrupt Controller
@@ -319,27 +320,22 @@ static bool pit_tick_channel(pit_channel_t *ch)
 		break;
 
 	case 2: /* rate generator */
-		if (ch->count > 1) {
-			ch->count--;
-		} else {
-			ch->count = ch->reload ? ch->reload : 0;
-			/* output goes low for one tick */
-			ch->out = false;
-		}
-		if (ch->count != 1)
+		ch->count--;
+		if (ch->count == 1) {
+			ch->out = false; /* output goes low for one tick */
+		} else if (ch->count == 0) {
+			ch->count = ch->reload; /* reload 0 = 65536, wraps naturally */
 			ch->out = true;
+		}
 		break;
 
 	case 3: /* square wave */
-	{
-		uint16_t reload = ch->reload ? ch->reload : 0;
 		ch->count -= 2;
-		if ((int16_t)ch->count <= 0) {
+		if (ch->count == 0) {
 			ch->out = !ch->out;
-			ch->count = reload;
+			ch->count = ch->reload; /* reload 0 = 65536, wraps naturally */
 		}
 		break;
-	}
 
 	case 1: /* one-shot */
 	case 4: /* software strobe */
@@ -440,9 +436,21 @@ static uint8_t dma_read(lilpc_t *pc, uint16_t port)
 	return 0xFF;
 }
 
+#ifndef DMA_DEBUG
+#define DMA_DEBUG 0
+#endif
+
 static void dma_write(lilpc_t *pc, uint16_t port, uint8_t val)
 {
 	dma_t *dma = &pc->dma;
+
+#if DMA_DEBUG
+	/* trace writes affecting channel 2 */
+	if (port == 0x04 || port == 0x05 || port == 0x0A ||
+	    port == 0x0B || port == 0x0C || port == 0x0D || port == 0x0E)
+		fprintf(stderr, "DMA: write port=%02X val=%02X ff=%d\n",
+			port, val, dma->flipflop);
+#endif
 
 	switch (port) {
 	case 0x00: case 0x02: case 0x04: case 0x06:
@@ -547,6 +555,14 @@ int dma_transfer(dma_t *dma, lilpc_t *pc, int channel,
 	uint8_t *buf, int count, bool to_memory)
 {
 	dma_channel_t *ch = &dma->ch[channel];
+#if DMA_DEBUG
+	if (channel == 2) {
+		fprintf(stderr, "DMA2: transfer req=%d to_mem=%d masked=%d "
+			"addr=%04X count=%04X page=%02X\n",
+			count, to_memory, ch->masked,
+			ch->curr_addr, ch->curr_count, ch->page);
+	}
+#endif
 	if (ch->masked)
 		return 0;
 
@@ -576,6 +592,10 @@ int dma_transfer(dma_t *dma, lilpc_t *pc, int channel,
 	if (ch->curr_count == 0xFFFF) {
 		/* terminal count reached */
 		dma->status |= (1 << channel);
+#if DMA_DEBUG
+		if (channel == 2)
+			fprintf(stderr, "DMA2: terminal count, mode=%02X\n", ch->mode);
+#endif
 
 		/* auto-init: reload base values */
 		if (ch->mode & 0x10) {
@@ -586,5 +606,10 @@ int dma_transfer(dma_t *dma, lilpc_t *pc, int channel,
 		}
 	}
 
+#if DMA_DEBUG
+	if (channel == 2)
+		fprintf(stderr, "DMA2: transferred=%d masked=%d\n",
+			transferred, ch->masked);
+#endif
 	return transferred;
 }

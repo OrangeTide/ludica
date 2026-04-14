@@ -229,6 +229,7 @@ void lilpc_cleanup(lilpc_t *lpc)
 
 void lilpc_run_frame(lilpc_t *lpc)
 {
+	debugmon_t *dm = &lpc->debugmon;
 	uint64_t frame_cycles = LILPC_CYCLES_PER_FRAME;
 	uint64_t start = lpc->cpu.cycles;
 
@@ -253,9 +254,26 @@ void lilpc_run_frame(lilpc_t *lpc)
 			continue;
 		}
 
+		/* check breakpoints before executing */
+		if (dm->bp_count > 0 &&
+		    debugmon_check_bp(dm, lpc->cpu.seg[SEG_CS].sel, lpc->cpu.ip)) {
+			dm->paused = true;
+			dm->step_one = false;
+			dm_notify_break(dm, lpc);
+			break;
+		}
+
 		/* execute one instruction */
 		int cycles = cpu286_step(lpc);
 		(void)cycles;
+
+		/* single-step: pause after one instruction */
+		if (dm->step_one) {
+			dm->paused = true;
+			dm->step_one = false;
+			dm_notify_step(dm, lpc);
+			break;
+		}
 
 		/* tick PIT periodically (every ~100 CPU cycles to avoid overhead) */
 		if ((lpc->cpu.cycles & 0x3F) == 0) {
@@ -284,6 +302,7 @@ static char bios_path[512];
 static char disk_path[512];
 static bool use_hercules;
 static bool start_trace;
+static int debug_port;
 
 static int parse_args(void);
 
@@ -314,6 +333,14 @@ static void init(void)
 
 	pc.trace = start_trace;
 
+	if (debug_port > 0) {
+		if (debugmon_init(&pc.debugmon, debug_port) != 0) {
+			fprintf(stderr, "lilpc: failed to start debug monitor\n");
+			lud_quit();
+			return;
+		}
+	}
+
 	fprintf(stderr, "lilpc: 286 XT emulator started (%d KB RAM, %s)\n",
 		ram, use_hercules ? "Hercules" : "CGA");
 }
@@ -322,8 +349,12 @@ static void frame(float dt)
 {
 	(void)dt;
 
+	/* poll debug monitor for commands */
+	bool should_run = debugmon_poll(&pc.debugmon, &pc);
+
 	/* run one frame of CPU execution */
-	lilpc_run_frame(&pc);
+	if (should_run)
+		lilpc_run_frame(&pc);
 
 	/* render video to pixel buffer */
 	video_render(&pc.video, &pc);
@@ -485,6 +516,7 @@ static void cleanup(void)
 {
 	dump_textbuf();
 	dump_cpu_state();
+	debugmon_cleanup(&pc.debugmon);
 	lud_destroy_texture(screen_tex);
 	lilpc_cleanup(&pc);
 }
@@ -492,10 +524,11 @@ static void cleanup(void)
 static void usage(const char *prog)
 {
 	fprintf(stderr, "Usage: %s --bios=<rom> [--disk=<image>] [--herc]\n", prog);
-	fprintf(stderr, "  --bios=<path>  BIOS ROM file (required)\n");
-	fprintf(stderr, "  --disk=<path>  Floppy disk image\n");
-	fprintf(stderr, "  --herc         Use Hercules display (default: CGA)\n");
-	fprintf(stderr, "  --trace        Enable CPU trace at startup\n");
+	fprintf(stderr, "  --bios=<path>       BIOS ROM file (required)\n");
+	fprintf(stderr, "  --disk=<path>       Floppy disk image\n");
+	fprintf(stderr, "  --herc              Use Hercules display (default: CGA)\n");
+	fprintf(stderr, "  --trace             Enable CPU trace at startup\n");
+	fprintf(stderr, "  --debug-port=<port> TCP debug monitor port\n");
 }
 
 static int
@@ -507,6 +540,7 @@ parse_args(void)
 	disk_path[0] = 0;
 	use_hercules = false;
 	start_trace = false;
+	debug_port = 0;
 
 	if ((val = lud_get_config("bios")))
 		snprintf(bios_path, sizeof(bios_path), "%s", val);
@@ -516,6 +550,8 @@ parse_args(void)
 		use_hercules = true;
 	if (lud_get_config("trace"))
 		start_trace = true;
+	if ((val = lud_get_config("debug-port")))
+		debug_port = atoi(val);
 	if (lud_get_config("help")) {
 		usage(lud_get_config("_program"));
 		return -1;

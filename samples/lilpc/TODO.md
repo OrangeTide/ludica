@@ -29,7 +29,7 @@ Usage:
 - [ ] can we use option ROM to hold emulator specific hardware and extensions?
   - [ ] mouse driver
   - [ ] cd-rom driver MSCDEX
-  - [ ] host file system driver (appears like a cd-rom driver or networked file system). mounted on boot or perhaps with `NET USE` type utility?
+  - [ ] host file system driver (appears like a cd-rom driver or networked file system). mounted on boot or perhaps with `NET USE` type utility? there are simple programs that host remote files systems such as [rifs2](https://github.com/virtualxt/rifs2)
 - [ ] network card. pick one of these that is period correct, few HW bugs, and very easy to emulate. 3c503, NE1000, NE2000, AMD LANCE, are places we can start. NE1000 came out in 1987. At that time a 286 AT would have still been a mid-range PC option, with the 286 XT falling behind AT clones due to a similar price with less compatibility and performance.
   - [ ] then we can try out mTCP on our system. https://www.brutman.com/mTCP/mTCP.htm -- we should pick a network card it supports.
 
