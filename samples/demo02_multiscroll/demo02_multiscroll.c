@@ -103,13 +103,13 @@ tilemap_init(void)
 static void
 init(void)
 {
-	bg[0] = lud_load_texture("src/demo02_multiscroll/assets/background_layer_1.png",
+	bg[0] = lud_load_texture("samples/demo02_multiscroll/assets/background_layer_1.png",
 	                            LUD_FILTER_NEAREST, LUD_FILTER_NEAREST);
-	bg[1] = lud_load_texture("src/demo02_multiscroll/assets/background_layer_2.png",
+	bg[1] = lud_load_texture("samples/demo02_multiscroll/assets/background_layer_2.png",
 	                            LUD_FILTER_NEAREST, LUD_FILTER_NEAREST);
-	bg[2] = lud_load_texture("src/demo02_multiscroll/assets/background_layer_3.png",
+	bg[2] = lud_load_texture("samples/demo02_multiscroll/assets/background_layer_3.png",
 	                            LUD_FILTER_NEAREST, LUD_FILTER_NEAREST);
-	tileset = lud_load_texture("src/demo02_multiscroll/assets/oak_woods_tileset.png",
+	tileset = lud_load_texture("samples/demo02_multiscroll/assets/oak_woods_tileset.png",
 	                              LUD_FILTER_NEAREST, LUD_FILTER_NEAREST);
 
 	tilemap_init();
@@ -235,13 +235,15 @@ cleanup(void)
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
 	return lud_run(&(lud_desc_t){
 		.app_name = "demo02 — parallax multiscroll",
 		.width = 960,
 		.height = 540,
 		.resizable = 1,
+		.argc = argc,
+		.argv = (const char *const *)argv,
 		.init = init,
 		.frame = frame,
 		.cleanup = cleanup,
