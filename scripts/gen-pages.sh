@@ -48,6 +48,12 @@ if [ -d "assets" ]; then
 	cp -r assets "$OUTDIR/"
 fi
 
+# --- Copy lilpc disk images (fetched over HTTP, not bundled in .data) ---
+if [ -d "samples/lilpc/disk" ]; then
+	mkdir -p "$OUTDIR/disk"
+	cp samples/lilpc/disk/*.json samples/lilpc/disk/*.img "$OUTDIR/disk/" 2>/dev/null || true
+fi
+
 # --- Build manual if pandoc is available ---
 if command -v pandoc >/dev/null 2>&1 && [ -f doc/manual/manual.md ]; then
 	make -C doc/manual
@@ -248,7 +254,7 @@ done
 # --- Footer ---
 cat >> "$OUTDIR/index.html" << 'HTMLFOOT'
 <footer>
-<a href="https://github.com/OrangeTide/gamedev">ludica on GitHub</a>
+<a href="https://github.com/OrangeTide/ludica">ludica on GitHub</a>
 &mdash; 0BSD License
 </footer>
 </body>
