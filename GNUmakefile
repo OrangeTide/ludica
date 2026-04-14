@@ -393,7 +393,8 @@ ifdef RELEASE
   ifneq ($(findstring emscripten,$(TARGET_TRIPLET)),)
     # Emscripten does not support -march or -Wl,--gc-sections; its own
     # optimizer handles dead-code elimination internally.
-    _BUILD_MODE_CFLAGS  := -O2 $(_LTO)
+    # -Os balances size and speed; the browser JIT compensates.
+    _BUILD_MODE_CFLAGS  := -Os $(_LTO)
     _BUILD_MODE_CPPFLAGS := -DNDEBUG
     _BUILD_MODE_LDFLAGS := $(_LTO)
   else
@@ -486,13 +487,13 @@ ifdef TARGET_TRIPLET
   # wasm32-unknown-emscripten), so fall back to findstring on the full
   # triplet when the word-2 check does not match a known OS.
   _triplet_os := $(word 2,$(_triplet_fields))
-  _TARGET_OS := $(if $(findstring emscripten,$(TARGET_TRIPLET)),Emscripten,\
+  _TARGET_OS := $(strip $(if $(findstring emscripten,$(TARGET_TRIPLET)),Emscripten,\
                 $(if $(filter linux,$(_triplet_os)),Linux,\
                 $(if $(filter apple,$(_triplet_os)),Darwin,\
                 $(if $(filter w64 pc,$(_triplet_os)),$(if $(findstring mingw,$(TARGET_TRIPLET)),Windows_NT,\
                 $(if $(findstring cygwin,$(TARGET_TRIPLET)),Windows_NT,\
                 $(_triplet_os))),\
-                $(_triplet_os)))))
+                $(_triplet_os))))))
 else
   _TARGET_OS   := $(shell uname -s)
   _TARGET_ARCH := $(shell uname -m)
