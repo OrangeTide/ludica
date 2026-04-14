@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ludica": {
+      "command": "_out/x86_64-linux-gnu/bin/ludica-mcp",
+      "args": ["--port", "4000"]
+    }
+  }
+}

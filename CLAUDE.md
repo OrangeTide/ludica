@@ -107,3 +107,25 @@ Polled: `lud_key_down()`, `lud_mouse_pos()`, `lud_mouse_button_down()`,
    myapp_LIBS = ludica
    ```
 3. Add `myapp` to `SUBDIRS` in `samples/module.mk`
+
+## Automation & MCP
+
+Ludica games can be observed and controlled by AI agents via a TCP
+automation server and an MCP bridge. Launch any game with:
+
+```sh
+_out/x86_64-linux-gnu/bin/hero --auto-port 4000 --paused --fixed-dt
+```
+
+The `ludica-mcp` tool (built by `make`) bridges MCP JSON-RPC on stdio to
+the TCP protocol. It is pre-configured in `.claude/settings.json`.
+Use the `/ludica-mcp` skill for detailed tool usage and workflow guidance.
+See `doc/manual/automation.md` for the full protocol reference.
+
+To make a game automation-friendly, register actions and state variables:
+
+```c
+lud_action_t a = lud_make_action("jump");
+lud_bind_key(a, LUD_KEY_SPACE);
+lud_auto_register_int("score", &score);
+```
