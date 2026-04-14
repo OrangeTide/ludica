@@ -1,4 +1,4 @@
-# modular-make -- A modular GNUmakefile for C, C++, D, Fortran, Objective-C, Objective-C++, Pascal, Modula-2, and Assembly projects [v1.3.0]
+# modular-make -- A modular GNUmakefile for C, C++, D, Fortran, Objective-C, Objective-C++, Pascal, Modula-2, and Assembly projects [v1.3.1]
 # updated: 13 Apr 2026
 # Requires GNU Make 4.0 or later (uses $(file) function).
 #
@@ -355,6 +355,10 @@ NASM    ?= nasm
 FPC     ?= fpc
 GM2     ?= gm2
 
+# Detect the compiler's target triplet early so platform guards in the
+# RELEASE block and module.mk files can reference it.
+TARGET_TRIPLET := $(shell $(CC) -dumpmachine 2>/dev/null)
+
 # Release build flags.  Invoke with `make RELEASE=1` for optimized binaries.
 #
 # Override architecture: `make RELEASE=1 RELEASE_MARCH=x86-64-v3`
@@ -469,8 +473,6 @@ explode_dirs = $(sort $(filter-out .,$(if $1,$(call explode_dirs,$(filter-out $1
 # Object files go under _build/<triplet>/ so cross-compiles don't clobber
 # each other.  Binaries and libraries go under _out/<triplet>/bin and
 # _out/<triplet>/lib respectively.
-
-TARGET_TRIPLET := $(shell $(CC) -dumpmachine 2>/dev/null)
 
 # Derive target OS and arch from the compiler's triplet so that
 # platform-specific variable suffixes (e.g. _SRCS.aarch64) resolve
