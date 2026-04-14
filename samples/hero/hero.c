@@ -836,7 +836,7 @@ main(int argc, char **argv)
 		.resizable = 1,
 		.gles_version = 3,
 		.argc = argc,
-		.argv = (const char *const *)argv,
+		.argv = argv,
 		.init = init,
 		.frame = frame,
 		.cleanup = cleanup,

@@ -250,7 +250,7 @@ main(int argc, char **argv)
 		.height = 540,
 		.resizable = 1,
 		.argc = argc,
-		.argv = (const char *const *)argv,
+		.argv = argv,
 		.init = init,
 		.frame = frame,
 		.cleanup = cleanup,

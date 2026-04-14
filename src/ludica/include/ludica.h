@@ -5,6 +5,7 @@
 #include "ludica_anim.h"
 #include "ludica_audio.h"
 #include "ludica_auto.h"
+#include "lud_getopt.h"
 
 #ifndef LUD_VERSION
 #define LUD_VERSION "unknown"
@@ -36,9 +37,12 @@ typedef struct lud_desc {
 	int gles_version;       /* 2 or 3; 0 defaults to 2 */
 
 	/* Command-line arguments (optional).
-	 * Set argc/argv to enable --flag parsing in lud_run(). */
+	 * Set argc/argv to enable --flag parsing in lud_run().
+	 * Ludica strips its own flags (--auto-port, --paused, etc.)
+	 * from argv before calling init. Use lud_getopt() in your
+	 * init callback to parse the remaining application flags. */
 	int argc;
-	const char *const *argv;
+	char **argv;
 } lud_desc_t;
 
 /* Entry point. Owns the main loop. Returns exit code.
@@ -53,6 +57,8 @@ int    lud_height(void);
 double lud_time(void);        /* seconds since init */
 float  lud_frame_time(void);  /* dt of last frame */
 int    lud_gles_version(void); /* 2 or 3 */
+int    lud_argc(void);         /* remaining argc after ludica flag stripping */
+char **lud_argv(void);         /* remaining argv after ludica flag stripping */
 
 /* Fullscreen */
 void lud_set_fullscreen(int fullscreen); /* 0 = windowed, non-zero = fullscreen */

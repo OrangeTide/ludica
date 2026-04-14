@@ -285,9 +285,13 @@ static char disk_path[512];
 static bool use_hercules;
 static bool start_trace;
 
+static void parse_args(void);
+
 static void init(void)
 {
 	int ram = 640;
+
+	parse_args();
 
 	if (lilpc_init(&pc, ram, use_hercules, bios_path, disk_path) != 0) {
 		fprintf(stderr, "lilpc: init failed\n");
@@ -491,45 +495,37 @@ static void usage(const char *prog)
 	fprintf(stderr, "  -trace         Enable CPU trace at startup\n");
 }
 
-int main(int argc, char **argv)
+static void
+parse_args(void)
 {
-	bool got_bios = false;
+	int argc = lud_argc();
+	char **argv = lud_argv();
+	int ch;
 
 	bios_path[0] = 0;
 	disk_path[0] = 0;
 	use_hercules = false;
 
-	for (int i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "-bios") == 0 && i + 1 < argc) {
-			snprintf(bios_path, sizeof(bios_path), "%s", argv[++i]);
-			got_bios = true;
-		} else if (strcmp(argv[i], "-disk") == 0 && i + 1 < argc) {
-			snprintf(disk_path, sizeof(disk_path), "%s", argv[++i]);
-		} else if (strcmp(argv[i], "-herc") == 0) {
-			use_hercules = true;
-		} else if (strcmp(argv[i], "-trace") == 0) {
-			start_trace = true;
-		} else if (strcmp(argv[i], "-h") == 0 ||
-			   strcmp(argv[i], "--help") == 0) {
-			usage(argv[0]);
-			return 0;
-		} else if (strncmp(argv[i], "--", 2) == 0) {
-			/* skip ludica flags (e.g. --auto-port) */
-			if (i + 1 < argc && argv[i + 1][0] != '-')
-				i++; /* skip value */
-		} else {
-			fprintf(stderr, "Unknown option: %s\n", argv[i]);
-			usage(argv[0]);
-			return 1;
+	while ((ch = lud_getopt(argc, argv, "b:d:hHt")) != -1) {
+		switch (ch) {
+		case 'b': snprintf(bios_path, sizeof(bios_path), "%s", lud_optarg); break;
+		case 'd': snprintf(disk_path, sizeof(disk_path), "%s", lud_optarg); break;
+		case 'H': use_hercules = true; break;
+		case 't': start_trace = true; break;
+		case 'h': usage(argv[0]); lud_quit(); return;
+		default:  usage(argv[0]); lud_quit(); return;
 		}
 	}
 
-	if (!got_bios) {
-		fprintf(stderr, "Error: -bios is required\n");
+	if (!bios_path[0]) {
+		fprintf(stderr, "Error: -b <bios> is required\n");
 		usage(argv[0]);
-		return 1;
+		lud_quit();
 	}
+}
 
+int main(int argc, char **argv)
+{
 	signal(SIGTERM, signal_handler);
 	signal(SIGHUP, signal_handler);
 
@@ -539,7 +535,7 @@ int main(int argc, char **argv)
 		.height = 600,
 		.resizable = 1,
 		.argc = argc,
-		.argv = (const char *const *)argv,
+		.argv = argv,
 		.init = init,
 		.frame = frame,
 		.cleanup = cleanup,

@@ -193,3 +193,15 @@ lud_is_fullscreen(void)
 {
 	return lud__state.is_fullscreen;
 }
+
+int
+lud_argc(void)
+{
+	return lud__state.desc.argc;
+}
+
+char **
+lud_argv(void)
+{
+	return lud__state.desc.argv;
+}

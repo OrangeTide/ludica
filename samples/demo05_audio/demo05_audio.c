@@ -338,7 +338,7 @@ main(int argc, char **argv)
         .width    = 800,
         .height   = 600,
         .argc     = argc,
-        .argv     = (const char *const *)argv,
+        .argv     = argv,
         .init     = init,
         .frame    = frame,
         .cleanup  = cleanup,
