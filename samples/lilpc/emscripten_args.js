@@ -1,1 +1,1 @@
-Module['arguments'] = ['--bios=bios/pcxtbios.bin', '--disk=disk/demodisk.img'];
+Module['arguments'] = ['--bios=bios/pcxtbios.bin', '--fda=disk/demodisk.img'];

@@ -256,7 +256,7 @@ static void setup_bda(lilpc_t *pc)
 }
 
 int lilpc_init(lilpc_t *lpc, int ram_kb, bool hercules,
-	const char *bios_path, const char *disk_path)
+	const char *bios_path, const char *fda_path, const char *fdb_path)
 {
 	memset(lpc, 0, sizeof(*lpc));
 	lpc->ram_kb = ram_kb;
@@ -293,7 +293,9 @@ int lilpc_init(lilpc_t *lpc, int ram_kb, bool hercules,
 		/*   00=reserved, 01=CGA 40-col, 10=CGA 80-col, 11=MDA */
 		/* high bank bits 2-3 → equip bits 6-7: floppy drives - 1 */
 		uint8_t video_sw = hercules ? 0x03 : 0x02; /* MDA or CGA 80-col */
-		uint8_t floppy_sw = 0x00; /* 1 floppy drive (0 = count-1) */
+		/* floppy count - 1 in DIP switch */
+		bool has_fdb = fdb_path && fdb_path[0];
+		uint8_t floppy_sw = has_fdb ? 0x01 : 0x00;
 		lpc->kbd.dip_sw_hi = (floppy_sw << 2) | video_sw;
 	}
 
@@ -309,10 +311,14 @@ int lilpc_init(lilpc_t *lpc, int ram_kb, bool hercules,
 		return -1;
 	}
 
-	/* load floppy disk image if provided */
-	if (disk_path && disk_path[0]) {
-		if (fdc_load_image(&lpc->fdc, 0, disk_path) != 0)
-			fprintf(stderr, "lilpc: warning: could not load disk image\n");
+	/* load floppy disk images if provided */
+	if (fda_path && fda_path[0]) {
+		if (fdc_load_image(&lpc->fdc, 0, fda_path) != 0)
+			fprintf(stderr, "lilpc: warning: could not load drive A image\n");
+	}
+	if (fdb_path && fdb_path[0]) {
+		if (fdc_load_image(&lpc->fdc, 1, fdb_path) != 0)
+			fprintf(stderr, "lilpc: warning: could not load drive B image\n");
 	}
 
 	/* seed BIOS data area */
@@ -403,7 +409,8 @@ void lilpc_reset(lilpc_t *lpc)
 /* ======================================================================== */
 
 static char bios_path[512];
-static char disk_path[512];
+static char fda_path[512];
+static char fdb_path[512];
 static bool use_hercules;
 static uint64_t debug_flags;
 static int debug_port;
@@ -419,7 +426,7 @@ static void init(void)
 		return;
 	}
 
-	if (lilpc_init(&pc, ram, use_hercules, bios_path, disk_path) != 0) {
+	if (lilpc_init(&pc, ram, use_hercules, bios_path, fda_path, fdb_path) != 0) {
 		fprintf(stderr, "lilpc: init failed\n");
 		lud_quit();
 		return;
@@ -675,9 +682,10 @@ static void cleanup(void)
 
 static void usage(const char *prog)
 {
-	fprintf(stderr, "Usage: %s --bios=<rom> [--disk=<image>] [--herc]\n", prog);
+	fprintf(stderr, "Usage: %s --bios=<rom> [--fda=<image>] [--fdb=<image>] [--herc]\n", prog);
 	fprintf(stderr, "  --bios=<path>       BIOS ROM file (required)\n");
-	fprintf(stderr, "  --disk=<path>       Floppy disk image\n");
+	fprintf(stderr, "  --fda=<path>        Floppy drive A image\n");
+	fprintf(stderr, "  --fdb=<path>        Floppy drive B image\n");
 	fprintf(stderr, "  --herc              Use Hercules display (default: CGA)\n");
 	fprintf(stderr, "  --debug=<flags>     Enable debug output (or set LILPC_DEBUG env)\n");
 	fprintf(stderr, "        a=CPU b=FDC c=DMA d=PIC e=PIT f=exit-dump\n");
@@ -690,15 +698,18 @@ parse_args(void)
 	const char *val;
 
 	bios_path[0] = 0;
-	disk_path[0] = 0;
+	fda_path[0] = 0;
+	fdb_path[0] = 0;
 	use_hercules = false;
 	debug_flags = 0;
 	debug_port = 0;
 
 	if ((val = lud_get_config("bios")))
 		snprintf(bios_path, sizeof(bios_path), "%s", val);
-	if ((val = lud_get_config("disk")))
-		snprintf(disk_path, sizeof(disk_path), "%s", val);
+	if ((val = lud_get_config("fda")))
+		snprintf(fda_path, sizeof(fda_path), "%s", val);
+	if ((val = lud_get_config("fdb")))
+		snprintf(fdb_path, sizeof(fdb_path), "%s", val);
 	if (lud_get_config("herc"))
 		use_hercules = true;
 	if ((val = lud_get_config("debug")))

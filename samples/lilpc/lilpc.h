@@ -48,7 +48,7 @@ typedef struct lilpc {
 } lilpc_t;
 
 int lilpc_init(lilpc_t *pc, int ram_kb, bool hercules,
-	const char *bios_path, const char *disk_path);
+	const char *bios_path, const char *fda_path, const char *fdb_path);
 void lilpc_cleanup(lilpc_t *pc);
 void lilpc_run_frame(lilpc_t *pc);	/* run one frame worth of cycles */
 void lilpc_reset(lilpc_t *pc);
