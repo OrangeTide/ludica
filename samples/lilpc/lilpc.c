@@ -232,7 +232,7 @@ static void setup_bda(lilpc_t *pc)
 	 * Bits 4-5: initial video mode (10 = 80-col color)
 	 * Bits 6-7: number of floppy drives - 1 (00 = 1 drive)
 	 */
-	uint16_t equip = 0x0001; /* 1 floppy, no 8087 */
+	uint16_t equip = 0x0041; /* 2 floppies, no 8087 */
 	if (pc->video.hercules)
 		equip |= 0x0030; /* 30h = MDA 80-col */
 	else
@@ -296,9 +296,9 @@ int lilpc_init(lilpc_t *lpc, int ram_kb, bool hercules,
 		/*   00=reserved, 01=CGA 40-col, 10=CGA 80-col, 11=MDA */
 		/* high bank bits 2-3 → equip bits 6-7: floppy drives - 1 */
 		uint8_t video_sw = hercules ? 0x03 : 0x02; /* MDA or CGA 80-col */
-		/* floppy count - 1 in DIP switch */
-		bool has_fdb = fdb_path && fdb_path[0];
-		uint8_t floppy_sw = has_fdb ? 0x01 : 0x00;
+		/* floppy count - 1 in DIP switch: always report 2 drives so
+		 * a second floppy can be hot-inserted (e.g. web UI). */
+		uint8_t floppy_sw = 0x01;
 		lpc->kbd.dip_sw_hi = (floppy_sw << 2) | video_sw;
 	}
 
