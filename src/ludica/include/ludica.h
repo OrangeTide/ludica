@@ -5,7 +5,6 @@
 #include "ludica_anim.h"
 #include "ludica_audio.h"
 #include "ludica_auto.h"
-#include "lud_getopt.h"
 
 #ifndef LUD_VERSION
 #define LUD_VERSION "unknown"
@@ -36,11 +35,9 @@ typedef struct lud_desc {
 	int resizable;          /* non-zero = allow resize */
 	int gles_version;       /* 2 or 3; 0 defaults to 2 */
 
-	/* Command-line arguments (optional).
-	 * Set argc/argv to enable --flag parsing in lud_run().
-	 * Ludica strips its own flags (--auto-port, --paused, etc.)
-	 * from argv before calling init. Use lud_getopt() in your
-	 * init callback to parse the remaining application flags. */
+	/* Command-line arguments (desktop only, ignored on WASM).
+	 * Set argc/argv so lud_run() can populate the config store.
+	 * Use lud_get_config() in callbacks to read options. */
 	int argc;
 	char **argv;
 } lud_desc_t;
@@ -57,8 +54,14 @@ int    lud_height(void);
 double lud_time(void);        /* seconds since init */
 float  lud_frame_time(void);  /* dt of last frame */
 int    lud_gles_version(void); /* 2 or 3 */
-int    lud_argc(void);         /* remaining argc after ludica flag stripping */
-char **lud_argv(void);         /* remaining argv after ludica flag stripping */
+
+/* Configuration store (platform-agnostic, works on desktop and WASM).
+ * On desktop, populated from argv by lud_run().
+ * On WASM, populated from JavaScript via lud_set_config() before init.
+ * lud_get_config() returns the value string, or NULL if key not set.
+ * Boolean flags (--key with no =value) are stored as "" (empty, non-NULL). */
+const char *lud_get_config(const char *key);
+int         lud_set_config(const char *key, const char *value);
 
 /* Fullscreen */
 void lud_set_fullscreen(int fullscreen); /* 0 = windowed, non-zero = fullscreen */

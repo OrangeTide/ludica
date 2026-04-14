@@ -72,6 +72,7 @@ em_frame(void)
 		if (lud__state.desc.cleanup)
 			lud__state.desc.cleanup();
 		lud__platform_shutdown();
+		lud__config_cleanup();
 		return;
 	}
 	frame_tick();
@@ -129,6 +130,7 @@ lud_run(const lud_desc_t *desc)
 	lud__auto_shutdown();
 	lud__action_reset();
 	lud__platform_shutdown();
+	lud__config_cleanup();
 #endif
 
 	return 0;
@@ -194,14 +196,3 @@ lud_is_fullscreen(void)
 	return lud__state.is_fullscreen;
 }
 
-int
-lud_argc(void)
-{
-	return lud__state.desc.argc;
-}
-
-char **
-lud_argv(void)
-{
-	return lud__state.desc.argv;
-}

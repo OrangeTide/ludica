@@ -44,6 +44,9 @@ void lud__input_update(const lud_event_t *ev);
 /* args.c */
 void lud__parse_args(lud_desc_t *desc);
 
+/* config.c */
+void lud__config_cleanup(void);
+
 /* action.c */
 void lud__action_update(void);  /* call once per frame before frame callback */
 void lud__action_reset(void);   /* call on shutdown */

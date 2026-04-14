@@ -1,54 +1,40 @@
 /*
- * args.c — Command-line argument parsing for ludica.
+ * args.c — Parse argc/argv into the config store.
  *
- * Scans argc/argv from lud_desc_t for ludica's own --flags, applies
- * them, and removes them from argv (via memmove) so the application
- * only sees its own arguments. Apps can then use lud_getopt() on the
- * remaining argv.
+ * Scans all arguments into the key-value config store so both ludica
+ * and the application can read them with lud_get_config().
+ *
+ * Convention:
+ *   --key=value  or  -key=value   →  ("key", "value")
+ *   --key        or  -key         →  ("key", "")
+ *   --                            →  stop scanning
+ *   anything else                 →  skip
  */
 
 #include "ludica_internal.h"
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
-/* Table of known --long-option flags.
- * has_arg: 0 = no argument, 1 = requires next argv as argument */
-static const struct {
-	const char *name;
-	int has_arg;
-} known_flags[] = {
-	{ "--auto-port",   1 },
-	{ "--auto-file",   1 },
-	{ "--capture-dir", 1 },
-	{ "--width",       1 },
-	{ "--height",      1 },
-	{ "--paused",      0 },
-	{ "--fixed-dt",    0 },
-	{ "--fullscreen",  0 },
-};
-
-#define NFLAGS (sizeof(known_flags) / sizeof(known_flags[0]))
-
-/* Apply a recognized flag. Called with the flag name and its argument
- * (NULL if the flag takes no argument). */
 static void
-apply_flag(lud_desc_t *desc, const char *flag, const char *arg)
+apply_ludica_config(lud_desc_t *desc)
 {
-	if (strcmp(flag, "--auto-port") == 0)
-		lud__state.auto_port = atoi(arg);
-	else if (strcmp(flag, "--auto-file") == 0)
-		lud__state.auto_file = arg;
-	else if (strcmp(flag, "--capture-dir") == 0)
-		lud__state.capture_dir = arg;
-	else if (strcmp(flag, "--width") == 0)
-		desc->width = atoi(arg);
-	else if (strcmp(flag, "--height") == 0)
-		desc->height = atoi(arg);
-	else if (strcmp(flag, "--paused") == 0)
+	const char *val;
+
+	if ((val = lud_get_config("auto-port")))
+		lud__state.auto_port = atoi(val);
+	if ((val = lud_get_config("auto-file")))
+		lud__state.auto_file = val;
+	if ((val = lud_get_config("capture-dir")))
+		lud__state.capture_dir = val;
+	if ((val = lud_get_config("width")))
+		desc->width = atoi(val);
+	if ((val = lud_get_config("height")))
+		desc->height = atoi(val);
+	if (lud_get_config("paused"))
 		lud__state.paused = 1;
-	else if (strcmp(flag, "--fixed-dt") == 0)
+	if (lud_get_config("fixed-dt"))
 		lud__state.fixed_dt = 1;
-	else if (strcmp(flag, "--fullscreen") == 0)
+	if (lud_get_config("fullscreen"))
 		desc->fullscreen = 1;
 }
 
@@ -57,55 +43,45 @@ lud__parse_args(lud_desc_t *desc)
 {
 	int argc = desc->argc;
 	char **argv = desc->argv;
-	int i, j, k;
+	int i;
 
 	if (argc <= 0 || !argv)
 		return;
 
-	i = 1; /* skip argv[0] (program name) */
-	while (i < argc) {
+	/* store program name so apps can use it for usage messages */
+	lud_set_config("_program", argv[0]);
+
+	for (i = 1; i < argc; i++) {
 		const char *arg = argv[i];
+		const char *key, *eq;
+		char keybuf[256];
+		size_t keylen;
 
-		if (!arg || arg[0] != '-' || arg[1] != '-') {
-			i++;
+		if (!arg || arg[0] != '-')
 			continue;
+
+		/* "--" stops option scanning */
+		if (arg[1] == '-' && arg[2] == '\0')
+			break;
+
+		/* skip leading dashes */
+		key = arg + 1;
+		if (*key == '-')
+			key++;
+
+		/* split at '=' if present */
+		eq = strchr(key, '=');
+		if (eq) {
+			keylen = (size_t)(eq - key);
+			if (keylen >= sizeof(keybuf))
+				keylen = sizeof(keybuf) - 1;
+			memcpy(keybuf, key, keylen);
+			keybuf[keylen] = '\0';
+			lud_set_config(keybuf, eq + 1);
+		} else {
+			lud_set_config(key, "");
 		}
-
-		/* look up in known flags table */
-		for (k = 0; k < (int)NFLAGS; k++) {
-			if (strcmp(arg, known_flags[k].name) == 0)
-				break;
-		}
-
-		if (k == (int)NFLAGS) {
-			/* not a ludica flag — leave it for the app */
-			i++;
-			continue;
-		}
-
-		/* how many argv entries does this flag consume? */
-		int consume = 1;
-		const char *flag_arg = NULL;
-		if (known_flags[k].has_arg) {
-			if (i + 1 < argc) {
-				flag_arg = argv[i + 1];
-				consume = 2;
-			} else {
-				/* missing argument — skip, don't crash */
-				i++;
-				continue;
-			}
-		}
-
-		apply_flag(desc, arg, flag_arg);
-
-		/* remove consumed entries from argv */
-		argc -= consume;
-		for (j = i; j < argc; j++)
-			argv[j] = argv[j + consume];
-		argv[argc] = NULL;
-		/* don't increment i — next element slid into position */
 	}
 
-	desc->argc = argc;
+	apply_ludica_config(desc);
 }

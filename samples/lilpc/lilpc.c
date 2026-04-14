@@ -491,51 +491,39 @@ static void cleanup(void)
 
 static void usage(const char *prog)
 {
-	fprintf(stderr, "Usage: %s -bios <rom> [-disk <image>] [-herc]\n", prog);
-	fprintf(stderr, "  -bios <path>   BIOS ROM file (required)\n");
-	fprintf(stderr, "  -disk <path>   Floppy disk image\n");
-	fprintf(stderr, "  -herc          Use Hercules display (default: CGA)\n");
-	fprintf(stderr, "  -trace         Enable CPU trace at startup\n");
+	fprintf(stderr, "Usage: %s --bios=<rom> [--disk=<image>] [--herc]\n", prog);
+	fprintf(stderr, "  --bios=<path>  BIOS ROM file (required)\n");
+	fprintf(stderr, "  --disk=<path>  Floppy disk image\n");
+	fprintf(stderr, "  --herc         Use Hercules display (default: CGA)\n");
+	fprintf(stderr, "  --trace        Enable CPU trace at startup\n");
 }
-
-enum { OPT_BIOS = 'b', OPT_DISK = 'd', OPT_HERC = 'H',
-       OPT_TRACE = 't', OPT_HELP = 'h' };
-
-static const lud_option longopts[] = {
-	{ "bios",  LUD_REQUIRED_ARG, NULL, OPT_BIOS  },
-	{ "disk",  LUD_REQUIRED_ARG, NULL, OPT_DISK  },
-	{ "herc",  LUD_NO_ARG,       NULL, OPT_HERC  },
-	{ "trace", LUD_NO_ARG,       NULL, OPT_TRACE },
-	{ "help",  LUD_NO_ARG,       NULL, OPT_HELP  },
-	{ 0 },
-};
 
 static int
 parse_args(void)
 {
-	int argc = lud_argc();
-	char **argv = lud_argv();
-	int ch;
+	const char *val;
 
 	bios_path[0] = 0;
 	disk_path[0] = 0;
 	use_hercules = false;
 	start_trace = false;
 
-	while ((ch = lud_getopt_long(argc, argv, "b:d:Hth", longopts, NULL)) != -1) {
-		switch (ch) {
-		case OPT_BIOS:  snprintf(bios_path, sizeof(bios_path), "%s", lud_optarg); break;
-		case OPT_DISK:  snprintf(disk_path, sizeof(disk_path), "%s", lud_optarg); break;
-		case OPT_HERC:  use_hercules = true; break;
-		case OPT_TRACE: start_trace = true; break;
-		case OPT_HELP:  usage(argv[0]); return -1;
-		default:        usage(argv[0]); return -1;
-		}
+	if ((val = lud_get_config("bios")))
+		snprintf(bios_path, sizeof(bios_path), "%s", val);
+	if ((val = lud_get_config("disk")))
+		snprintf(disk_path, sizeof(disk_path), "%s", val);
+	if (lud_get_config("herc"))
+		use_hercules = true;
+	if (lud_get_config("trace"))
+		start_trace = true;
+	if (lud_get_config("help")) {
+		usage(lud_get_config("_program"));
+		return -1;
 	}
 
 	if (!bios_path[0]) {
-		fprintf(stderr, "Error: -bios is required\n");
-		usage(argv[0]);
+		fprintf(stderr, "Error: --bios is required\n");
+		usage(lud_get_config("_program"));
 		return -1;
 	}
 
