@@ -326,6 +326,59 @@ static void cmd_patch(debugmon_t *dm, lilpc_t *pc, const char *args)
 	dm_send(dm, "patched %d bytes at %04X:%04X\r\n", count, seg, off);
 }
 
+static void cmd_disk(debugmon_t *dm, lilpc_t *pc, const char *args)
+{
+	while (*args == ' ') args++;
+
+	/* no args: show current disk status */
+	if (!*args) {
+		for (int i = 0; i < FDC_MAX_DRIVES; i++) {
+			fdc_drive_t *d = &pc->fdc.drive[i];
+			if (d->inserted)
+				dm_send(dm, "%c: %zu bytes (%d/%d/%d)\r\n",
+					'A' + i, d->size,
+					d->cylinders, d->heads, d->sectors);
+			else
+				dm_send(dm, "%c: empty\r\n", 'A' + i);
+		}
+		return;
+	}
+
+	/* parse drive letter */
+	int drive = -1;
+	if ((*args == 'A' || *args == 'a') && (args[1] == ' ' || !args[1]))
+		drive = 0;
+	else if ((*args == 'B' || *args == 'b') && (args[1] == ' ' || !args[1]))
+		drive = 1;
+	else {
+		dm_send(dm, "usage: d [A|B] [path]\r\n");
+		return;
+	}
+
+	args++;
+	while (*args == ' ') args++;
+
+	/* no path: eject */
+	if (!*args) {
+		free(pc->fdc.drive[drive].data);
+		pc->fdc.drive[drive].data = NULL;
+		pc->fdc.drive[drive].size = 0;
+		pc->fdc.drive[drive].inserted = false;
+		dm_send(dm, "%c: ejected\r\n", 'A' + drive);
+		return;
+	}
+
+	/* load new image */
+	if (fdc_load_image(&pc->fdc, drive, args) == 0) {
+		fdc_drive_t *d = &pc->fdc.drive[drive];
+		dm_send(dm, "%c: loaded %s (%zu bytes, %d/%d/%d)\r\n",
+			'A' + drive, args, d->size,
+			d->cylinders, d->heads, d->sectors);
+	} else {
+		dm_send(dm, "%c: failed to load %s\r\n", 'A' + drive, args);
+	}
+}
+
 /* process one complete line of input */
 static void process_line(debugmon_t *dm, lilpc_t *pc, char *line)
 {
@@ -368,6 +421,13 @@ static void process_line(debugmon_t *dm, lilpc_t *pc, char *line)
 	case 'p': /* patch memory */
 		cmd_patch(dm, pc, line + 1);
 		break;
+	case 'd': /* disk */
+		cmd_disk(dm, pc, line + 1);
+		break;
+	case 'R': /* reboot */
+		lilpc_reset(pc);
+		dm_send(dm, "rebooted\r\n");
+		break;
 	case 'h': /* help */
 	case '?':
 		dm_send(dm, "commands:\r\n");
@@ -381,6 +441,8 @@ static void process_line(debugmon_t *dm, lilpc_t *pc, char *line)
 		dm_send(dm, "  g            - go (continue)\r\n");
 		dm_send(dm, "  t            - dump text buffer\r\n");
 		dm_send(dm, "  p seg:off hex.. . - patch memory\r\n");
+		dm_send(dm, "  d [A|B] [path]    - show/change floppy disk\r\n");
+		dm_send(dm, "  R            - reboot (cold reset)\r\n");
 		dm_send(dm, "  h or ?       - this help\r\n");
 		break;
 	default:
