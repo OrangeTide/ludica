@@ -93,6 +93,8 @@ var Module = {
   },
 };
 window.onerror = function(msg, url, line, col, err) {
+  /* ASYNCIFY uses 'unwind' exceptions internally -- not a real error */
+  if (typeof msg === 'string' && msg.indexOf('unwind') >= 0) return;
   console.error(msg);
   Module.setStatus('Error: ' + msg);
 };

@@ -8,6 +8,47 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#include <sys/stat.h>
+
+/** Create parent directories for path in the Emscripten virtual FS. */
+static void
+mkdirs(const char *path)
+{
+	char tmp[512];
+	char *p;
+
+	snprintf(tmp, sizeof(tmp), "%s", path);
+	for (p = tmp + 1; *p; p++) {
+		if (*p == '/') {
+			*p = '\0';
+			mkdir(tmp, 0755);
+			*p = '/';
+		}
+	}
+}
+
+/** Fetch a file from a relative URL into the Emscripten virtual FS.
+ *
+ * Uses the file path as the URL, so "assets/textures/foo.jpg" fetches
+ * from the same relative URL.  Skips the fetch if the file already
+ * exists on the VFS.
+ */
+static void
+fetch_to_vfs(const char *path)
+{
+	FILE *f = fopen(path, "rb");
+	if (f) {
+		fclose(f);
+		return;
+	}
+	mkdirs(path);
+	lud_log("fetch: %s", path);
+	emscripten_wget(path, path);
+}
+#endif
+
 static lud_texture_t
 load_image(const char *path, enum lud_filter min_filter,
            enum lud_filter mag_filter, int srgb)
@@ -17,6 +58,9 @@ load_image(const char *path, enum lud_filter min_filter,
 	unsigned char *data;
 	enum lud_pixel_format fmt;
 
+#ifdef __EMSCRIPTEN__
+	fetch_to_vfs(path);
+#endif
 	data = stbi_load(path, &w, &h, &channels, 0);
 	if (!data) {
 		lud_err("failed to load image: %s", path);

@@ -113,7 +113,13 @@ lud_run(const lud_desc_t *desc)
 		lud__state.desc.init();
 	}
 
+	/* Reset the frame timer so the first frame's dt does not include
+	 * time spent in init() (e.g. WASM asset downloads via ASYNCIFY). */
+	lud__state.time_prev = lud__clock_now();
+
 #if defined(__EMSCRIPTEN__)
+	/* Clear the loading overlay now that init() is done */
+	EM_ASM({ if (Module.setStatus) Module.setStatus(''); });
 	int fps = lud__state.desc.target_fps > 0 ? lud__state.desc.target_fps : 0;
 	emscripten_set_main_loop(em_frame, fps, 1);
 #else
