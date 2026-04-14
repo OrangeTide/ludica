@@ -1,5 +1,8 @@
 #include "ludica_internal.h"
 #include <string.h>
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/emscripten.h>
+#endif
 
 /* Global state */
 lud__state_t lud__state;
@@ -62,7 +65,6 @@ frame_tick(void)
 }
 
 #if defined(__EMSCRIPTEN__)
-#include <emscripten/emscripten.h>
 
 static void
 em_frame(void)

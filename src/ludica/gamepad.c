@@ -4,7 +4,13 @@
 #include <string.h>
 #include <math.h>
 
-#if defined(__linux__)
+#if defined(__EMSCRIPTEN__)
+/* Stubs -- HTML5 Gamepad API not yet wired up */
+static bool gamepad_open_one(int id) { (void)id; return false; }
+static void gamepad_close_one(int id) { (void)id; }
+bool gamepad_poll(void) { return false; }
+bool gamepad_wait(int msec) { (void)msec; return false; }
+#elif defined(__linux__)
 #include "linux/gamepad-linux.h"
 #elif defined(_WIN32)
 #include "win32/gamepad-windows.h"

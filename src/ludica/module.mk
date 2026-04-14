@@ -16,3 +16,8 @@ ludica_CFLAGS.Windows_NT = -mwin32
 ludica_EXPORTED_CPPFLAGS.Windows_NT = -I$(ludica_DIR)win32/include
 ludica_EXPORTED_LDLIBS.Windows_NT = -lgdi32 -lwinmm -lEGL -lGLESv2 -lXinput
 ludica_EXPORTED_LDFLAGS.Windows_NT = -L$(ludica_DIR)win32libs
+
+### Emscripten (CC=emcc CXX=em++)
+ludica_SRCS.Emscripten = platform_emscripten.c
+ludica_EXPORTED_LDFLAGS.Emscripten = --shell-file $(ludica_DIR)shell.html -Wl,--export-if-defined=__main_argc_argv
+ludica_EXPORTED_LDLIBS.Emscripten = -sFULL_ES2=1 -sFULL_ES3=1 -sUSE_WEBGL2=1 -sALLOW_MEMORY_GROWTH=1

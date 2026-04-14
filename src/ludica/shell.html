@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{{ TITLE }}}</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #111; }
+#wrap {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  width: 100%; height: 100%;
+}
+canvas { display: block; outline: none; cursor: default; background: #000; }
+#bar-wrap {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 300px; display: none;
+}
+#bar-wrap p { color: #aaa; font: 14px/1.5 monospace; text-align: center; }
+#bar-bg { width: 100%; height: 8px; background: #333; border-radius: 4px; margin-top: 8px; }
+#bar { width: 0; height: 100%; background: #4af; border-radius: 4px; transition: width 0.2s; }
+#ui {
+  position: absolute; bottom: 12px; right: 12px;
+  display: flex; gap: 8px;
+}
+#ui button {
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+  color: #ccc; font: 13px/1 monospace; padding: 6px 12px;
+  border-radius: 4px; cursor: pointer;
+}
+#ui button:hover { background: rgba(255,255,255,0.2); }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="canvas" tabindex="0"></canvas>
+  <div id="bar-wrap">
+    <p>Loading...</p>
+    <div id="bar-bg"><div id="bar"></div></div>
+  </div>
+</div>
+<div id="ui">
+  <button id="btn-fs" title="Toggle fullscreen">Fullscreen</button>
+</div>
+
+<script>
+document.getElementById('btn-fs').addEventListener('click', function() {
+  if (!document.fullscreenElement) {
+    document.getElementById('canvas').requestFullscreen().catch(function() {});
+  } else {
+    document.exitFullscreen();
+  }
+});
+
+/* Focus canvas on click so keyboard events work */
+document.getElementById('canvas').addEventListener('click', function() {
+  this.focus();
+});
+
+var Module = {
+  canvas: (function() {
+    var c = document.getElementById('canvas');
+    c.addEventListener('webglcontextlost', function(e) {
+      alert('WebGL context lost -- reload the page'); e.preventDefault();
+    }, false);
+    return c;
+  })(),
+  print: function(text) { console.log(text); },
+  printErr: function(text) { console.error(text); },
+  onAbort: function(what) {
+    console.error('ABORT: ' + what);
+    var p = document.getElementById('bar-wrap').querySelector('p');
+    p.textContent = 'Aborted: ' + what;
+  },
+  setStatus: function(text) {
+    var bw = document.getElementById('bar-wrap');
+    var bar = document.getElementById('bar');
+    var p = bw.querySelector('p');
+    if (!text) {
+      bw.style.display = 'none';
+      return;
+    }
+    bw.style.display = 'block';
+    p.textContent = text;
+    var m = text.match(/([^ ]+)\s*\/\s*([^ ]+)/);
+    if (m) {
+      bar.style.width = (parseInt(m[1]) / parseInt(m[2]) * 100) + '%';
+    }
+  },
+  monitorRunDependencies: function(left) {
+    this.setStatus(left ? 'Loading... (' + left + ' remaining)' : '');
+  },
+};
+window.onerror = function(msg, url, line, col, err) {
+  console.error(msg);
+  Module.setStatus('Error: ' + msg);
+};
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

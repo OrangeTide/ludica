@@ -1,6 +1,6 @@
-# modular-make -- A modular GNUmakefile for C, C++, D, Fortran, Objective-C, Objective-C++, Pascal, Modula-2, and Assembly projects [v1.2.3]
+# modular-make -- A modular GNUmakefile for C, C++, D, Fortran, Objective-C, Objective-C++, Pascal, Modula-2, and Assembly projects [v1.2.4]
 # updated: 12 Apr 2026
-# Requires GNU Make (tested with 4.x).
+# Requires GNU Make 4.0 or later (uses $(file) function).
 #
 # ============================================================================
 # OVERVIEW
@@ -282,7 +282,7 @@
 #   make run-test-<name>  Build and test a single target.
 #   make compile_commands.json
 #                     Generate compile_commands.json for clangd and
-#                     other LSP tooling.  Always regenerated.
+#                     other LSP tooling.  Also rebuilt by "make all".
 #
 # ============================================================================
 # CUSTOMIZATION
@@ -386,11 +386,23 @@ ifdef RELEASE
     endif
   endif
 
-  _BUILD_MODE_CFLAGS  := -O2 $(_LTO) -march=$(RELEASE_MARCH) \
-    -ffunction-sections -fdata-sections
-  _BUILD_MODE_CPPFLAGS := -DNDEBUG
-  _BUILD_MODE_LDFLAGS := $(_LTO) -Wl,--gc-sections -Wl,-O1
-  $(info RELEASE build: -march=$(RELEASE_MARCH) $(_LTO))
+  ifneq ($(findstring emscripten,$(TARGET_TRIPLET)),)
+    # Emscripten does not support -march or -Wl,--gc-sections; its own
+    # optimizer handles dead-code elimination internally.
+    _BUILD_MODE_CFLAGS  := -O2 $(_LTO)
+    _BUILD_MODE_CPPFLAGS := -DNDEBUG
+    _BUILD_MODE_LDFLAGS := $(_LTO)
+  else
+    _BUILD_MODE_CFLAGS  := -O2 $(_LTO) -march=$(RELEASE_MARCH) \
+      -ffunction-sections -fdata-sections
+    _BUILD_MODE_CPPFLAGS := -DNDEBUG
+    _BUILD_MODE_LDFLAGS := $(_LTO) -Wl,--gc-sections -Wl,-O1
+  endif
+  ifneq ($(findstring emscripten,$(TARGET_TRIPLET)),)
+    $(info RELEASE build: Emscripten $(_LTO))
+  else
+    $(info RELEASE build: -march=$(RELEASE_MARCH) $(_LTO))
+  endif
 else ifdef DEBUG
   _BUILD_MODE_CFLAGS  := -Og -g -fno-omit-frame-pointer
   _BUILD_MODE_CPPFLAGS :=
@@ -439,6 +451,15 @@ compile.asm = $(NASM) -f $(NASM_FMT) -o $@ $(NASMFLAGS) $<
 compile.pas = $(FPC) -Cn -FE$(@D) -FU$(@D) $(FPCFLAGS) $<
 compile.mod = $(GM2) -c -o $@ $< -fcpp -MMD -MF $(@:.o=.dep) $(_BUILD_MODE_CFLAGS) $(_BUILD_MODE_CPPFLAGS) $(PROJECT_GM2FLAGS) $(PROJECT_CPPFLAGS) $(GM2FLAGS)
 
+# Compilation database (compile_commands.json) support.
+# Extensions whose compile commands use GCC-style "-c -o" invocation and
+# are consumable by clangd / LSP tooling.  NASM and FPC are excluded.
+_compdb_exts := c cc cpp d m mm f f90 S mod
+# compdb._emit: write a JSON compilation-database fragment alongside each
+# object file.  Uses $(file) so it runs at recipe-expansion time with no
+# shell overhead.  $(suffix $<) selects the matching compile.X variable.
+compdb._emit = $(file >$(@:.o=.cmd.json),{"directory":"$(CURDIR)","command":"$(subst ",\",$(compile.$(patsubst .%,%,$(suffix $<))))","file":"$(abspath $<)"})
+
 # Utility Macros
 # explode_dirs: explode a path list into every intermediate directory.
 # Recursion depth is bounded by the deepest path (~5-10 levels).
@@ -459,13 +480,17 @@ ifdef TARGET_TRIPLET
   _triplet_fields := $(subst -, ,$(TARGET_TRIPLET))
   _TARGET_ARCH := $(word 1,$(_triplet_fields))
   # Map triplet OS component to the uname -s spelling used in suffixes.
+  # Some triplets place the OS-bearing word at position 3 (e.g.
+  # wasm32-unknown-emscripten), so fall back to findstring on the full
+  # triplet when the word-2 check does not match a known OS.
   _triplet_os := $(word 2,$(_triplet_fields))
-  _TARGET_OS := $(if $(filter linux,$(_triplet_os)),Linux,\
+  _TARGET_OS := $(if $(findstring emscripten,$(TARGET_TRIPLET)),Emscripten,\
+                $(if $(filter linux,$(_triplet_os)),Linux,\
                 $(if $(filter apple,$(_triplet_os)),Darwin,\
                 $(if $(filter w64 pc,$(_triplet_os)),$(if $(findstring mingw,$(TARGET_TRIPLET)),Windows_NT,\
                 $(if $(findstring cygwin,$(TARGET_TRIPLET)),Windows_NT,\
                 $(_triplet_os))),\
-                $(_triplet_os))))
+                $(_triplet_os)))))
 else
   _TARGET_OS   := $(shell uname -s)
   _TARGET_ARCH := $(shell uname -m)
@@ -484,7 +509,10 @@ BINDIR = $(OUTDIR)/bin
 LIBDIR = $(OUTDIR)/lib
 
 # Platform-dependent output extensions
-ifneq ($(findstring darwin,$(TARGET_TRIPLET)),)
+ifneq ($(findstring emscripten,$(TARGET_TRIPLET)),)
+  EXTENSION.exe := .html
+  EXTENSION.dll := .wasm
+else ifneq ($(findstring darwin,$(TARGET_TRIPLET)),)
   EXTENSION.exe :=
   EXTENSION.dll := .dylib
 else ifneq ($(findstring mingw,$(TARGET_TRIPLET)),)
@@ -628,7 +656,7 @@ _all_dirs = $(sort $(dir \
 _all_gen_srcs := $(foreach t,$(EXECUTABLES) $(LIBRARIES) $(SHARED_LIBS),$(call get_gen_srcs,$t))
 $(_all_gen_srcs) : | $$(@D)/
 
-all :: $$(EXECUTABLES)
+all :: $$(EXECUTABLES) compile_commands.json
 clean : $$(addprefix clean_,$$(EXECUTABLES) $$(LIBRARIES) $$(SHARED_LIBS))
 clean-all : clean
 	-printf '%s\n' $(call explode_dirs,$(_all_dirs)) | sort -r | while read -r d; do $(RMDIR) "$$d" 2>/dev/null; done; true
@@ -654,7 +682,7 @@ $(call get_all_objs,$1) : NASMFLAGS=$$($1_NASMFLAGS)
 $(call get_all_objs,$1) : FPCFLAGS=$$($1_FPCFLAGS)
 $(call get_all_objs,$1) : GM2FLAGS=$$($1_GM2FLAGS)
 clean_$1 :
-	$$(RM) $$(call get_all_objs,$1) $$(patsubst %.o,%.dep,$$(call get_all_objs,$1)) $$(call get_side_effects,$1) $$(call get_gen_srcs,$1)
+	$$(RM) $$(call get_all_objs,$1) $$(patsubst %.o,%.dep,$$(call get_all_objs,$1)) $$(patsubst %.o,%.cmd.json,$$(call get_all_objs,$1)) $$(call get_side_effects,$1) $$(call get_gen_srcs,$1)
 	$$(RM) $(call get_lib,$1)
 endef
 $(foreach l,$(LIBRARIES),$(eval $(call library_rules,$l)))
@@ -677,7 +705,7 @@ $(call get_all_objs,$1) : NASMFLAGS=$$($1_NASMFLAGS)
 $(call get_all_objs,$1) : FPCFLAGS=-Cg $$($1_FPCFLAGS)
 $(call get_all_objs,$1) : GM2FLAGS=-fPIC $$($1_GM2FLAGS)
 clean_$1 :
-	$$(RM) $$(call get_all_objs,$1) $$(patsubst %.o,%.dep,$$(call get_all_objs,$1)) $$(call get_side_effects,$1) $$(call get_gen_srcs,$1)
+	$$(RM) $$(call get_all_objs,$1) $$(patsubst %.o,%.dep,$$(call get_all_objs,$1)) $$(patsubst %.o,%.cmd.json,$$(call get_all_objs,$1)) $$(call get_side_effects,$1) $$(call get_gen_srcs,$1)
 	$$(RM) $(call get_so,$1)
 endef
 $(foreach s,$(SHARED_LIBS),$(eval $(call shared_library_rules,$s)))
@@ -704,8 +732,8 @@ $(call get_all_objs,$1) : NASMFLAGS=$$($1_NASMFLAGS)
 $(call get_all_objs,$1) : FPCFLAGS=$$($1_FPCFLAGS)
 $(call get_all_objs,$1) : GM2FLAGS=$$($1_GM2FLAGS)
 clean_$1 :
-	$$(RM) $$(call get_all_objs,$1) $$(patsubst %.o,%.dep,$$(call get_all_objs,$1)) $$(call get_side_effects,$1) $$(call get_gen_srcs,$1)
-	$$(RM) $(BINDIR)/$1$(EXTENSION.exe)
+	$$(RM) $$(call get_all_objs,$1) $$(patsubst %.o,%.dep,$$(call get_all_objs,$1)) $$(patsubst %.o,%.cmd.json,$$(call get_all_objs,$1)) $$(call get_side_effects,$1) $$(call get_gen_srcs,$1)
+	$$(RM) $(BINDIR)/$1$(EXTENSION.exe)$(if $(findstring emscripten,$(TARGET_TRIPLET)), $(BINDIR)/$1.js $(BINDIR)/$1.wasm $(BINDIR)/$1.data)
 endef
 $(foreach p,$(EXECUTABLES),$(eval $(call project_rules,$p)))
 
@@ -724,24 +752,26 @@ run-tests : $(addprefix run-test-,$(TEST_TARGETS))
 
 # Compile rules -- generated from EXTENSIONS list.  Per-target flags are
 # set via target-specific variables on the individual .o files above.
-$(foreach X,$(EXTENSIONS),$(eval $(BUILDDIR)/%.o : %.$X | $$$$(@D)/ ; $$(compile.$X)))
+# clangd-compatible extensions also emit a .cmd.json sidecar via $(file).
+$(foreach X,$(_compdb_exts),$(eval $(BUILDDIR)/%.o : %.$X | $$$$(@D)/ ; $$(compile.$X)$$(compdb._emit)))
+$(foreach X,$(filter-out $(_compdb_exts),$(EXTENSIONS)),$(eval $(BUILDDIR)/%.o : %.$X | $$$$(@D)/ ; $$(compile.$X)))
 
 # Compile rules for generated sources (source and object both under BUILDDIR).
-$(foreach X,$(EXTENSIONS),$(eval $(BUILDDIR)/%.o : $(BUILDDIR)/%.$X | $$$$(@D)/ ; $$(compile.$X)))
+$(foreach X,$(_compdb_exts),$(eval $(BUILDDIR)/%.o : $(BUILDDIR)/%.$X | $$$$(@D)/ ; $$(compile.$X)$$(compdb._emit)))
+$(foreach X,$(filter-out $(_compdb_exts),$(EXTENSIONS)),$(eval $(BUILDDIR)/%.o : $(BUILDDIR)/%.$X | $$$$(@D)/ ; $$(compile.$X)))
 
 # Pull in generated dependency files (silent on first build)
 -include $(patsubst %.o,%.dep,$(foreach p,$(EXECUTABLES) $(LIBRARIES) $(SHARED_LIBS),$(call get_all_objs,$p)))
 
 # Generate compile_commands.json for clangd / LSP tooling.
-# Dry-runs the build and extracts compile commands for all languages
-# that use GCC-style "-c -o" invocation (C, C++, ObjC, ObjC++, D,
-# Fortran, Assembly, Modula-2).  NASM and FPC are excluded since
-# clangd does not consume them.
-.PHONY : compile_commands.json
-compile_commands.json :
-	$(MAKE) -j1 -n 2>/dev/null \
-	| sed -n 's/^ *//;/ -c -o /p' \
-	| awk -v dir="$$(pwd)" 'BEGIN{print "["} {src="";for(i=1;i<=NF;i++)if($$i~/\.(c|cc|cpp|m|mm|d|f|f90|S|mod)$$/){src=$$i;break} if(!src)next; cmd=$$0;gsub(/"/,"\\\"",cmd); if(n++)printf ",\n"; printf "  {\"directory\":\"%s\",\"command\":\"%s\",\"file\":\"%s/%s\"}",dir,cmd,dir,src} END{print "\n]"}' > $@
+# Each clangd-compatible compile rule emits a .cmd.json sidecar via
+# $(file) (see compdb._emit above).  This target depends on all object
+# files so the sidecars are created first, then concatenates them.
+_all_objs := $(foreach p,$(EXECUTABLES) $(LIBRARIES) $(SHARED_LIBS),$(call get_all_objs,$p))
+compile_commands.json : $(_all_objs)
+	@cat $(wildcard $(patsubst %.o,%.cmd.json,$^)) /dev/null \
+	| awk 'BEGIN{printf "["}NR>1{printf ","}  \
+	  {printf "\n  %s",$$0}END{printf "\n]\n"}' > $@
 	@echo "wrote $@ ($$(grep -c '"file"' $@) entries)"
 
 ##### END #####

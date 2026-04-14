@@ -1,6 +1,17 @@
 #include "ludica_internal.h"
 
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__EMSCRIPTEN__)
+
+#include <emscripten/emscripten.h>
+
+unsigned long long
+lud__clock_now(void)
+{
+	/* emscripten_get_now() returns milliseconds as a double */
+	return (unsigned long long)(emscripten_get_now() * 1e6);
+}
+
+#elif defined(__linux__) || defined(__APPLE__)
 
 #include <time.h>
 
