@@ -73,6 +73,20 @@ var Module = {
     var p = document.getElementById('bar-wrap').querySelector('p');
     p.textContent = 'Aborted: ' + what;
   },
+  onExit: function() {
+    var bw = document.getElementById('bar-wrap');
+    var p = bw.querySelector('p');
+    var bar = document.getElementById('bar');
+    bar.style.display = 'none';
+    if (document.referrer && new URL(document.referrer).origin === location.origin) {
+      p.innerHTML = 'Program exited. <a href="' + document.referrer + '" style="color:#4af">Go back</a>' +
+        ' or <a href="javascript:location.reload()" style="color:#4af">restart</a>';
+    } else {
+      p.innerHTML = 'Program exited. <a href="javascript:location.reload()" style="color:#4af">Restart</a>';
+    }
+    bw.style.display = 'block';
+    document.getElementById('canvas').style.display = 'none';
+  },
   setStatus: function(text) {
     var bw = document.getElementById('bar-wrap');
     var bar = document.getElementById('bar');

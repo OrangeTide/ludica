@@ -75,6 +75,10 @@ em_frame(void)
 			lud__state.desc.cleanup();
 		lud__platform_shutdown();
 		lud__config_cleanup();
+		EM_ASM({
+			if (typeof Module.onExit === 'function')
+				Module.onExit();
+		});
 		return;
 	}
 	frame_tick();
