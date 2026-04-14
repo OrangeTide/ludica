@@ -31,7 +31,7 @@ jobs:
           version: 3.1.61
 
       - name: Build all samples (Emscripten)
-        run: make CC=emcc CXX=em++ AR=emar RELEASE=1 PROJECT_LDFLAGS="--closure 1"
+        run: make CC=emcc CXX=em++ AR=emar RELEASE=1
 
       - name: Generate site
         run: ./scripts/gen-pages.sh _site
