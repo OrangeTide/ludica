@@ -513,6 +513,10 @@ int main(int argc, char **argv)
 			   strcmp(argv[i], "--help") == 0) {
 			usage(argv[0]);
 			return 0;
+		} else if (strncmp(argv[i], "--", 2) == 0) {
+			/* skip ludica flags (e.g. --auto-port) */
+			if (i + 1 < argc && argv[i + 1][0] != '-')
+				i++; /* skip value */
 		} else {
 			fprintf(stderr, "Unknown option: %s\n", argv[i]);
 			usage(argv[0]);
@@ -534,6 +538,8 @@ int main(int argc, char **argv)
 		.width = 800,
 		.height = 600,
 		.resizable = 1,
+		.argc = argc,
+		.argv = (const char *const *)argv,
 		.init = init,
 		.frame = frame,
 		.cleanup = cleanup,

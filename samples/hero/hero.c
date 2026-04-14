@@ -827,7 +827,7 @@ cleanup(void)
 /* ------------------------------------------------------------------ */
 
 int
-main(void)
+main(int argc, char **argv)
 {
 	return lud_run(&(lud_desc_t){
 		.app_name = "Hero",
@@ -835,6 +835,8 @@ main(void)
 		.height = 540,
 		.resizable = 1,
 		.gles_version = 3,
+		.argc = argc,
+		.argv = (const char *const *)argv,
 		.init = init,
 		.frame = frame,
 		.cleanup = cleanup,

@@ -346,10 +346,10 @@ on_event(const lud_event_t *ev)
 static void
 init(void)
 {
-	font16_tex = load_font_png("src/ansiview/assets/font8x16.png");
-	font8_tex = load_font_png("src/ansiview/assets/font8x8.png");
+	font16_tex = load_font_png("samples/ansiview/assets/font8x16.png");
+	font8_tex = load_font_png("samples/ansiview/assets/font8x8.png");
 	set_font_mode(1); /* default to 8x16 */
-	ansi_load("src/ansiview/assets/rad-love.ans");
+	ansi_load("samples/ansiview/assets/rad-love.ans");
 	view_x = 0;
 	view_y = 0;
 }
@@ -403,13 +403,15 @@ cleanup(void)
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
 	return lud_run(&(lud_desc_t){
 		.app_name = "demo04 — ANSI art viewer",
 		.width = 640,
 		.height = 400,
 		.resizable = 1,
+		.argc = argc,
+		.argv = (const char *const *)argv,
 		.init = init,
 		.frame = frame,
 		.cleanup = cleanup,

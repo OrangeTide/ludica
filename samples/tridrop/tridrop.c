@@ -1207,13 +1207,15 @@ cleanup(void)
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
 	return lud_run(&(lud_desc_t){
 		.app_name = "tridrop",
 		.width = 640,
 		.height = 480,
 		.resizable = 1,
+		.argc = argc,
+		.argv = (const char *const *)argv,
 		.init = init,
 		.frame = frame,
 		.cleanup = cleanup,

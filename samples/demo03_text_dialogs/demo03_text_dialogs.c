@@ -242,13 +242,15 @@ cleanup(void)
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
 	return lud_run(&(lud_desc_t){
 		.app_name = "demo03 — text & dialogs",
 		.width = 960,
 		.height = 540,
 		.resizable = 1,
+		.argc = argc,
+		.argv = (const char *const *)argv,
 		.init = init,
 		.frame = frame,
 		.cleanup = cleanup,

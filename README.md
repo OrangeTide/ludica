@@ -9,15 +9,34 @@ textures, sprites, fonts, and framebuffer effects. Programs choose GLES2
 WebGL 2) at startup. Several demo programs and a portal-based 3D engine
 (`hero`) are included.
 
-## Programs
+## Samples
 
-| Program | Description |
-|---------|-------------|
-| `hero` | Portal-based 3D engine with normal-mapped PBR textures |
-| `demo01_retrocrt` | Palette framebuffer with CRT post-processing |
-| `demo02_multiscroll` | Parallax scrolling and sprite batching |
-| `demo03_text_dialogs` | Font rendering and dialog box UI |
-| `ansiview` | ANSI art viewer |
+### hero — Portal-based 3D engine
+![hero](screenshots/hero.jpg)
+
+### demo01_retrocrt — Palette framebuffer with CRT post-processing
+![demo01_retrocrt](screenshots/demo01_retrocrt.jpg)
+
+### demo02_multiscroll — Parallax scrolling and sprite batching
+![demo02_multiscroll](screenshots/demo02_multiscroll.jpg)
+
+### demo03_text_dialogs — Font rendering and dialog box UI
+![demo03_text_dialogs](screenshots/demo03_text_dialogs.jpg)
+
+### demo04_sprites — Sprite rendering
+![demo04_sprites](screenshots/demo04_sprites.jpg)
+
+### demo05_audio — Multi-channel audio mixer
+![demo05_audio](screenshots/demo05_audio.jpg)
+
+### tridrop — Triangle block puzzle
+![tridrop](screenshots/tridrop.jpg)
+
+### ansiview — ANSI art viewer
+![ansiview](screenshots/ansiview.jpg)
+
+### lilpc — 286 XT PC emulator with CGA display
+![lilpc](screenshots/lilpc.jpg)
 
 ## Building
 
@@ -69,11 +88,15 @@ _out/x86_64-linux-gnu/bin/hero
 ## Directory layout
 
 - `src/ludica/` -- Core library (platform, shaders, meshes, textures, sprites, fonts)
-- `src/hero/` -- Portal-based 3D engine
-- `src/demo01_retrocrt/` -- CRT post-processing demo
-- `src/demo02_multiscroll/` -- Parallax scrolling demo
-- `src/demo03_text_dialogs/` -- Font and dialog demo
-- `src/ansiview/` -- ANSI art viewer
+- `samples/hero/` -- Portal-based 3D engine
+- `samples/demo01_retrocrt/` -- CRT post-processing demo
+- `samples/demo02_multiscroll/` -- Parallax scrolling demo
+- `samples/demo03_text_dialogs/` -- Font and dialog demo
+- `samples/demo04_sprites/` -- Sprite rendering demo
+- `samples/demo05_audio/` -- Multi-channel audio mixer demo
+- `samples/tridrop/` -- Triangle block puzzle
+- `samples/ansiview/` -- ANSI art viewer
+- `samples/lilpc/` -- 286 XT PC emulator
 - `src/thirdparty/` -- Header-only dependencies (stb_image, stb_ds, miniaudio)
 - `assets/textures/` -- PBR textures (CC0, see [CREDIT.md](CREDIT.md))
 - `tools/` -- Build-time code generators
