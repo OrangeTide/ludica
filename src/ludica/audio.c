@@ -66,6 +66,13 @@ static ma_device device;
 static int device_inited;
 static ma_spinlock mix_lock;
 
+/* ---- Capture state ---- */
+
+static int16_t *cap_buf;
+static size_t cap_frames;
+static size_t cap_cap;
+static int cap_active;
+
 /* ---- ADPCM decoder ---- */
 
 static int16_t
@@ -201,6 +208,26 @@ lud_audio_mix(int16_t *out, int nframes)
 		out[f * 2 + 1] = (int16_t)right;
 	}
 
+	/* Tee output into capture buffer if active */
+	if (cap_active) {
+		if (cap_frames + (size_t)nframes > cap_cap) {
+			size_t newcap = cap_cap ? cap_cap * 2 : 65536;
+			int16_t *nb;
+			while (newcap < cap_frames + (size_t)nframes)
+				newcap *= 2;
+			nb = realloc(cap_buf, newcap * 2 * sizeof(int16_t));
+			if (nb) {
+				cap_buf = nb;
+				cap_cap = newcap;
+			}
+		}
+		if (cap_frames + (size_t)nframes <= cap_cap) {
+			memcpy(cap_buf + cap_frames * 2, out,
+			       (size_t)nframes * 2 * sizeof(int16_t));
+			cap_frames += (size_t)nframes;
+		}
+	}
+
 	ma_spinlock_unlock(&mix_lock);
 }
 
@@ -308,4 +335,104 @@ lud_audio_set_master(int left, int right)
 	if (right > 255) right = 255;
 	master_vol_l = left;
 	master_vol_r = right;
+}
+
+/* ---- Audio capture ---- */
+
+void
+lud_audio_capture_start(void)
+{
+	ma_spinlock_lock(&mix_lock);
+	free(cap_buf);
+	cap_buf = NULL;
+	cap_frames = 0;
+	cap_cap = 0;
+	cap_active = 1;
+	ma_spinlock_unlock(&mix_lock);
+}
+
+static void
+le16(unsigned char *p, unsigned v)
+{
+	p[0] = v & 0xFF;
+	p[1] = (v >> 8) & 0xFF;
+}
+
+static void
+le32(unsigned char *p, unsigned v)
+{
+	p[0] = v & 0xFF;
+	p[1] = (v >> 8) & 0xFF;
+	p[2] = (v >> 16) & 0xFF;
+	p[3] = (v >> 24) & 0xFF;
+}
+
+int
+lud_audio_capture_stop(const char *wav_path)
+{
+	int16_t *buf;
+	size_t frames;
+	unsigned nr_samples, data_bytes, chunk_sz, byte_rate, block_align;
+	unsigned sample_rate = LUD_AUDIO_SAMPLE_RATE;
+	unsigned channels = 2;
+	unsigned bits = 16;
+	unsigned char header[44] = {
+		'R','I','F','F', 0,0,0,0, 'W','A','V','E',
+		'f','m','t',' ', 16,0,0,0, 1,0, 0,0, 0,0,0,0, 0,0,0,0, 0,0, 0,0,
+		'd','a','t','a', 0,0,0,0,
+	};
+	unsigned i;
+	FILE *f;
+
+	/* Atomically stop capture and grab the buffer */
+	ma_spinlock_lock(&mix_lock);
+	cap_active = 0;
+	buf = cap_buf;
+	frames = cap_frames;
+	cap_buf = NULL;
+	cap_frames = 0;
+	cap_cap = 0;
+	ma_spinlock_unlock(&mix_lock);
+
+	if (!buf || frames == 0) {
+		free(buf);
+		return -1;
+	}
+
+	nr_samples = (unsigned)(frames * 2);
+	data_bytes = nr_samples * bits / 8;
+	chunk_sz = sizeof(header) - 8 + data_bytes;
+	byte_rate = sample_rate * channels * bits / 8;
+	block_align = channels * bits / 8;
+
+	le32(header + 4, chunk_sz);
+	le16(header + 22, channels);
+	le32(header + 24, sample_rate);
+	le32(header + 28, byte_rate);
+	le16(header + 32, block_align);
+	le16(header + 34, bits);
+	le32(header + 40, data_bytes);
+
+	f = fopen(wav_path, "wb");
+	if (!f) {
+		free(buf);
+		return -1;
+	}
+	fwrite(header, sizeof(header), 1, f);
+
+	/* Write samples as little-endian int16 */
+	for (i = 0; i < nr_samples; i++) {
+		unsigned char le[2];
+		int16_t s = buf[i];
+		le[0] = (unsigned char)(s & 0xFF);
+		le[1] = (unsigned char)((s >> 8) & 0xFF);
+		fwrite(le, 2, 1, f);
+	}
+
+	fclose(f);
+	free(buf);
+
+	lud_log("audio: captured %s (%.2f seconds)",
+	        wav_path, (double)frames / (double)sample_rate);
+	return 0;
 }

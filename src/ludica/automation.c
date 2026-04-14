@@ -672,6 +672,37 @@ cmd_readpixel(void)
 	send_resp("OK %d %d %d", pixel[0], pixel[1], pixel[2]);
 }
 
+/* ---- Audio capture command ---- */
+
+static void
+cmd_capaudio(void)
+{
+	if (num_tokens < 2) {
+		resp_err("usage: CAPAUDIO START|STOP [filename]");
+		return;
+	}
+
+	if (strcasecmp(tokens[1], "START") == 0) {
+		lud_audio_capture_start();
+		resp_ok(NULL);
+	} else if (strcasecmp(tokens[1], "STOP") == 0) {
+		const char *dir = lud__state.capture_dir
+		                  ? lud__state.capture_dir : ".";
+		char path[512];
+		if (num_tokens >= 3)
+			snprintf(path, sizeof(path), "%s/%s", dir, tokens[2]);
+		else
+			snprintf(path, sizeof(path), "%s/capture_%06llu.wav",
+			         dir, lud__state.frame_count);
+		if (lud_audio_capture_stop(path) == 0)
+			send_resp("OK %s", path);
+		else
+			resp_err("no audio captured");
+	} else {
+		resp_err("usage: CAPAUDIO START|STOP [filename]");
+	}
+}
+
 /* ---- Command dispatch ---- */
 
 /* Returns 1 if the command is blocking (STEP, FRAMEDELAY, WAITEVENT) */
@@ -700,6 +731,7 @@ process_command(const char *line)
 	else if (strcasecmp(tokens[0], "CAPSCREEN") == 0) cmd_capscreen();
 	else if (strcasecmp(tokens[0], "CAPRECT") == 0)   cmd_caprect();
 	else if (strcasecmp(tokens[0], "READPIXEL") == 0) cmd_readpixel();
+	else if (strcasecmp(tokens[0], "CAPAUDIO") == 0) cmd_capaudio();
 	else resp_err("unknown command");
 
 	return 0;

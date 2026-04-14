@@ -45,4 +45,9 @@ void lud_audio_set_master(int left, int right);
  * May also be called directly for custom backends. */
 void lud_audio_mix(int16_t *out, int nframes);
 
+/* Audio capture — tee mixer output into a growing buffer.
+ * lud_audio_capture_stop() writes a WAV file and returns 0 on success. */
+void lud_audio_capture_start(void);
+int  lud_audio_capture_stop(const char *wav_path);
+
 #endif /* LUDICA_AUDIO_H_ */
