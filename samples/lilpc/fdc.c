@@ -16,7 +16,7 @@
  *   3F7h: Digital Input Register (DIR) / Data Rate Select (AT only)
  */
 
-#define FDC_DEBUG 0
+/* debug traces controlled by pc->debug & DBG_FDC at runtime */
 
 /* FDC command bytes (bits 4:0) */
 #define FDC_CMD_READ_DATA	0x06
@@ -143,17 +143,15 @@ static void fdc_write(lilpc_t *pc, uint16_t port, uint8_t val)
 			fdc->msr = 0x80; /* RQM */
 			fdc->st[0] = 0xC0; /* polling status (reset) */
 			fdc->irq_pending = true;
-#if FDC_DEBUG
-			fprintf(stderr, "FDC: reset release DOR=%02X\n", val);
-#endif
+			if (pc->debug & DBG_FDC)
+				fprintf(stderr, "FDC: reset release DOR=%02X\n", val);
 			if (val & 0x08) /* DMA enable? */
 				pic_raise_irq(&pc->pic, 6);
 		}
 		if (!(val & 0x04)) {
 			/* entering reset */
-#if FDC_DEBUG
-			fprintf(stderr, "FDC: entering reset DOR=%02X\n", val);
-#endif
+			if (pc->debug & DBG_FDC)
+				fprintf(stderr, "FDC: entering reset DOR=%02X\n", val);
 			fdc->phase = FDC_PHASE_IDLE;
 			fdc->msr = 0x00;
 		}
@@ -208,8 +206,7 @@ static void fdc_start_command(fdc_t *fdc, lilpc_t *pc)
 {
 	int cmd = fdc->cmd_buf[0] & 0x1F;
 
-#if FDC_DEBUG
-	{
+	if (pc->debug & DBG_FDC) {
 		static const char *cmd_names[] = {
 			[0x02] = "READ_TRACK", [0x03] = "SPECIFY",
 			[0x04] = "SENSE_DRIVE", [0x05] = "WRITE_DATA",
@@ -225,7 +222,6 @@ static void fdc_start_command(fdc_t *fdc, lilpc_t *pc)
 			fprintf(stderr, " %02X", fdc->cmd_buf[i]);
 		fprintf(stderr, "\n");
 	}
-#endif
 
 	switch (cmd) {
 	case FDC_CMD_SENSE_INT:
@@ -239,10 +235,9 @@ static void fdc_start_command(fdc_t *fdc, lilpc_t *pc)
 		fdc->msr = 0xD0; /* RQM + DIO + CB */
 		fdc->irq_pending = false;
 		pic_lower_irq(&pc->pic, 6);
-#if FDC_DEBUG
-		fprintf(stderr, "FDC: SENSE_INT -> ST0=%02X cyl=%d\n",
-			fdc->result_buf[0], fdc->result_buf[1]);
-#endif
+		if (pc->debug & DBG_FDC)
+			fprintf(stderr, "FDC: SENSE_INT -> ST0=%02X cyl=%d\n",
+				fdc->result_buf[0], fdc->result_buf[1]);
 		break;
 	}
 
@@ -303,10 +298,9 @@ static void fdc_start_command(fdc_t *fdc, lilpc_t *pc)
 		int end_sector = sector; /* updated after DMA transfer */
 
 		fdc_drive_t *drv = &fdc->drive[drv_num];
-#if FDC_DEBUG
-		fprintf(stderr, "FDC: READ drv=%d C=%d H=%d S=%d EOT=%d inserted=%d\n",
-			drv_num, cyl, head, sector, eot, drv->inserted);
-#endif
+		if (pc->debug & DBG_FDC)
+			fprintf(stderr, "FDC: READ drv=%d C=%d H=%d S=%d EOT=%d inserted=%d\n",
+				drv_num, cyl, head, sector, eot, drv->inserted);
 		if (!drv->inserted) {
 			fdc->st[0] = 0x48 | drv_num; /* abnormal, not ready */
 			fdc->st[1] = 0x01; /* missing address mark */
@@ -346,10 +340,9 @@ static void fdc_start_command(fdc_t *fdc, lilpc_t *pc)
 		fdc->st[0] = 0x00 | drv_num | (head << 2);
 		fdc->st[1] = 0x00;
 		fdc->st[2] = 0x00;
-#if FDC_DEBUG
-		fprintf(stderr, "FDC: READ result ST0=%02X xfer=%d/%d end_sec=%d\n",
-			fdc->st[0], xfer, fdc->dma_len, end_sector);
-#endif
+		if (pc->debug & DBG_FDC)
+			fprintf(stderr, "FDC: READ result ST0=%02X xfer=%d/%d end_sec=%d\n",
+				fdc->st[0], xfer, fdc->dma_len, end_sector);
 
 read_result:
 		/* set up result phase (7 bytes) */

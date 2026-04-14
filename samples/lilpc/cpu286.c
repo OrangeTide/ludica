@@ -877,7 +877,7 @@ int cpu286_step(lilpc_t *pc)
 	}
 
 	/* instruction trace */
-	if (pc->trace) {
+	if (pc->debug & DBG_CPU) {
 		uint32_t phys = (uint32_t)cpu->seg[SEG_CS].base + cpu->ip;
 		fprintf(stderr, "%04X:%04X [%05X] %02X %02X %02X  "
 			"AX=%04X BX=%04X CX=%04X DX=%04X "

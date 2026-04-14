@@ -436,21 +436,18 @@ static uint8_t dma_read(lilpc_t *pc, uint16_t port)
 	return 0xFF;
 }
 
-#ifndef DMA_DEBUG
-#define DMA_DEBUG 0
-#endif
+/* debug traces controlled by pc->debug & DBG_DMA at runtime */
 
 static void dma_write(lilpc_t *pc, uint16_t port, uint8_t val)
 {
 	dma_t *dma = &pc->dma;
 
-#if DMA_DEBUG
-	/* trace writes affecting channel 2 */
-	if (port == 0x04 || port == 0x05 || port == 0x0A ||
-	    port == 0x0B || port == 0x0C || port == 0x0D || port == 0x0E)
-		fprintf(stderr, "DMA: write port=%02X val=%02X ff=%d\n",
-			port, val, dma->flipflop);
-#endif
+	if (pc->debug & DBG_DMA) {
+		if (port == 0x04 || port == 0x05 || port == 0x0A ||
+		    port == 0x0B || port == 0x0C || port == 0x0D || port == 0x0E)
+			fprintf(stderr, "DMA: write port=%02X val=%02X ff=%d\n",
+				port, val, dma->flipflop);
+	}
 
 	switch (port) {
 	case 0x00: case 0x02: case 0x04: case 0x06:
@@ -555,14 +552,11 @@ int dma_transfer(dma_t *dma, lilpc_t *pc, int channel,
 	uint8_t *buf, int count, bool to_memory)
 {
 	dma_channel_t *ch = &dma->ch[channel];
-#if DMA_DEBUG
-	if (channel == 2) {
+	if ((pc->debug & DBG_DMA) && channel == 2)
 		fprintf(stderr, "DMA2: transfer req=%d to_mem=%d masked=%d "
 			"addr=%04X count=%04X page=%02X\n",
 			count, to_memory, ch->masked,
 			ch->curr_addr, ch->curr_count, ch->page);
-	}
-#endif
 	if (ch->masked)
 		return 0;
 
@@ -592,10 +586,8 @@ int dma_transfer(dma_t *dma, lilpc_t *pc, int channel,
 	if (ch->curr_count == 0xFFFF) {
 		/* terminal count reached */
 		dma->status |= (1 << channel);
-#if DMA_DEBUG
-		if (channel == 2)
+		if ((pc->debug & DBG_DMA) && channel == 2)
 			fprintf(stderr, "DMA2: terminal count, mode=%02X\n", ch->mode);
-#endif
 
 		/* auto-init: reload base values */
 		if (ch->mode & 0x10) {
@@ -606,10 +598,8 @@ int dma_transfer(dma_t *dma, lilpc_t *pc, int channel,
 		}
 	}
 
-#if DMA_DEBUG
-	if (channel == 2)
+	if ((pc->debug & DBG_DMA) && channel == 2)
 		fprintf(stderr, "DMA2: transferred=%d masked=%d\n",
 			transferred, ch->masked);
-#endif
 	return transferred;
 }
