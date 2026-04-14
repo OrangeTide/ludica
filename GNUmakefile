@@ -396,7 +396,7 @@ ifdef RELEASE
     # -Os balances size and speed; the browser JIT compensates.
     _BUILD_MODE_CFLAGS  := -Os $(_LTO)
     _BUILD_MODE_CPPFLAGS := -DNDEBUG
-    _BUILD_MODE_LDFLAGS := $(_LTO)
+    _BUILD_MODE_LDFLAGS := $(_LTO) --closure 0
   else
     _BUILD_MODE_CFLAGS  := -O2 $(_LTO) -march=$(RELEASE_MARCH) \
       -ffunction-sections -fdata-sections
