@@ -21,7 +21,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Launch game
-$BIN --auto-port $PORT --paused --fixed-dt --capture-dir "$DIR" $EXTRA_ARGS 2>&1 &
+$BIN --auto-port=$PORT --paused --fixed-dt --capture-dir="$DIR" $EXTRA_ARGS 2>&1 &
 GAME_PID=$!
 
 # Wait for port to be ready
