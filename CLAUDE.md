@@ -31,6 +31,7 @@ Each `module.mk` declares targets via `EXECUTABLES`, `LIBRARIES`, and
 - `samples/demo01_retrocrt/` — Palette framebuffer + CRT post-processing
 - `samples/demo02_multiscroll/` — Parallax scrolling + sprite batching
 - `samples/demo03_text_dialogs/` — Font rendering + dialog box UI
+- `samples/demo05_audio/` — Multi-channel audio mixer demo
 - `samples/ansiview/` — ANSI art viewer
 - `doc/manual/` — Manual (markdown, build with `make` in that directory)
 - `doc/notes/` — R&D notes
