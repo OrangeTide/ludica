@@ -4,8 +4,23 @@ Working document for the evolution of hero from a portal-sector demo into
 a dungeon-delving game engine. The target experience is first-person
 exploration of large interior spaces (dungeons, caves, towers, buildings)
 and outdoor terrain, with seamless visibility through doors and openings
-— no loading-screen transitions. Think Morrowind/Skyrim dungeon crawling,
-with support for both authored and procedurally generated worlds.
+— no loading-screen transitions.
+
+**Scale ambition:** the world can span an entire planet, or a multiverse
+of multiple planets/planes (think D&D Spelljammer or Planescape). Most of
+the world is uninhabited wilderness — vast terrain, empty ocean, barren
+moons. Points of interest (deep dungeons, sprawling fantasy cities,
+ancient ruins) are scattered sparsely across this space. The engine must
+handle planet-scale procedural generation while keeping the player's
+spatial understanding coherent — you can walk, sail, or fly between any
+two surface locations, and underground spaces connect to the surface at
+consistent world-space coordinates.
+
+Procedural generation is the primary content source, not a fallback.
+The hardcoded test sectors in the current demo exist only to test the
+renderer. The architecture must support both fully generated worlds
+(roguelike mode) and worlds with authored anchor points surrounded by
+generated filler.
 
 This document is maintained alongside the code. Update it when design
 decisions change or new constraints emerge.
@@ -288,9 +303,140 @@ vertical space loss on narrow screens.
 
 ---
 
-## 3. World Structure
+## 3. World Scale Hierarchy
 
-### 3.1 Cell Types
+The world is organized as a hierarchy of spatial scales. Each level is
+generated deterministically from a seed derived from the level above.
+Generation flows top-down: coarser scales constrain finer scales, so the
+world is topologically consistent at every resolution.
+
+### 3.1 Scale Levels
+
+```
+Multiverse          — a set of planes/planets, each with a unique seed
+  Plane/Planet      — spherical (or flat) surface + interior volumes
+    Region          — continent, ocean, mountain range (~100km scale)
+      Zone          — biome area, city, dungeon complex (~1km scale)
+        Chunk       — terrain patch or building cluster (~64m scale)
+          Cell      — single convex volume or terrain tile
+```
+
+Not all levels are always present. A single-planet game skips the
+multiverse level. A roguelike dungeon crawl may skip terrain entirely
+and generate only interior cells. The hierarchy is a generation
+framework, not a mandatory runtime structure.
+
+### 3.2 Seed Propagation
+
+Each level's seed is derived from its parent's seed plus its coordinates
+within the parent:
+
+```
+planet_seed = hash(multiverse_seed, planet_index)
+region_seed = hash(planet_seed, region_x, region_z)
+zone_seed   = hash(region_seed, zone_x, zone_z)
+chunk_seed  = hash(zone_seed, chunk_x, chunk_z)
+cell_seed   = hash(chunk_seed, cell_index)
+```
+
+A deterministic hash (e.g., xxhash, SplitMix64) ensures the same
+multiverse seed always produces the same world. Any chunk or cell can
+be regenerated independently from its seed chain without loading
+neighbors.
+
+**Constraint propagation:** higher levels generate constraints that
+lower levels must respect:
+- Region generation places mountain spines, river paths, coastlines.
+  Zone generation must conform to these features.
+- Zone generation places dungeon entrances at specific surface coords.
+  Chunk generation carves terrain around those entrances.
+- Chunk generation defines terrain height at portal locations.
+  Cell generation must match floor height to terrain at the boundary.
+
+This means generation is **not fully independent per chunk**. A chunk
+must query its parent zone for anchor points and boundary constraints
+before generating its own content. However, the constraints are
+lightweight (a few coordinates and heights, not full geometry), so
+they don't require loading neighboring chunks.
+
+### 3.3 Topological Consistency
+
+The player must be able to build a spatial mental model of the world.
+This requires:
+
+**Surface consistency:** if you enter a cave on the north side of a
+mountain and the cave runs south, you exit on the south side. The
+dungeon generator must track cumulative displacement and ensure exits
+match world-space positions. Underground passages cannot teleport the
+player without the player knowing.
+
+**Vertical consistency:** a dungeon 3 levels deep must fit within the
+terrain above it. The zone generator reserves vertical space for
+dungeons based on terrain elevation and dungeon depth requirements.
+A dungeon under a valley has less vertical space than one under a
+mountain.
+
+**Cross-chunk consistency:** a river that flows through multiple chunks
+must be continuous. Region-level features (rivers, roads, coastlines)
+are generated at region scale as polylines/curves, then each chunk
+samples the relevant portion. The chunk doesn't decide where the river
+goes — the region does.
+
+**Interior-exterior agreement:** every portal between terrain and
+interior must have matching geometry on both sides. The terrain mesh
+has a hole (carve-out) exactly where the interior portal face sits.
+Both are generated from the same zone-level anchor data.
+
+### 3.4 Sparse Content Distribution
+
+Most of the world is empty or repetitive terrain — grasslands, ocean,
+desert, forest canopy. Interesting content (cities, dungeons, ruins,
+quest locations) is placed sparsely by the region and zone generators.
+
+**Content placement pipeline:**
+1. Region generator places **site markers** — positions + type + size
+   (e.g., "large city at (4200, 1800)", "deep dungeon at (7100, 3200)")
+2. Zone generator expands site markers into **structural anchors** —
+   dungeon entrances, city gates, ruin boundaries, surface features
+3. Chunk generator builds terrain around anchors, carving space for
+   portal faces and surface structures
+4. Cell generator fills interior spaces (dungeon rooms, building
+   interiors) using the structural anchors as constraints
+
+Between sites, terrain generation runs on autopilot — noise-based
+heightmaps, biome-appropriate vegetation scattering, occasional random
+encounters or minor points of interest (a lone shrine, a bandit camp).
+
+This mirrors the real-world spatial distribution: large stretches of
+unremarkable terrain punctuated by settlements and landmarks. The
+player experiences the world as vast, with meaningful navigation
+between destinations.
+
+### 3.5 Planes and Interplanar Travel
+
+In a multiverse setup, each plane/planet is an independent generation
+root with its own seed. Planes can have different rules:
+- Material plane: spherical planet, normal terrain, gravity
+- Elemental plane: infinite flat expanse of a single biome
+- Astral plane: floating rock islands in void, no terrain
+- Pocket dimension: small bounded space, hand-authored or generated
+
+Interplanar portals are special portal faces that reference a cell in a
+different plane's cell space. From the renderer's perspective they work
+identically to same-plane portals — clip frustum, recurse, draw. The
+streaming system needs to handle loading cells from a different plane's
+generation context.
+
+Spelljammer-style travel (flying a ship between planets in the same
+crystal sphere) would use exterior terrain cells with a space skybox
+and zero-gravity movement rules, transitioning to planetary terrain
+cells via atmosphere-entry portals.
+
+---
+
+## 4. Cell-Level Structure
+
+### 4.1 Cell Types
 
 The world is composed of **cells**. Each cell is a bounded region of
 space with geometry, materials, and connections to other cells.
@@ -311,7 +457,7 @@ space with geometry, materials, and connections to other cells.
 - Placed objects list (trees, rocks, buildings, NPCs)
 - Connects to interior cells via portal faces at cave mouths, doorways
 
-### 3.2 Convex Prism Volumes in Detail
+### 4.2 Convex Prism Volumes in Detail
 
 A volume generalizes the current `map_sector`:
 
@@ -346,7 +492,7 @@ portals — the portals between them are invisible to the player (no
 doorframe, full-face opening). This is the same decomposition trick
 used in Quake's BSP and the Build engine's sector splits.
 
-### 3.3 Portal Faces
+### 4.3 Portal Faces
 
 A portal face is a convex polygon shared between two cells. It defines:
 
@@ -377,7 +523,7 @@ Portal faces are the universal connectivity primitive. The rendering
 system treats them uniformly regardless of orientation — clip the
 frustum to the portal polygon, recurse into the target cell.
 
-### 3.4 Kit-Piece Decoration System
+### 4.4 Kit-Piece Decoration System
 
 Decorations transform flat prism faces into visually rich surfaces.
 Each decoration is:
@@ -405,7 +551,7 @@ geometry that modifies the walkable space within the volume:
 - **RAMP** — inclined plane with start/end heights (stairs, ramps)
 - **CONVEX_HULL** — arbitrary convex shape (irregular rock formations)
 
-### 3.5 Design Patterns
+### 4.5 Design Patterns
 
 These patterns demonstrate how convex volumes + kit decorations produce
 complex-looking spaces from simple geometric primitives:
@@ -452,9 +598,9 @@ complex-looking spaces from simple geometric primitives:
 
 ---
 
-## 4. Rendering Architecture
+## 5. Rendering Architecture
 
-### 4.1 Visibility Determination
+### 5.1 Visibility Determination
 
 The rendering pipeline determines which cells to draw using two layers:
 
@@ -487,7 +633,7 @@ is expensive).
 - The portal's screen-space area falls below a pixel threshold
 - A maximum depth is reached (safety limit)
 
-### 4.2 Draw Call Batching
+### 5.2 Draw Call Batching
 
 The Gen1 renderer issues one draw call per draw group per sector. Gen2
 must collapse this to as few draw calls as possible.
@@ -517,7 +663,7 @@ meshes may require separate draw calls if they use different vertex
 formats or materials not in the array, but the volume geometry (which is
 the majority of triangles) should be one call.
 
-### 4.3 Shader Evolution
+### 5.3 Shader Evolution
 
 The Gen1 PBR shader is already sophisticated (Cook-Torrance, parallax
 occlusion, tone mapping). Gen2 changes:
@@ -528,7 +674,7 @@ occlusion, tone mapping). Gen2 changes:
   placed lights in the world (wall torches, braziers, glowing crystals).
   A uniform buffer of light positions/colors, iterated in the fragment
   shader. Practical limit ~8–16 lights per fragment on GLES3. Lights
-  propagate through portals (see §9.3) — the per-cell light list
+  propagate through portals (see §10.3) — the per-cell light list
   includes own lights plus portal-propagated lights from neighbors,
   sorted by contribution and culled to fit the per-fragment budget.
 - **Outdoor lighting** — directional sun/moon light for exterior cells,
@@ -539,7 +685,7 @@ occlusion, tone mapping). Gen2 changes:
   should not preclude it. Point light shadows via cubemap or dual-
   paraboloid, directional shadows via cascaded shadow maps.
 
-### 4.4 Terrain Rendering
+### 5.4 Terrain Rendering
 
 Exterior cells use a different geometry model:
 
@@ -556,7 +702,7 @@ Terrain and interior geometry share the same frame and depth buffer.
 When a terrain portal is visible, both the terrain chunk and the
 interior cell behind the portal are drawn in the same frame.
 
-### 4.5 Cell Streaming
+### 5.5 Cell Streaming
 
 Not all cells can be in GPU memory simultaneously for large worlds.
 
@@ -575,9 +721,9 @@ volume layout, decoration placement, and mesh data on the fly.
 
 ---
 
-## 5. Collision and Physics
+## 6. Collision and Physics
 
-### 5.1 Volume Collision
+### 6.1 Volume Collision
 
 The convex prism volume is the primary collision shape. Player collision
 is a swept capsule (or swept AABB for simplicity) tested against volume
@@ -594,7 +740,7 @@ floor_height plus any ramp decoration that the player stands on.
 outward. Collision response pushes the player inward (toward the volume
 center). For an interior space this means the player is kept inside.
 
-### 5.2 Decoration Collision
+### 6.2 Decoration Collision
 
 Decoration collision shapes modify the volume's walkable space:
 
@@ -608,7 +754,7 @@ Decoration collision shapes modify the volume's walkable space:
 - **Convex hull:** general case for irregular obstacles. Collision via
   GJK + EPA.
 
-### 5.3 Sector Membership
+### 6.3 Sector Membership
 
 The player is always "in" exactly one cell. When the player crosses a
 portal face, they transition to the portal's target cell. This is
@@ -622,9 +768,9 @@ Sector membership determines:
 
 ---
 
-## 6. Procedural Generation
+## 7. Procedural Generation
 
-### 6.1 Dungeon Generation Pipeline
+### 7.1 Dungeon Generation Pipeline
 
 1. **Layout generation** — place rooms as convex polygons on a 2D graph.
    Rooms can be rectangular, hexagonal, or irregular convex shapes.
@@ -647,7 +793,7 @@ Sector membership determines:
 All steps can run at load time for a new dungeon level, or
 incrementally during gameplay for infinite dungeon expansion.
 
-### 6.2 Kit System
+### 7.2 Kit System
 
 A kit is a collection of decoration meshes and rules for a visual theme:
 
@@ -670,11 +816,115 @@ kit "dungeon_crypt" {
 Different kits can be mixed within a dungeon — a crypt region transitions
 to a cave region through a portal, with each side using its own kit.
 
+### 7.3 Planet-Scale Terrain Generation
+
+Terrain generation follows the scale hierarchy from §3. Each level
+produces constraints for the level below:
+
+**Region generation** (run once per region, cached):
+1. Continental noise — large-scale Perlin/simplex determines land vs.
+   ocean, mountain ranges, major elevation features
+2. Climate model — latitude, elevation, and distance-from-coast determine
+   temperature and moisture. These map to biome assignments.
+3. Hydrology — trace river paths downhill from mountains to coastlines.
+   Rivers are polylines stored at region level; chunks sample them.
+4. Site placement — Poisson disk sampling places cities, dungeons,
+   ruins. Minimum distance constraints prevent overlap. Site type is
+   chosen by biome and randomness (a mountain site might be a dwarven
+   hold; a swamp site might be a sunken temple).
+
+**Zone generation** (run when the zone enters streaming range):
+1. Read region constraints: biome, elevation envelope, river segments,
+   site markers
+2. Expand site markers into structural anchors with specific portal
+   positions and dungeon depth budgets
+3. Place roads connecting nearby sites (A* on coarse elevation grid)
+4. Assign sub-biome variation (forest density, rock frequency, etc.)
+
+**Chunk generation** (run when the chunk enters draw range):
+1. Read zone constraints: fine biome, roads, site anchors
+2. Generate heightmap from layered noise, constrained to region
+   elevation envelope
+3. Carve terrain at site anchor portals
+4. Scatter vegetation and rocks by biome rules (Poisson disk, density
+   from zone data)
+5. Build terrain mesh and upload to GPU
+
+Each level's output is small enough to cache in memory for all loaded
+regions/zones. Only chunk-level geometry is streamed to/from GPU.
+
+### 7.4 Dungeon and City Generation
+
+Interior spaces are generated top-down from site anchors:
+
+**Dungeon generation:**
+1. Site anchor specifies: entrance position (world XYZ), dungeon seed,
+   depth (number of levels), size class, theme
+2. Level layout: BSP or graph-based room placement on a 2D grid per
+   floor. Rooms are convex polygons. Corridors are narrow rectangular
+   volumes connecting rooms.
+3. Vertical connections: stairwells, shafts, ramps connecting floor N
+   to floor N+1 via floor/ceiling portals
+4. Kit assignment by theme: each level or sub-region gets a kit
+   (crypt, cave, sewer, etc.). Transition zones between themes use
+   blended decoration.
+5. Object placement: treasures, traps, enemies, light sources placed
+   by difficulty curve and room type
+
+**City generation:**
+1. Site anchor specifies: center position, city seed, size class,
+   culture/theme
+2. Road network: radial or grid layout from center, constrained by
+   terrain elevation
+3. Building lots: Voronoi or grid parcels along roads. Each lot
+   generates a building (exterior walls as terrain-level volumes,
+   interior rooms via portal faces)
+4. Districts: concentric or sector-based zones (market, residential,
+   noble, slums) with different building density and kit themes
+5. Landmarks: temple, castle, guild hall placed at prominent positions
+   (hilltops, city center, waterfront)
+
+Both dungeon and city generation must track cumulative world-space
+displacement. A dungeon entrance at world position (100, 50, 200)
+generates rooms that occupy real 3D space below that point. If a
+passage runs 40 meters north, a second entrance could open at
+(100, 50, 240) on the surface. The generator must either plan for
+this or explicitly prevent surface conflicts by reserving vertical
+space under the site footprint.
+
+### 7.5 Player Modification Delta Store
+
+Procedural worlds are regenerated from seed. Player modifications
+(broken walls, moved furniture, depleted treasure, killed NPCs) are
+stored as **deltas** against the generated baseline:
+
+```
+delta_store {
+    cell_id → [
+        { type: DECORATION_REMOVED, decoration_index }
+        { type: DECORATION_ADDED, decoration_data }
+        { type: OBJECT_STATE, object_id, new_state }
+        { type: PORTAL_STATE, portal_index, open/closed/destroyed }
+        { type: TERRAIN_MODIFIED, heightmap_patch }
+    ]
+}
+```
+
+On chunk load: generate from seed, then apply deltas. On chunk unload:
+deltas persist, generated data is discarded. Save files contain the
+multiverse seed plus all accumulated deltas — enough to reconstruct
+the exact world state.
+
+Delta compaction: periodically merge small deltas (e.g., multiple
+terrain edits in the same area become a single heightmap patch).
+Cells with no deltas cost zero storage — the vast majority of the
+world has never been touched.
+
 ---
 
-## 7. C Implementation Patterns
+## 8. C Implementation Patterns
 
-### 7.1 container_of for Heterogeneous Subsystems
+### 8.1 container_of for Heterogeneous Subsystems
 
 Two subsystems in the Gen2 design operate on heterogeneous concrete
 types through a uniform interface: the **cell system** (interior volumes
@@ -785,7 +1035,7 @@ distance sorting, and pick testing are generic. Rendering, AI updates,
 and interaction dispatch by `obj->type` and `container_of` to the
 concrete type.
 
-### 7.2 Where Not to Use container_of
+### 8.2 Where Not to Use container_of
 
 Everything else in the design is uniform within its type and doesn't
 benefit from this pattern:
@@ -801,7 +1051,7 @@ Using `container_of` in these cases would add indirection with no
 abstraction benefit. Tagged unions and separate arrays by type are
 simpler and more cache-friendly for uniform collections.
 
-### 7.3 Collision Shape Tagged Union
+### 8.3 Collision Shape Tagged Union
 
 The decoration collision system uses a tagged union rather than
 `container_of` because collision shapes are a property of a decoration,
@@ -836,7 +1086,7 @@ struct decoration {
 The collision dispatch is a switch on `collision.type` — simple, inline,
 no pointer chasing.
 
-### 7.4 Spatial Indexing Strategy
+### 8.4 Spatial Indexing Strategy
 
 The engine has five distinct spatial query workloads. The portal/cell
 system itself acts as the primary spatial partition, which eliminates the
@@ -850,7 +1100,7 @@ need for heavyweight tree structures in most cases.
 | Object frustum cull | Flat array per cell; grid for dense cells | 0–20 typical, up to thousands for exterior | Most cells have few objects — linear scan suffices. Dense exterior chunks (forests, rubble fields) use a 2D grid binned by XZ position; query only bins overlapping the frustum footprint. |
 | Decoration collision | Flat array per cell | <50 shapes/cell | Swept capsule vs. N simple primitives (box, cylinder, ramp). Each test is cheap. N is small. No index needed. |
 | Ray pick | Portal graph walk | 1–5 cells along ray | Cast from player's cell, test objects, advance through portal faces the ray intersects. The cell/portal structure *is* the spatial index for rays. |
-| Light gather | Portal graph BFS | 1–3 hop neighborhood | Topology-based (portal hop count), not distance-based. Collect own lights + lights in portal-adjacent cells. The graph traversal from §9.3 handles this directly. |
+| Light gather | Portal graph BFS | 1–3 hop neighborhood | Topology-based (portal hop count), not distance-based. Collect own lights + lights in portal-adjacent cells. The graph traversal from §10.3 handles this directly. |
 
 **Why not BVH?**
 
@@ -919,7 +1169,7 @@ for a specific case.
 
 ---
 
-## 8. Phased Implementation Plan
+## 9. Phased Implementation Plan
 
 ### Phase 1 — Rendering Foundation
 
@@ -969,16 +1219,37 @@ Replace 2D sector extrusion with the general convex prism model.
 - Object placement in cells (items, props, NPCs)
 - Spatial index for placed objects
 - Pick/interact system
-- Procedural dungeon generator with kit theming
 - Multiple light sources
+
+### Phase 7 — Procedural World Generation
+
+- Seed hierarchy and deterministic hash chain (§3.2)
+- Region generator: continental noise, biome assignment, site placement
+- Zone generator: expand sites to structural anchors, road placement
+- Dungeon generator: BSP/graph room layout, kit theming, stair connections
+- City generator: road network, building lots, district assignment
+- Terrain constraint propagation (region → zone → chunk)
+- Delta store for player modifications (§7.5)
+- Topological consistency validation (dungeon fits under terrain, exits
+  align with surface positions)
+
+### Phase 8 — Scale and Polish
+
+- Planet-scale streaming (distance + PVS hybrid for cell management)
+- Multiverse/plane support (interplanar portal faces, per-plane
+  generation context)
+- Authored anchor injection (hand-designed locations placed into
+  procedural world)
+- Save/load (seed + delta serialization)
+- Content density tuning (how sparse is sparse enough, travel pacing)
 
 ---
 
-## 9. Design Decisions
+## 10. Design Decisions
 
 Resolved questions and standing decisions. Update when decisions change.
 
-### 9.1 Portal Face Geometry for Mismatched Footprints
+### 10.1 Portal Face Geometry for Mismatched Footprints
 
 **Decision:** compute polygon intersection. When a floor portal connects
 two volumes with different 2D footprints, the portal polygon is the
@@ -995,7 +1266,7 @@ textured triangles and don't participate in texture-based draw sorting.
 Partial portals (hole in a larger floor) produce a solid border around
 the opening. This border is textured and sorted normally.
 
-### 9.2 Decoration LOD
+### 10.2 Decoration LOD
 
 **Decision:** decorations support multiple LOD levels per mesh. Each
 decoration mesh ships with 2–3 LOD variants (full detail, simplified,
@@ -1007,7 +1278,7 @@ LOD selection is per-decoration-instance based on distance from camera.
 Volume surfaces (flat prism faces) are always drawn at full detail
 regardless of distance since they're cheap geometry.
 
-### 9.3 Light Propagation Through Portals
+### 10.3 Light Propagation Through Portals
 
 **Decision:** lights propagate through portals. A torch in one room
 illuminates surfaces in adjacent rooms visible through the portal
@@ -1035,7 +1306,7 @@ is necessary. Prioritize lights by: (1) distance to fragment, (2)
 intensity at fragment, (3) whether the light is the dominant source in
 its cell. Distant portal-propagated lights are the first to be culled.
 
-### 9.4 Audio Occlusion
+### 10.4 Audio Occlusion
 
 **Decision:** design for it, build it later. Portal connectivity and
 the PVS system naturally provide the data needed for audio propagation:
@@ -1053,7 +1324,7 @@ beyond what the visual portal system requires.
 Audio occlusion is not in the initial implementation phases but the
 portal system should not be designed in a way that makes it hard to add.
 
-### 9.5 Map File Format
+### 10.5 Map File Format
 
 **Decision:** binary runtime format, generated from script sources.
 
@@ -1073,7 +1344,7 @@ portal system should not be designed in a way that makes it hard to add.
   area, building). Cross-file portal references use named connection
   points. The loader resolves connections when files are loaded together.
 
-### 9.6 Terrain Carve-Outs
+### 10.6 Terrain Carve-Outs
 
 **Decision:** needs further design, but the concept is promising.
 
@@ -1109,3 +1380,36 @@ Possible implementation:
 This feature is not blocking for initial terrain implementation. Phase 4
 can start with manually placed portal faces at terrain level and add
 carve-out automation later.
+
+### 10.7 World Scale and Procedural Scope
+
+**Decision:** the world is procedurally generated at planet scale (or
+multiverse scale), not hand-authored with procedural filler. The
+hardcoded test sectors exist only for renderer development.
+
+Key constraints:
+- Generation is seed-deterministic at every level of the hierarchy (§3).
+  The same multiverse seed always produces the same world.
+- Generation must be spatially local — any chunk can be generated from
+  its seed chain without loading neighbors. Cross-chunk features (rivers,
+  roads, coastlines) are defined at region/zone level as constraints,
+  not computed chunk-to-chunk.
+- Topological consistency is mandatory — underground spaces must fit
+  within the terrain above them, cave exits must emerge at correct
+  surface positions, and the player's spatial mental model must remain
+  coherent (§3.3).
+- Most of the world is empty wilderness. Interesting content (dungeons,
+  cities, ruins) is placed sparsely by the region generator. The engine
+  must not waste memory or generation time on empty space.
+- Player modifications are stored as deltas over the procedural
+  baseline (§7.5). Save files = seed + deltas.
+- Authored anchor points (hand-designed quest locations, story-critical
+  dungeons) can be injected into the generation pipeline at the site
+  marker level. The procedural generator routes around them.
+
+This scope does not change the cell/portal rendering architecture — that
+operates at the local scale regardless of how cells are generated. The
+impact is on the streaming system (§5.5), which must handle planet-scale
+distance calculations and multi-plane cell addressing, and on the
+generation pipeline (§7), which must produce consistent results across
+all scale levels.
