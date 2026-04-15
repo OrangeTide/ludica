@@ -16,6 +16,28 @@ Usage:
   - a common pattern is to --pause then skip N frames. might be easier to have a built-in skip on the command-line.
   - set SO_REUSEADDR on the listen address. having to fight dead sessions blocking us has wasted too much time.
 
+## 3D Engine Support
+
+Features identified from hero Gen2 analysis. See `doc/notes/ludica-engine-features.md`
+for full design rationale and API sketches.
+
+- [ ] job system (`ludica_job.h`) — work queue with deferred completion callbacks.
+  workers on native, inline fallback on WASM. app never writes threading code.
+  - `lud_job_submit(func, arg, on_complete)` — func on worker, on_complete on main thread
+  - job groups for bulk loading with `lud_draw_progress` integration
+  - WASM: jobs run inline during `lud_job_poll` with per-frame time budget
+- [ ] arena allocator — bump allocator for per-job scratch, per-frame temporaries,
+  procgen buffers. bulk reset, no per-object free.
+  - reference: `DEVEL/osdev/cmd/jsh/jsh.c:533-647` (hybrid bump/malloc strategy)
+- [ ] texture arrays (`GL_TEXTURE_2D_ARRAY`, GLES3) — bind once, index by layer.
+  eliminates per-material texture switching.
+- [ ] mesh update — `lud_update_mesh()` for partial VBO writes (streaming world geometry)
+- [ ] instanced drawing — `lud_draw_instanced()` for repeated kit-piece meshes (GLES3)
+- [ ] frustum culling utilities — `lud_frustum_extract()`, `lud_frustum_test_aabb()`
+- [ ] deferred resource destruction — queue GL deletes to end of frame for safe streaming
+- [ ] collision primitives (`ludica_phys.h`) — swept capsule vs. planes/convex shapes,
+  wall sliding. develop in hero first, extract when API stabilizes.
+
 ## Future
 
 - [ ] font rendering: SDF, MSDF (multichannel signed distance field), or Slug

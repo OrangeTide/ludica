@@ -30,6 +30,17 @@ Examples of convex volumes + kit decoration:
 Kit decorations are first-class: each volume face has attachment points,
 each decoration declares its visual mesh and collision shape.
 
+## Ludica Dependencies
+
+Several hero phases depend on new ludica features. See the top-level
+`TODO.md` (3D Engine Support section) and `doc/notes/ludica-engine-features.md`.
+
+- Phase 1 needs: texture arrays
+- Phase 2 needs: frustum culling utilities
+- Phase 3 needs: instanced drawing
+- Phase 4 needs: job system, mesh update, deferred destruction, arena allocator
+- Phase 5 needs: collision primitives (develop here first, extract later)
+
 ## Phase 1 — Rendering Foundation
 
 Improve the current renderer before changing the geometry model.
@@ -39,6 +50,7 @@ Improve the current renderer before changing the geometry model.
 - [ ] use `GL_TEXTURE_2D_ARRAY` for PBR texture sets (GLES3)
   - bind once per frame, layer index per draw group
   - shader samples via `texture(u_array, vec3(uv, layer))`
+  - **depends on ludica texture array API**
 - [ ] encode material/layer index as per-vertex attribute
   - goal: single draw call for all visible geometry
 
@@ -98,7 +110,37 @@ Replace 2D sector extrusion with the general convex prism model.
 - [ ] object placement in cells (items, props, NPCs)
 - [ ] spatial index for placed objects (grid or BVH)
 - [ ] pick/interact system
-- [ ] procedural dungeon generator
-  - place room volumes, connect with corridor volumes
-  - assign kit themes per region
-  - compute portal faces and PVS on the fly
+- [ ] multiple light sources with portal propagation
+
+## Phase 7 — Procedural World Generation
+
+- [ ] seed hierarchy and deterministic hash chain
+  - multiverse → planet → region → zone → chunk → cell
+- [ ] region generator
+  - continental noise (land/ocean/mountains)
+  - biome assignment (climate model)
+  - river/road polyline placement
+  - sparse site placement (cities, dungeons, ruins) via Poisson disk
+- [ ] zone generator
+  - expand site markers to structural anchors
+  - road routing between sites
+- [ ] dungeon generator
+  - BSP/graph room layout per floor
+  - vertical connections (stairwells, shafts) via floor/ceiling portals
+  - kit theme assignment per region
+  - topological consistency: dungeon fits under terrain, exits align
+- [ ] city generator
+  - road network layout (radial/grid)
+  - building lot placement and interior generation
+  - district zoning (market, residential, noble, slums)
+- [ ] terrain constraint propagation (region → zone → chunk)
+- [ ] delta store for player modifications over procedural baseline
+  - save files = seed + deltas
+
+## Phase 8 — Scale and Polish
+
+- [ ] planet-scale streaming (distance + PVS hybrid)
+- [ ] multiverse/plane support (interplanar portals)
+- [ ] authored anchor injection into procedural world
+- [ ] save/load serialization
+- [ ] content density tuning and travel pacing
