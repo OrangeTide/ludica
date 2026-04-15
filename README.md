@@ -29,6 +29,9 @@ WebGL 2) at startup. Several demo programs and a portal-based 3D engine
 ### demo05_audio — Multi-channel audio mixer
 ![demo05_audio](screenshots/demo05_audio.jpg)
 
+### demo06_slugtext — GPU vector font rendering
+![demo06_slugtext](screenshots/demo06_slugtext.jpg)
+
 ### tridrop — Triangle block puzzle
 ![tridrop](screenshots/tridrop.jpg)
 
@@ -119,6 +122,7 @@ _out/x86_64-linux-gnu/bin/hero
 - `samples/demo03_text_dialogs/` -- Font and dialog demo
 - `samples/demo04_sprites/` -- Sprite rendering demo
 - `samples/demo05_audio/` -- Multi-channel audio mixer demo
+- `samples/demo06_slugtext/` -- GPU vector font rendering demo (Slug algorithm)
 - `samples/tridrop/` -- Triangle block puzzle
 - `samples/ansiview/` -- ANSI art viewer
 - `samples/lilpc/` -- 286 XT PC emulator

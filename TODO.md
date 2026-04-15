@@ -30,7 +30,8 @@ Usage:
 
 There are some sub-project TODO.md in this project too.
 
-  * lilpc ̣– [samples/lilpc/TODO.md]
+  * lilpc – [samples/lilpc/TODO.md]
+  * hero – [samples/hero/TODO.md]
 
 # DONE
 

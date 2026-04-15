@@ -23,6 +23,7 @@ demo02_multiscroll|demo02_multiscroll|Multi-layer parallax scrolling with sprite
 demo03_text_dialogs|demo03_text_dialogs|Bitmap font rendering and dialog box UI. Demonstrates text layout, word wrapping, and a typewriter-style reveal effect inside styled dialog frames.
 demo04_sprites|demo04_sprites|Sprite rendering with animation and simple physics. A character walks and jumps on a tiled platform, demonstrating sprite sheets and frame-based animation.
 demo05_audio|demo05_audio|Multi-channel audio mixer with capture support. Plays layered sounds with volume control, panning, and real-time waveform visualization.
+demo06_slugtext|demo06_slugtext|GPU vector font rendering using the Slug algorithm. Evaluates quadratic Bezier curves per-pixel in the fragment shader for resolution-independent text at any size.
 tridrop|tridrop|Triangle block puzzle game. Drag and drop triangle pieces onto a hexagonal grid, clearing lines to score points.
 ansiview|ansiview|ANSI art viewer that renders .ANS files using a CP437 bitmap font. Supports 16-color palette and blinking attributes.
 lilpc|lilpc|Tiny 286 XT PC emulator with CGA display. Boots a custom BIOS and runs a demo disk image, rendering CGA text and graphics modes.
