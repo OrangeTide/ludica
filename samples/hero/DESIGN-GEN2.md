@@ -528,7 +528,7 @@ occlusion, tone mapping). Gen2 changes:
   placed lights in the world (wall torches, braziers, glowing crystals).
   A uniform buffer of light positions/colors, iterated in the fragment
   shader. Practical limit ~8–16 lights per fragment on GLES3. Lights
-  propagate through portals (see §8.3) — the per-cell light list
+  propagate through portals (see §9.3) — the per-cell light list
   includes own lights plus portal-propagated lights from neighbors,
   sorted by contribution and culled to fit the per-fragment budget.
 - **Outdoor lighting** — directional sun/moon light for exterior cells,
@@ -672,7 +672,254 @@ to a cave region through a portal, with each side using its own kit.
 
 ---
 
-## 7. Phased Implementation Plan
+## 7. C Implementation Patterns
+
+### 7.1 container_of for Heterogeneous Subsystems
+
+Two subsystems in the Gen2 design operate on heterogeneous concrete
+types through a uniform interface: the **cell system** (interior volumes
+and terrain chunks) and the **placed object system** (items, props,
+NPCs, lights, triggers). These use the Linux kernel's `container_of`
+pattern — embed a common struct in each concrete type, write generic
+code against the embedded struct, and recover the concrete type when
+type-specific behavior is needed.
+
+```c
+#define container_of(ptr, type, member) \
+    ((type *)((char *)(ptr) - offsetof(type, member)))
+```
+
+**Cell subsystem:**
+
+```c
+/* Generic cell — the portal, PVS, culling, and streaming systems
+ * operate on this struct without knowing the concrete cell type. */
+struct cell {
+    unsigned id;
+    enum cell_type { CELL_VOLUME, CELL_TERRAIN } type;
+    float bbox[6];                     /* AABB for frustum culling */
+    uint64_t pvs[PVS_WORDS];          /* potentially visible set */
+    struct portal_face *portals;       /* portal list */
+    unsigned num_portals;
+    bool loaded;                       /* streaming state */
+};
+
+/* Interior cell — convex prism volume with decorations */
+struct volume_cell {
+    struct cell cell;                  /* embedded, must be first or use container_of */
+    struct sector_vertex *polygon;
+    unsigned num_sides;
+    float floor_h, ceil_h;
+    struct face *faces;               /* wall/floor/ceil faces */
+    unsigned num_faces;
+    struct decoration *decorations;
+    unsigned num_decorations;
+};
+
+/* Exterior cell — heightmap terrain chunk */
+struct terrain_cell {
+    struct cell cell;
+    float *heightmap;
+    unsigned grid_size;
+    float chunk_x, chunk_z;           /* world position */
+    struct placed_object *objects;     /* trees, rocks, etc. */
+    unsigned num_objects;
+};
+```
+
+Generic code operates on `struct cell *`:
+
+```c
+/* PVS, frustum culling, streaming — type-agnostic */
+void pvs_compute(struct cell *cells, unsigned count);
+bool cell_in_frustum(const struct cell *c, const hmm_mat4 *vp);
+void cell_stream_update(struct cell *cells, unsigned count, float px, float pz);
+```
+
+Type-specific code recovers the concrete type:
+
+```c
+void cell_draw(struct cell *c) {
+    switch (c->type) {
+    case CELL_VOLUME:
+        draw_volume(container_of(c, struct volume_cell, cell));
+        break;
+    case CELL_TERRAIN:
+        draw_terrain(container_of(c, struct terrain_cell, cell));
+        break;
+    }
+}
+```
+
+**Placed object subsystem:**
+
+```c
+/* Generic object — spatial index, pick system, and cell membership
+ * operate on this struct. */
+struct object {
+    unsigned id;
+    enum object_type { OBJ_ITEM, OBJ_PROP, OBJ_NPC, OBJ_LIGHT, OBJ_TRIGGER } type;
+    float pos[3];
+    float radius;                      /* bounding sphere for culling/picking */
+    struct cell *cell;                 /* which cell this object is in */
+};
+
+struct light_object {
+    struct object obj;
+    float color[3];
+    float intensity;
+    float falloff_linear, falloff_quad;
+};
+
+struct npc_object {
+    struct object obj;
+    unsigned ai_state;
+    float health;
+    unsigned mesh_id;
+    /* ... */
+};
+```
+
+The spatial index stores `struct object *` pointers. Frustum culling,
+distance sorting, and pick testing are generic. Rendering, AI updates,
+and interaction dispatch by `obj->type` and `container_of` to the
+concrete type.
+
+### 7.2 Where Not to Use container_of
+
+Everything else in the design is uniform within its type and doesn't
+benefit from this pattern:
+
+- **Decorations** — always `struct decoration`. Collision shape variance
+  is handled by a tagged union inside the struct, not by embedding.
+- **Portal faces** — always `struct portal_face`. Wall/floor/ceiling
+  orientation is a property, not a type.
+- **Draw groups** — always `(first, count, material_id)`. Flat array.
+- **Kit rules** — data tables, not polymorphic objects.
+
+Using `container_of` in these cases would add indirection with no
+abstraction benefit. Tagged unions and separate arrays by type are
+simpler and more cache-friendly for uniform collections.
+
+### 7.3 Collision Shape Tagged Union
+
+The decoration collision system uses a tagged union rather than
+`container_of` because collision shapes are a property of a decoration,
+not a standalone subsystem with heterogeneous participants:
+
+```c
+struct collision_shape {
+    enum {
+        COLL_NONE,
+        COLL_BOX,
+        COLL_CYLINDER,
+        COLL_RAMP,
+        COLL_HULL,
+    } type;
+    union {
+        struct { float hx, hy, hz; } box;
+        struct { float radius, height; } cylinder;
+        struct { float length, rise; } ramp;
+        struct { int hull_id; } hull;
+    };
+};
+
+struct decoration {
+    unsigned mesh_id;
+    float transform[16];              /* 4x4 relative to face */
+    unsigned attachment_face;
+    struct collision_shape collision;
+    unsigned lod_count;               /* number of LOD variants */
+};
+```
+
+The collision dispatch is a switch on `collision.type` — simple, inline,
+no pointer chasing.
+
+### 7.4 Spatial Indexing Strategy
+
+The engine has five distinct spatial query workloads. The portal/cell
+system itself acts as the primary spatial partition, which eliminates the
+need for heavyweight tree structures in most cases.
+
+**Query workloads and chosen structures:**
+
+| Query | Structure | Scale | Rationale |
+|-------|-----------|-------|-----------|
+| Cell frustum cull | PVS bitset + linear AABB test | ~10–30 candidates/frame | PVS narrows hundreds of loaded cells to a small set. Testing 30 AABBs against 6 frustum planes is a microsecond. A tree adds pointer chasing and complexity for no measurable gain. |
+| Object frustum cull | Flat array per cell; grid for dense cells | 0–20 typical, up to thousands for exterior | Most cells have few objects — linear scan suffices. Dense exterior chunks (forests, rubble fields) use a 2D grid binned by XZ position; query only bins overlapping the frustum footprint. |
+| Decoration collision | Flat array per cell | <50 shapes/cell | Swept capsule vs. N simple primitives (box, cylinder, ramp). Each test is cheap. N is small. No index needed. |
+| Ray pick | Portal graph walk | 1–5 cells along ray | Cast from player's cell, test objects, advance through portal faces the ray intersects. The cell/portal structure *is* the spatial index for rays. |
+| Light gather | Portal graph BFS | 1–3 hop neighborhood | Topology-based (portal hop count), not distance-based. Collect own lights + lights in portal-adjacent cells. The graph traversal from §9.3 handles this directly. |
+
+**Why not BVH?**
+
+BVH (bounding volume hierarchy) is optimal when you have a single large
+triangle mesh and need to raycast or collide against it — thousands of
+triangles with irregular spatial distribution, where a tree reduces
+O(N) to O(log N) per query. Classic use: collision against authored
+room meshes (Morrowind-style).
+
+The Gen2 design specifically avoids this scenario. Geometry is
+partitioned into cells. Within each cell, collision shapes are simple
+convex primitives (box, cylinder, ramp, convex hull), not triangle
+soups. The cell boundary itself provides the coarse spatial partition;
+the fine-grained collision is against a handful of primitives per cell.
+
+BVH would only become relevant if decoration meshes grow to use complex
+triangle-level collision (the `COLL_HULL` case at scale — hundreds of
+hull shapes in a single cell). Even then, it would be a per-cell local
+BVH, not a global one.
+
+**Why not octree or k-d tree?**
+
+Octrees and k-d trees are designed for point clouds and irregular 3D
+distributions. Our data is organized into discrete cells with mostly
+2D spatial extent (prisms are polygons × height, terrain is a 2D grid).
+A 3D volumetric index wastes a dimension and adds complexity for data
+that is already spatially partitioned by the cell system.
+
+K-d trees also have poor cache behavior for dynamic data (frequent
+object insertion/removal as cells stream in and out). A grid has O(1)
+insertion and removal.
+
+**Why the portal graph is the right primary structure:**
+
+The cell/portal graph is a spatial partition tuned to the world's actual
+connectivity. A room behind a closed door is topologically distant (many
+portal hops) even if geometrically close (one meter through the wall).
+This matches gameplay needs — visibility, sound, AI line-of-sight, and
+light propagation all follow portal connectivity, not Euclidean
+distance.
+
+Traditional spatial indices (BVH, octree, k-d tree) partition by
+geometric proximity. They would group a room and the hallway on the
+other side of its wall together, which is wrong for every query that
+cares about reachability. The portal graph gets this right by
+construction.
+
+**Escalation path if bottlenecks emerge:**
+
+If per-cell object counts grow large enough to matter (profiling shows
+linear scan as a hotspot), the first step is a 2D grid within the cell:
+
+```c
+struct cell_grid {
+    unsigned cell_w, cell_h;    /* grid dimensions */
+    float origin_x, origin_z;  /* world-space origin */
+    float cell_size;            /* grid cell width */
+    struct object **bins;       /* array of object lists per bin */
+};
+```
+
+Simple to implement, cache-friendly (sequential bin access), O(1) cell
+lookup, good for the uniform spatial distributions typical of placed
+objects. Reach for a BVH only if profiling shows the grid is inadequate
+for a specific case.
+
+---
+
+## 8. Phased Implementation Plan
 
 ### Phase 1 — Rendering Foundation
 
@@ -727,11 +974,11 @@ Replace 2D sector extrusion with the general convex prism model.
 
 ---
 
-## 8. Design Decisions
+## 9. Design Decisions
 
 Resolved questions and standing decisions. Update when decisions change.
 
-### 8.1 Portal Face Geometry for Mismatched Footprints
+### 9.1 Portal Face Geometry for Mismatched Footprints
 
 **Decision:** compute polygon intersection. When a floor portal connects
 two volumes with different 2D footprints, the portal polygon is the
@@ -748,7 +995,7 @@ textured triangles and don't participate in texture-based draw sorting.
 Partial portals (hole in a larger floor) produce a solid border around
 the opening. This border is textured and sorted normally.
 
-### 8.2 Decoration LOD
+### 9.2 Decoration LOD
 
 **Decision:** decorations support multiple LOD levels per mesh. Each
 decoration mesh ships with 2–3 LOD variants (full detail, simplified,
@@ -760,7 +1007,7 @@ LOD selection is per-decoration-instance based on distance from camera.
 Volume surfaces (flat prism faces) are always drawn at full detail
 regardless of distance since they're cheap geometry.
 
-### 8.3 Light Propagation Through Portals
+### 9.3 Light Propagation Through Portals
 
 **Decision:** lights propagate through portals. A torch in one room
 illuminates surfaces in adjacent rooms visible through the portal
@@ -788,7 +1035,7 @@ is necessary. Prioritize lights by: (1) distance to fragment, (2)
 intensity at fragment, (3) whether the light is the dominant source in
 its cell. Distant portal-propagated lights are the first to be culled.
 
-### 8.4 Audio Occlusion
+### 9.4 Audio Occlusion
 
 **Decision:** design for it, build it later. Portal connectivity and
 the PVS system naturally provide the data needed for audio propagation:
@@ -806,7 +1053,7 @@ beyond what the visual portal system requires.
 Audio occlusion is not in the initial implementation phases but the
 portal system should not be designed in a way that makes it hard to add.
 
-### 8.5 Map File Format
+### 9.5 Map File Format
 
 **Decision:** binary runtime format, generated from script sources.
 
@@ -826,7 +1073,7 @@ portal system should not be designed in a way that makes it hard to add.
   area, building). Cross-file portal references use named connection
   points. The loader resolves connections when files are loaded together.
 
-### 8.6 Terrain Carve-Outs
+### 9.6 Terrain Carve-Outs
 
 **Decision:** needs further design, but the concept is promising.
 
