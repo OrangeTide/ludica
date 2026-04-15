@@ -10,6 +10,8 @@ enum lud_pixel_format {
 	LUD_PIXFMT_RGBA8,    /* 4 channels, 8-bit each */
 	LUD_PIXFMT_SRGB8,    /* 3 channels, sRGB (GLES3 only, falls back to RGB8) */
 	LUD_PIXFMT_SRGBA8,   /* 4 channels, sRGB+alpha (GLES3 only, falls back to RGBA8) */
+	LUD_PIXFMT_RGBA16F,  /* 4 channels, 16-bit float (GLES3 only) */
+	LUD_PIXFMT_RG16UI,   /* 2 channels, 16-bit unsigned int (GLES3 only) */
 };
 
 /* Texture filter modes */

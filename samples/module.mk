@@ -1,1 +1,1 @@
-SUBDIRS = demo01_retrocrt demo02_multiscroll demo03_text_dialogs demo04_sprites demo05_audio ansiview hero tridrop lilpc
+SUBDIRS = demo01_retrocrt demo02_multiscroll demo03_text_dialogs demo04_sprites demo05_audio demo06_slugtext ansiview hero tridrop lilpc
