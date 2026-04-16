@@ -109,6 +109,9 @@ static int frame_delay;          /* file replay: frames to skip */
 static int stepping;             /* frames remaining in STEP command */
 static int wait_frame;           /* WAITEVENT FRAME pending */
 
+static int auto_kill = 1;        /* terminate after first client disconnects */
+static int had_client;            /* true once a client has connected */
+
 static struct auto_var vars[MAX_VARS];
 static int num_vars;
 
@@ -313,11 +316,11 @@ send_capture(int x, int y, int w, int h, int use_base64, const char *filename)
 		build_capture_path(path, sizeof(path), filename);
 		if (!stbi_write_png(path, w, h, 4, pixels, w * 4)) {
 			free(pixels);
-			resp_err("write failed");
+			resp_err("write failed — could not save PNG to file");
 			return;
 		}
 		free(pixels);
-		send_resp("OK %s", path);
+		send_resp("OK saved %dx%d PNG to %s", w, h, path);
 	}
 }
 
@@ -366,6 +369,166 @@ tokenize(const char *line)
 	return num_tokens;
 }
 
+/* ---- HELP command ---- */
+
+struct cmd_help {
+	const char *name;
+	const char *summary;
+	const char *detail;
+};
+
+static const struct cmd_help help_table[] = {
+	{"HELP", "List commands or show detailed help for a command",
+	 "HELP lists all available commands with a one-line summary. "
+	 "HELP <command> shows a more detailed description of a specific command, "
+	 "including its arguments and behavior."},
+
+	{"STEP", "Advance N frames (default 1), returns frame number",
+	 "STEP [N] advances the game by N frames (default 1) and responds with "
+	 "the frame number after stepping completes. The game must be paused for "
+	 "STEP to have an effect. This is a blocking command — no further commands "
+	 "are processed until all frames have been rendered."},
+
+	{"RESUME", "Unpause the game and run at normal speed",
+	 "RESUME unpauses the game, allowing it to run at its normal frame rate. "
+	 "While resumed, STEP commands are not needed. Use --paused on the command "
+	 "line or send STEP to pause again."},
+
+	{"QUIT", "Request the game to exit",
+	 "QUIT sends a quit request to the game, causing it to shut down cleanly. "
+	 "The TCP connection is closed after the response is sent."},
+
+	{"NOKILL", "Disable auto-terminate on client disconnect",
+	 "NOKILL disables the default behavior of terminating the game when the "
+	 "first TCP client disconnects. This is useful when you want the game to "
+	 "continue running and accept new connections after a client leaves."},
+
+	{"RESTART", "Re-exec the game process with a fresh binary",
+	 "RESTART causes the game to re-execute itself via execv(), picking up any "
+	 "newly built binary. The listen socket is preserved across the exec so "
+	 "the same port remains in use. The current client connection is closed "
+	 "before the exec. This is useful during development to reload code changes "
+	 "without manually restarting."},
+
+	{"KEYDOWN", "Inject a key-down event",
+	 "KEYDOWN <key> injects a key-down event for the named key. Key names are "
+	 "case-insensitive (e.g. A, ESCAPE, SPACE, LEFT, F1). The key stays down "
+	 "until a corresponding KEYUP is sent."},
+
+	{"KEYUP", "Inject a key-up event",
+	 "KEYUP <key> injects a key-up event for the named key. Use after KEYDOWN "
+	 "to release a held key."},
+
+	{"MOUSEMOVE", "Move the mouse cursor",
+	 "MOUSEMOVE <x> <y> injects a mouse movement event to the given screen "
+	 "coordinates. Origin is top-left."},
+
+	{"MOUSEDOWN", "Inject a mouse button press",
+	 "MOUSEDOWN <button> <x> <y> injects a mouse button down event. Button 1 "
+	 "is typically the left button. Coordinates are in screen space with "
+	 "top-left origin."},
+
+	{"MOUSEUP", "Inject a mouse button release",
+	 "MOUSEUP <button> <x> <y> injects a mouse button up event."},
+
+	{"SCROLL", "Inject a scroll event",
+	 "SCROLL <dx> <dy> injects a mouse scroll event with the given horizontal "
+	 "and vertical deltas."},
+
+	{"LISTACTIONS", "List all registered game actions and their key bindings",
+	 "LISTACTIONS returns a space-separated list of name=Key pairs showing all "
+	 "actions the game has registered and which keys are bound to them. "
+	 "Prefer ACTION over raw KEYDOWN/KEYUP for interacting with game controls."},
+
+	{"ACTION", "Trigger a named game action",
+	 "ACTION <name> [HOLD|RELEASE] triggers a registered game action. Without "
+	 "a modifier, the action is pressed and auto-released after the next frame. "
+	 "HOLD keeps the action pressed until RELEASE is sent. This is the preferred "
+	 "way to interact with game controls — use LISTACTIONS to discover available "
+	 "actions."},
+
+	{"SEED", "Set the random number generator seed",
+	 "SEED <n> sets the RNG seed to the given unsigned integer, enabling "
+	 "deterministic runs when combined with --fixed-dt."},
+
+	{"QUERY", "Query game state (frame, size, fps, or a variable)",
+	 "QUERY FRAME returns the current frame number. QUERY SIZE returns the "
+	 "window dimensions as \"width height\". QUERY FPS returns the current "
+	 "frame rate. QUERY VAR <name> returns the value of a registered game "
+	 "variable — use LISTVAR to see available variables."},
+
+	{"LISTVAR", "List all registered game state variables",
+	 "LISTVAR returns a space-separated list of variable names that the game "
+	 "has registered. Use QUERY VAR <name> to read their values."},
+
+	{"CAPSCREEN", "Capture the full screen to a file or as base64",
+	 "CAPSCREEN [filename] saves a full-screen PNG to the capture directory. "
+	 "If no filename is given, an auto-generated name is used. "
+	 "CAPSCREEN --base64 returns the PNG as base64-encoded data instead of "
+	 "writing to disk. Response includes the file path or base64 data."},
+
+	{"CAPRECT", "Capture a screen region to a file or as base64",
+	 "CAPRECT <x> <y> <w> <h> [filename|--base64] captures a rectangular "
+	 "region of the screen. Coordinates use top-left origin. Like CAPSCREEN, "
+	 "it can save to a file or return base64 data."},
+
+	{"READPIXEL", "Read the RGB color at a screen coordinate",
+	 "READPIXEL <x> <y> returns the color at the given pixel as three integers "
+	 "\"R G B\" (0-255 each). Coordinates use top-left origin."},
+
+	{"CAPAUDIO", "Start or stop audio capture",
+	 "CAPAUDIO START begins recording mixed audio output. CAPAUDIO STOP [filename] "
+	 "writes the captured audio as a 44100 Hz 16-bit stereo WAV file. If no "
+	 "filename is given, an auto-generated name is used. The response includes "
+	 "the output file path."},
+
+	{"FRAMEDELAY", "Pause command reading for N frames (file replay)",
+	 "FRAMEDELAY <count> delays reading the next command by count frames. "
+	 "This is primarily useful in replay files to control timing. This is a "
+	 "blocking command."},
+
+	{"WAITEVENT", "Wait for a game event before continuing",
+	 "WAITEVENT FRAME waits until the next frame completes and returns the "
+	 "frame number. This is a blocking command — no further commands are "
+	 "processed until the event occurs."},
+};
+
+#define HELP_TABLE_SIZE (int)(sizeof(help_table) / sizeof(help_table[0]))
+
+static void
+cmd_help(void)
+{
+	if (num_tokens >= 2) {
+		/* HELP <command> — show detailed help */
+		int i;
+		for (i = 0; i < HELP_TABLE_SIZE; i++) {
+			if (strcasecmp(tokens[1], help_table[i].name) == 0) {
+				send_resp("OK %s — %s", help_table[i].name,
+				          help_table[i].detail);
+				return;
+			}
+		}
+		resp_err("unknown command");
+		return;
+	}
+
+	/* HELP — list all commands */
+	{
+		char *p = resp_buf;
+		char *end = resp_buf + sizeof(resp_buf) - 2;
+		int i;
+
+		p += snprintf(p, end - p, "OK");
+		for (i = 0; i < HELP_TABLE_SIZE && p < end; i++)
+			p += snprintf(p, end - p, " %s:%s;",
+			              help_table[i].name, help_table[i].summary);
+		*p++ = '\n';
+		*p = '\0';
+		if (client_fd != SOCK_INVALID)
+			send(client_fd, resp_buf, p - resp_buf, 0);
+	}
+}
+
 /* ---- Command handlers ---- */
 
 static void
@@ -375,12 +538,12 @@ cmd_keydown(void)
 	enum lud_keycode kc;
 	if (num_tokens < 2) { resp_err("usage: KEYDOWN <key>"); return; }
 	kc = lud_key_from_name(tokens[1]);
-	if (kc == LUD_KEY_UNKNOWN) { resp_err("unknown key"); return; }
+	if (kc == LUD_KEY_UNKNOWN) { resp_err("unknown key — see HELP KEYDOWN"); return; }
 	memset(&ev, 0, sizeof(ev));
 	ev.type = LUD_EV_KEY_DOWN;
 	ev.key.keycode = kc;
 	lud__event_push(&ev);
-	resp_ok(NULL);
+	send_resp("OK key %s down", tokens[1]);
 }
 
 static void
@@ -390,12 +553,12 @@ cmd_keyup(void)
 	enum lud_keycode kc;
 	if (num_tokens < 2) { resp_err("usage: KEYUP <key>"); return; }
 	kc = lud_key_from_name(tokens[1]);
-	if (kc == LUD_KEY_UNKNOWN) { resp_err("unknown key"); return; }
+	if (kc == LUD_KEY_UNKNOWN) { resp_err("unknown key — see HELP KEYUP"); return; }
 	memset(&ev, 0, sizeof(ev));
 	ev.type = LUD_EV_KEY_UP;
 	ev.key.keycode = kc;
 	lud__event_push(&ev);
-	resp_ok(NULL);
+	send_resp("OK key %s up", tokens[1]);
 }
 
 static void
@@ -498,10 +661,16 @@ cmd_action(void)
 	}
 
 	if (lud__action_inject(tokens[1], mode) != 0) {
-		resp_err("unknown action");
+		resp_err("unknown action — send LISTACTIONS to see available actions");
 		return;
 	}
-	resp_ok(NULL);
+
+	if (mode == 1)
+		send_resp("OK action %s held", tokens[1]);
+	else if (mode == 2)
+		send_resp("OK action %s released", tokens[1]);
+	else
+		send_resp("OK action %s pressed", tokens[1]);
 }
 
 static int
@@ -547,7 +716,7 @@ cmd_seed(void)
 	if (num_tokens < 2) { resp_err("usage: SEED <n>"); return; }
 	s = (unsigned int)strtoul(tokens[1], NULL, 10);
 	srand(s);
-	resp_ok(NULL);
+	send_resp("OK seed set to %u", s);
 }
 
 static void
@@ -607,8 +776,64 @@ static void
 cmd_resume(void)
 {
 	lud__state.paused = 0;
-	resp_ok(NULL);
+	resp_ok("game resumed");
 }
+
+static void
+cmd_nokill(void)
+{
+	auto_kill = 0;
+	resp_ok("auto-terminate disabled");
+}
+
+#ifndef _WIN32
+static void
+cmd_restart(void)
+{
+	char fd_arg[32];
+	char **new_argv;
+	int argc, i, j;
+
+	if (!lud__state.desc.argv || !lud__state.desc.argv[0]) {
+		resp_err("no argv[0] — cannot restart");
+		return;
+	}
+
+	resp_ok("restarting");
+
+	/* close client connection (listen socket stays open) */
+	if (client_fd != SOCK_INVALID) {
+		sock_close(client_fd);
+		client_fd = SOCK_INVALID;
+	}
+
+	/* build new argv: original args + ---listenfd=<fd> */
+	argc = lud__state.desc.argc;
+	new_argv = malloc(sizeof(char *) * (argc + 2));
+	if (!new_argv) {
+		lud_err("automation: restart malloc failed");
+		return;
+	}
+
+	j = 0;
+	for (i = 0; i < argc; i++) {
+		/* strip any existing ---listenfd argument */
+		if (strncmp(lud__state.desc.argv[i], "---listenfd=", 12) == 0)
+			continue;
+		new_argv[j++] = lud__state.desc.argv[i];
+	}
+	snprintf(fd_arg, sizeof(fd_arg), "---listenfd=%d", (int)listen_fd);
+	new_argv[j++] = fd_arg;
+	new_argv[j] = NULL;
+
+	lud_log("automation: execv(%s)", new_argv[0]);
+	execv(new_argv[0], new_argv);
+
+	/* if execv returns, it failed */
+	lud_err("automation: execv failed: %s", strerror(errno));
+	free(new_argv);
+}
+#endif
 
 /* ---- Capture commands ---- */
 
@@ -684,7 +909,7 @@ cmd_capaudio(void)
 
 	if (strcasecmp(tokens[1], "START") == 0) {
 		lud_audio_capture_start();
-		resp_ok(NULL);
+		resp_ok("audio capture started");
 	} else if (strcasecmp(tokens[1], "STOP") == 0) {
 		const char *dir = lud__state.capture_dir
 		                  ? lud__state.capture_dir : ".";
@@ -695,9 +920,9 @@ cmd_capaudio(void)
 			snprintf(path, sizeof(path), "%s/capture_%06llu.wav",
 			         dir, lud__state.frame_count);
 		if (lud_audio_capture_stop(path) == 0)
-			send_resp("OK %s", path);
+			send_resp("OK audio saved to %s", path);
 		else
-			resp_err("no audio captured");
+			resp_err("no audio captured — call CAPAUDIO START first");
 	} else {
 		resp_err("usage: CAPAUDIO START|STOP [filename]");
 	}
@@ -712,7 +937,8 @@ process_command(const char *line)
 	if (tokenize(line) == 0)
 		return 0;
 
-	if (strcasecmp(tokens[0], "KEYDOWN") == 0)       cmd_keydown();
+	if (strcasecmp(tokens[0], "HELP") == 0)           cmd_help();
+	else if (strcasecmp(tokens[0], "KEYDOWN") == 0)   cmd_keydown();
 	else if (strcasecmp(tokens[0], "KEYUP") == 0)     cmd_keyup();
 	else if (strcasecmp(tokens[0], "MOUSEMOVE") == 0) cmd_mousemove();
 	else if (strcasecmp(tokens[0], "MOUSEDOWN") == 0) cmd_mousedown();
@@ -727,12 +953,16 @@ process_command(const char *line)
 	else if (strcasecmp(tokens[0], "QUERY") == 0)     cmd_query();
 	else if (strcasecmp(tokens[0], "LISTVAR") == 0)   cmd_listvar();
 	else if (strcasecmp(tokens[0], "QUIT") == 0)      cmd_quit();
+	else if (strcasecmp(tokens[0], "NOKILL") == 0)    cmd_nokill();
+#ifndef _WIN32
+	else if (strcasecmp(tokens[0], "RESTART") == 0)   cmd_restart();
+#endif
 	else if (strcasecmp(tokens[0], "RESUME") == 0)    cmd_resume();
 	else if (strcasecmp(tokens[0], "CAPSCREEN") == 0) cmd_capscreen();
 	else if (strcasecmp(tokens[0], "CAPRECT") == 0)   cmd_caprect();
 	else if (strcasecmp(tokens[0], "READPIXEL") == 0) cmd_readpixel();
-	else if (strcasecmp(tokens[0], "CAPAUDIO") == 0) cmd_capaudio();
-	else resp_err("unknown command");
+	else if (strcasecmp(tokens[0], "CAPAUDIO") == 0)  cmd_capaudio();
+	else resp_err("unknown command — send HELP for a list of commands");
 
 	return 0;
 }
@@ -794,6 +1024,7 @@ try_accept(void)
 	sock_set_nonblock(fd);
 	client_fd = fd;
 	line_len = 0;
+	had_client = 1;
 	lud_log("automation: client connected");
 }
 
@@ -807,6 +1038,10 @@ close_client(void)
 		stepping = 0;
 		wait_frame = 0;
 		lud_log("automation: client disconnected");
+		if (had_client && auto_kill) {
+			lud_log("automation: auto-terminating (send NOKILL to disable)");
+			lud_quit();
+		}
 	}
 }
 
@@ -889,7 +1124,26 @@ replay_poll(void)
 void
 lud__auto_init(void)
 {
-	if (lud__state.auto_port > 0) {
+#ifndef _WIN32
+	/* Check for inherited listen fd from RESTART (---listenfd=N) */
+	{
+		int i;
+		for (i = 1; i < lud__state.desc.argc; i++) {
+			if (strncmp(lud__state.desc.argv[i], "---listenfd=", 12) == 0) {
+				int fd = atoi(lud__state.desc.argv[i] + 12);
+				if (fd > 0) {
+					listen_fd = fd;
+					sock_platform_init();
+					sock_set_nonblock(listen_fd);
+					lud_log("automation: inherited listen fd %d", fd);
+				}
+				break;
+			}
+		}
+	}
+#endif
+
+	if (listen_fd == SOCK_INVALID && lud__state.auto_port > 0) {
 		start_listener(lud__state.auto_port);
 	}
 

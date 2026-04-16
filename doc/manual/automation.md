@@ -27,6 +27,9 @@ _out/x86_64-linux-gnu/bin/hero --auto-port 4000 --paused --fixed-dt
 The game starts frozen. The agent advances frames with `step`, observes the
 screen with `screenshot`, and sends input with `do_action` or `send_keys`.
 
+The game auto-terminates when the first TCP client disconnects. Send `NOKILL`
+early in the session to keep it running for multiple connections.
+
 ## Command-Line Flags
 
 These flags are parsed by `lud_run()` and apply to any ludica program:
@@ -49,6 +52,16 @@ The automation server accepts one TCP connection at a time on the specified
 port. Protocol: one command per line (`\n` terminated), one response per
 command. All responses are `OK [data]` or `ERR <message>`.
 
+### Help
+
+```
+HELP                    -> OK STEP:Advance N frames; RESUME:Unpause; ...
+HELP <command>          -> OK STEP — Detailed description of the command...
+```
+
+List all commands with one-line summaries, or get a detailed paragraph
+about a specific command.
+
 ### Frame Control
 
 ```
@@ -66,7 +79,7 @@ Pause command reading for N frames. For scripted replay files alongside
 real-time playback.
 
 ```
-SEED <n>                -> OK
+SEED <n>                -> OK seed set to <n>
 ```
 
 Set the RNG seed for deterministic runs.
@@ -137,6 +150,22 @@ START begins recording the mixed audio output. STOP writes a WAV file
 (44100 Hz, 16-bit stereo) and returns the path. If no filename is given,
 one is generated from the frame count.
 
+### Lifecycle
+
+```
+QUIT                            -> OK
+NOKILL                          -> OK auto-terminate disabled
+RESTART                         -> OK restarting
+RESUME                          -> OK game resumed
+```
+
+By default, the game auto-terminates when the first TCP client disconnects.
+Send `NOKILL` to disable this, allowing the game to accept new connections.
+
+`RESTART` re-execs the game process via `execv()`, picking up any newly
+built binary. The listen socket is preserved so the same port stays active.
+Not available on Windows.
+
 ### State Queries
 
 ```
@@ -145,7 +174,6 @@ QUERY SIZE                      -> OK <w> <h>
 QUERY FPS                       -> OK <fps>
 QUERY VAR <name>                -> OK <value>
 LISTVAR                         -> OK name1 name2 ...
-QUIT                            -> OK
 ```
 
 Games register queryable variables with:
@@ -183,6 +211,9 @@ Default port is 4000. The server implements MCP protocol version
 | `mouse_click` | Click at position | `x`, `y`, `button` |
 | `audio_capture` | Start/stop audio recording | `action` (start/stop), `file` |
 | `quit` | Request game exit | -- |
+| `help` | List commands or get detailed help | `command` (optional) |
+| `restart` | Re-exec with fresh binary | -- |
+| `nokill` | Disable auto-terminate on disconnect | -- |
 
 ### Tool Details
 

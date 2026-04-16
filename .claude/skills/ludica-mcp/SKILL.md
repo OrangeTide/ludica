@@ -98,6 +98,19 @@ The game is frozen between steps. Nothing happens until you call `step`.
 
 - **`quit`** -- Ask the game to exit cleanly.
 
+- **`nokill`** -- Disable auto-terminate. By default the game exits when
+  the first TCP client disconnects. Call this early if you want the game
+  to keep running for multiple sessions.
+
+- **`restart`** -- Re-exec the game process with the latest built binary.
+  The listen port is preserved. Call this after rebuilding to pick up code
+  changes without manually restarting. Your TCP connection will close —
+  reconnect after a brief pause.
+
+- **`help(command?)`** -- List all TCP commands with summaries, or get
+  detailed help for a specific command. Useful when you need to understand
+  the protocol or check available commands.
+
 ## Tips
 
 - Always call `list_actions` at the start. Prefer `do_action` over
@@ -121,3 +134,10 @@ The game is frozen between steps. Nothing happens until you call `step`.
 - If a tool returns "not connected to game", the game isn't running or
   is on a different port. The game must be started separately with
   `--auto-port`.
+
+- All commands return descriptive messages on success (e.g. "action jump
+  pressed", "saved 800x600 PNG to ./capture/frame_000042.png"). Check
+  these messages to confirm the operation worked as expected.
+
+- Call `help` to see all available commands. Call `help(command="STEP")`
+  for a detailed description of any specific command.

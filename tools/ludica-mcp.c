@@ -341,6 +341,21 @@ static const char *tools_json =
 
 	"{\"name\":\"quit\","
 	 "\"description\":\"Request the game to exit\","
+	 "\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
+
+	"{\"name\":\"help\","
+	 "\"description\":\"List all automation commands or get detailed help for a specific command\","
+	 "\"inputSchema\":{\"type\":\"object\","
+	  "\"properties\":{"
+	   "\"command\":{\"type\":\"string\",\"description\":\"Command name for detailed help (omit to list all)\"}"
+	  "}}},"
+
+	"{\"name\":\"restart\","
+	 "\"description\":\"Re-exec the game process with a freshly built binary. Preserves the listen port.\","
+	 "\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
+
+	"{\"name\":\"nokill\","
+	 "\"description\":\"Disable auto-terminate so the game stays running after client disconnects\","
 	 "\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}"
 	"]";
 /* clang-format on */
@@ -525,6 +540,7 @@ handle_tool_call(const char *json, const jsmntok_t *t, int ntok,
 			result_image(resp_buf, sizeof(resp_buf), id_raw,
 			             reply + 10);
 		} else if (strncmp(reply, "OK ", 3) == 0) {
+			/* file save — pass through the full message (e.g. "saved 800x600 PNG to /path") */
 			result_text(resp_buf, sizeof(resp_buf), id_raw,
 			            reply + 3, 0);
 		} else {
@@ -681,6 +697,53 @@ handle_tool_call(const char *json, const jsmntok_t *t, int ntok,
 			            "not connected to game", 1);
 		else
 			result_text(resp_buf, sizeof(resp_buf), id_raw, "OK", 0);
+
+	/* ---- help ---- */
+	} else if (strcmp(name, "help") == 0) {
+		char command[64] = "";
+		char cmd[128];
+		get_arg_str(json, t, ntok, args_idx, "command", command,
+		            sizeof(command));
+		if (command[0])
+			snprintf(cmd, sizeof(cmd), "HELP %s", command);
+		else
+			snprintf(cmd, sizeof(cmd), "HELP");
+		reply = tcp_command(cmd);
+		if (!reply)
+			result_text(resp_buf, sizeof(resp_buf), id_raw,
+			            "not connected to game", 1);
+		else if (strncmp(reply, "OK ", 3) == 0)
+			result_text(resp_buf, sizeof(resp_buf), id_raw,
+			            reply + 3, 0);
+		else
+			result_text(resp_buf, sizeof(resp_buf), id_raw, reply, 1);
+
+	/* ---- restart ---- */
+	} else if (strcmp(name, "restart") == 0) {
+		reply = tcp_command("RESTART");
+		if (!reply)
+			result_text(resp_buf, sizeof(resp_buf), id_raw,
+			            "not connected to game", 1);
+		else if (strncmp(reply, "OK", 2) == 0) {
+			/* close our connection — the game is re-execing */
+			sock_close(game_fd);
+			game_fd = SOCK_INVALID;
+			result_text(resp_buf, sizeof(resp_buf), id_raw,
+			            "game is restarting", 0);
+		} else
+			result_text(resp_buf, sizeof(resp_buf), id_raw, reply, 1);
+
+	/* ---- nokill ---- */
+	} else if (strcmp(name, "nokill") == 0) {
+		reply = tcp_command("NOKILL");
+		if (!reply)
+			result_text(resp_buf, sizeof(resp_buf), id_raw,
+			            "not connected to game", 1);
+		else if (strncmp(reply, "OK", 2) == 0)
+			result_text(resp_buf, sizeof(resp_buf), id_raw,
+			            reply + (reply[2] == ' ' ? 3 : 2), 0);
+		else
+			result_text(resp_buf, sizeof(resp_buf), id_raw, reply, 1);
 
 	} else {
 		result_text(resp_buf, sizeof(resp_buf), id_raw,

@@ -11,10 +11,7 @@ Usage:
 - [ ] in game GUI. (TBD: cimgui or custom immediate mode)
 - [ ] a small top-down game. collect lots of items
 - [ ] improve ludica-mcp
-  - better skill information. I think some of the commands for --auto-port are not written correctly.
-  - add a kill command so the agent doesn't need to keep asking me to run bash commands to kill processes.
   - a common pattern is to --pause then skip N frames. might be easier to have a built-in skip on the command-line.
-  - set SO_REUSEADDR on the listen address. having to fight dead sessions blocking us has wasted too much time.
 
 ## Future
 
