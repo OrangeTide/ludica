@@ -78,6 +78,15 @@ typedef struct {
 	const void *data;   /* initial pixel data, or NULL */
 } lud_texture_desc_t;
 
+/* Texture array creation descriptor (GLES3 only; GL_TEXTURE_2D_ARRAY) */
+typedef struct {
+	int width, height;
+	int num_layers;
+	enum lud_pixel_format format;
+	enum lud_filter min_filter;
+	enum lud_filter mag_filter;
+} lud_texture_array_desc_t;
+
 /* --- Resource lifecycle --- */
 
 lud_shader_t  lud_make_shader(const lud_shader_desc_t *desc);
@@ -88,6 +97,10 @@ void             lud_destroy_mesh(lud_mesh_t mesh);
 
 lud_texture_t lud_make_texture(const lud_texture_desc_t *desc);
 void             lud_destroy_texture(lud_texture_t tex);
+
+/* Texture array (GLES3 only; returns zero-handle if GLES2) */
+lud_texture_t lud_make_texture_array(const lud_texture_array_desc_t *desc);
+void lud_texture_array_set_layer(lud_texture_t arr, int layer, const void *data);
 
 /* --- Shader operations --- */
 

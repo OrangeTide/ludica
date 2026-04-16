@@ -3,6 +3,19 @@
 #include <GLES2/gl2.h>
 #include <string.h>
 
+/* GLES3 3D texture functions (for texture arrays) */
+#ifndef glTexImage3D
+extern void glTexImage3D(GLenum target, GLint level, GLint internalformat,
+                         GLsizei width, GLsizei height, GLsizei depth, GLint border,
+                         GLenum format, GLenum type, const void *data);
+#endif
+#ifndef glTexSubImage3D
+extern void glTexSubImage3D(GLenum target, GLint level,
+                            GLint xoffset, GLint yoffset, GLint zoffset,
+                            GLsizei width, GLsizei height, GLsizei depth,
+                            GLenum format, GLenum type, const void *data);
+#endif
+
 /* GLES3 formats (not in GLES2 headers) */
 #ifndef GL_SRGB8
 #define GL_SRGB8       0x8C41
@@ -34,6 +47,9 @@
 #ifndef GL_UNSIGNED_SHORT
 #define GL_UNSIGNED_SHORT 0x1403
 #endif
+#ifndef GL_TEXTURE_2D_ARRAY
+#define GL_TEXTURE_2D_ARRAY 0x8C1A
+#endif
 
 #define MAX_TEXTURES 64
 
@@ -41,6 +57,8 @@ typedef struct {
 	int used;
 	GLuint tex;
 	int width, height;
+	int num_layers;       /* for arrays; 0 for 2D textures */
+	GLenum target;        /* GL_TEXTURE_2D or GL_TEXTURE_2D_ARRAY */
 	GLenum gl_format;     /* external format (GL_RGB, GL_RGBA, ...) */
 	GLenum gl_internal;   /* internal format (may differ for sRGB) */
 	GLenum gl_type;       /* pixel type (GL_UNSIGNED_BYTE, GL_HALF_FLOAT, ...) */
@@ -149,6 +167,8 @@ lud_make_texture(const lud_texture_desc_t *desc)
 	s->used = 1;
 	s->width = desc->width;
 	s->height = desc->height;
+	s->num_layers = 0;
+	s->target = GL_TEXTURE_2D;
 	s->gl_format = gl_fmt;
 	s->gl_internal = gl_internal;
 	s->gl_type = gl_type;
@@ -192,7 +212,11 @@ lud_bind_texture(lud_texture_t tex, int unit)
 {
 	texture_slot_t *s = get_slot(tex);
 	glActiveTexture(GL_TEXTURE0 + unit);
-	glBindTexture(GL_TEXTURE_2D, s ? s->tex : 0);
+	if (s) {
+		glBindTexture(s->target, s->tex);
+	} else {
+		glBindTexture(GL_TEXTURE_2D, 0);
+	}
 }
 
 void
@@ -243,4 +267,87 @@ void
 lud_viewport(int x, int y, int w, int h)
 {
 	glViewport(x, y, w, h);
+}
+
+/* --- Texture arrays (GLES3 only) --- */
+
+lud_texture_t
+lud_make_texture_array(const lud_texture_array_desc_t *desc)
+{
+	lud_texture_t out = {0};
+	texture_slot_t *s;
+	GLenum gl_fmt, gl_internal, gl_type;
+	int bpp, idx;
+
+	/* GLES3 required */
+	if (lud__state.gles_version < 3) {
+		lud_err("texture arrays require GLES3");
+		return out;
+	}
+
+	idx = alloc_slot();
+	if (idx < 0) {
+		lud_err("texture pool exhausted");
+		return out;
+	}
+
+	format_to_gl(desc->format, &gl_fmt, &gl_internal, &gl_type, &bpp);
+
+	s = &slots[idx];
+	memset(s, 0, sizeof(*s));
+	s->used = 1;
+	s->width = desc->width;
+	s->height = desc->height;
+	s->num_layers = desc->num_layers;
+	s->target = GL_TEXTURE_2D_ARRAY;
+	s->gl_format = gl_fmt;
+	s->gl_internal = gl_internal;
+	s->gl_type = gl_type;
+	s->bpp = bpp;
+
+	glGenTextures(1, &s->tex);
+	glBindTexture(GL_TEXTURE_2D_ARRAY, s->tex);
+	glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER,
+	                filter_to_gl(desc->min_filter));
+	glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER,
+	                filter_to_gl(desc->mag_filter));
+	glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+	if (bpp == 1)
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+	/* Allocate array storage without initial data */
+	glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, gl_internal,
+	             desc->width, desc->height, desc->num_layers, 0,
+	             gl_fmt, gl_type, NULL);
+
+	if (bpp == 1)
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+
+	glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+
+	out.id = (unsigned)(idx + 1);
+	return out;
+}
+
+void
+lud_texture_array_set_layer(lud_texture_t arr, int layer, const void *data)
+{
+	texture_slot_t *s = get_slot(arr);
+	if (!s || !data || layer < 0 || layer >= s->num_layers)
+		return;
+
+	glBindTexture(GL_TEXTURE_2D_ARRAY, s->tex);
+
+	if (s->bpp == 1)
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+	glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0,
+	                0, 0, layer,
+	                s->width, s->height, 1,
+	                s->gl_format, s->gl_type, data);
+
+	if (s->bpp == 1)
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 }
