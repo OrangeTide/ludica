@@ -256,6 +256,25 @@ Events are opt-in: a client subscribes with `subscribe <pattern>` (glob)
 and unsubscribes with `unsubscribe`. Clients that do not subscribe never
 see events and can use a strict request/response loop.
 
+### Command style
+
+Commands follow a `noun_verb` naming convention (`log_grep`,
+`gdb_core_backtrace`, `session_attach`) but are **stateless**: there is
+no "current buffer" or "selected object" held between calls. Every
+command carries everything it needs to act.
+
+Where a command can target multiple instances of the same kind of
+object, the targets appear as **trailing positional arguments**, like
+file arguments to shell utilities. `grep PATTERN file1 file2` becomes
+`log_grep PATTERN stdout stderr`. Omitting the targets means "all
+applicable" — `log_grep PATTERN` searches both streams. Single-instance
+targets (the running process, the session's control fd) take no
+selector.
+
+Optional named parameters use `--key=value`. Positional arguments are
+for required or obvious targets; flags are for tuning (`--limit=N`,
+`--core=PATH`, `--base64`).
+
 ### Lifecycle commands
 
 ```
@@ -280,14 +299,19 @@ a running process.
 ### Log commands
 
 ```
-log_tail <stream> <n>                 -> OK <n lines>
-log_head <stream> <n>                 -> OK <n lines>
-log_range <stream> <a> <b>            -> OK <lines a..b>
-log_grep <stream> <regex> [ctx=<n>]   -> OK <matching lines with context>
-log_where <stream> <field>=<value>... -> OK <matching JSON lines>
-log_jq <stream> <jq-expr>             -> OK <jq output>
-log_clear <stream>                    -> OK cleared
+log_tail <n> [streams...]                      -> OK <n lines>
+log_head <n> [streams...]                      -> OK <n lines>
+log_range <a> <b> [streams...]                 -> OK <lines a..b>
+log_grep <regex> [--ctx=<n>] [streams...]      -> OK <matching lines>
+log_where <field>=<value>... [streams...]      -> OK <matching JSON lines>
+log_jq <jq-expr> [streams...]                  -> OK <jq output>
+log_clear [streams...]                         -> OK cleared
 ```
+
+A `stream` argument is `stdout` or `stderr`. When no streams are given,
+the command operates on both, merged in timestamp order. Supplying one
+or more stream names restricts the operation — exactly like file
+arguments to `grep`, `tail`, `head`.
 
 `log_where` is structural: each line is parsed as JSON and filtered by
 field equality (or `field~regex` for pattern match on a field value).
@@ -295,15 +319,15 @@ Non-JSON lines are skipped. See "Game-side Log Format" below.
 
 `log_jq` pipes the buffer through `jq` (via fork/exec/pipe) and returns
 its output. The agent writes jq expressions directly —
-`log_jq stderr 'select(.lvl=="error") | .msg'` — which is far more
+`log_jq 'select(.lvl=="error") | .msg' stderr` — which is far more
 expressive than anything we'd reinvent. Errors from `jq`
 (expression syntax, missing binary) surface as `ERR jq: <reason>`.
 Requires `jq` to be on `PATH`.
 
-`<stream>` is one of `stdout`, `stderr`, `both`. Line numbers are 1-based
-and refer to the current contents of the circular buffer (earliest
-retained line is line 1). `log_grep` uses POSIX extended regex (`regcomp`
-with `REG_EXTENDED`); upgrade to PCRE only if real use cases demand it.
+Line numbers are 1-based and refer to the current contents of the
+circular buffer (earliest retained line is line 1). `log_grep` uses
+POSIX extended regex (`regcomp` with `REG_EXTENDED`); upgrade to PCRE
+only if real use cases demand it.
 
 Logs persist across game exit. They are cleared on the next `spawn`.
 
@@ -349,22 +373,24 @@ the skill documentation.
 Post-mortem (core file):
 
 ```
-gdb_core_find                         -> OK path=<path>  | ERR no_core
-gdb_core_list                         -> OK <path1> <path2> ...
-gdb_core_summary                      -> OK <file:line in func: <signal>>
-gdb_core_backtrace [limit]            -> OK <backtrace>
-gdb_core_frame <n>                    -> OK <frame detail>
-gdb_core_locals [frame]               -> OK <locals>
+gdb_core_find                                  -> OK path=<path>  | ERR no_core
+gdb_core_list                                  -> OK <path1> <path2> ...
+gdb_core_summary   [--core=<path>]             -> OK <file:line in func: <signal>>
+gdb_core_backtrace [--core=<path>] [--limit=N] -> OK <backtrace>
+gdb_core_frame <n> [--core=<path>]             -> OK <frame detail>
+gdb_core_locals    [--core=<path>] [--frame=N] -> OK <locals>
 ```
 
 `gdb_core_find` returns the most recent core matching the last spawned
-binary. `gdb_core_summary` runs a canned `gdb -batch` that produces a
-single-line summary pointing at the first frame outside the crash
-infrastructure (`raise`, `abort`, `__assert_fail`, `__GI_*`, and
-`_start` are skipped). `gdb_core_backtrace` returns the full trace for
-deeper analysis. `gdb_core_frame N` and `gdb_core_locals [N]` let the
-agent drill into a specific frame without asking for the whole trace
-again.
+binary. The other `gdb_core_*` commands default to that same core; pass
+`--core=<path>` (from `gdb_core_list`) to target a different one —
+targets are explicit, never held as hidden state. `gdb_core_summary`
+runs a canned `gdb -batch` that produces a single-line summary pointing
+at the first frame outside the crash infrastructure (`raise`, `abort`,
+`__assert_fail`, `__GI_*`, and `_start` are skipped).
+`gdb_core_backtrace` returns the full trace for deeper analysis.
+`gdb_core_frame N` and `gdb_core_locals --frame=N` drill into a
+specific frame without asking for the whole trace again.
 
 All `gdb_core_*` commands work whether or not a process is currently
 running: they operate on the saved core file, not on the live process.
@@ -372,18 +398,20 @@ running: they operate on the saved core file, not on the live process.
 ### Session commands
 
 ```
-session info                          -> OK id=<n> name=<name> attached=<yes|no>
-session name <name>                   -> OK
-session detach                        -> OK detached  (connection then closes)
-session attach <name>                 -> OK attached
-session nokill                        -> OK           (game outlives disconnect)
-session list                          -> OK <session1> <session2> ...
-session kill <name>                   -> OK           (force-destroy a named session)
+session_info                          -> OK id=<n> name=<name> attached=<yes|no>
+session_name <name>                   -> OK
+session_detach                        -> OK detached  (connection then closes)
+session_attach <name>                 -> OK attached
+session_nokill                        -> OK           (game outlives disconnect)
+session_list                          -> OK <session1> <session2> ...
+session_kill <name>                   -> OK           (force-destroy a named session)
 ```
 
-`session list` is global — it lets one agent discover what other
+`session_list` is global — it lets one agent discover what other
 sessions are active. It does not expose per-session log or process
-detail; those require an attach.
+detail; those require an attach. `session_kill` takes an explicit
+name rather than a hidden "current session" because sessions are the
+one kind of object where selecting the wrong target is most dangerous.
 
 ### Meta commands
 
@@ -605,7 +633,7 @@ asks the user to start it.
 5. Agent: `step 1`, `screenshot`, repeat
 6. Game crashes. Agent: `status` → `OK signaled sig=11 core=/var/lib/systemd/coredump/...`
 7. Agent: `gdb_core_summary` → `OK src/hero/hero.c:214 in draw_sector_recursive: SIGSEGV`
-8. Agent: `log_tail stderr 20` — reads the last output before the crash
+8. Agent: `log_tail 20 stderr` — reads the last output before the crash
 9. If needed: `gdb_core_backtrace 30` for the full trace
 10. Agent fixes code, rebuilds, `spawn hero ...` again — the new core
     replaces the old in the cache
