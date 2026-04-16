@@ -5,7 +5,21 @@ Usage:
 - Commit this file with the related changes.
 - Agents don't need to scan past the DONE section. can read this file with this command: `sed '/^# DONE/q' TODO.md`
 
-## Next-term
+## Near-term
+
+- [ ] ludica-mcp - the agents struggle to use it. multiple failed attempts to start it. problems with duplicate processes. using manual kill signals. requires a lot of approvals to run netcat (nc) commands. no help command but the agents often request it.
+  - [ ] add HELP command to list every command with a 1-line summary. and HELP <command> to give a more detailed info on on a particular command. (1 paragraph is fine)
+  - [X] add QUIT command to terminate
+  - [ ] add RESTART command that does execv() on itself. so that if a new executable is built it can start again. hidden command-line option ---listenfd=%d preserves the listenfd. (since SOCK_CLOEXEC wasn't used this should work)
+  - [ ] automatically terminate program after the first connection closes. (add a NOKILL command to disable this behavior)
+  - [ ] use SO_REUSEADDR for listen socket so the most recently ran instance "wins" and duplicates are less of an issue.
+  - [ ] can we interface it more easily than calling nc over and over again, how can we streamline an agent's access to this MCP?
+    - from one session: ludica-mcp tools weren't available as MCP tools in this session — I had to fall back to raw TCP commands (STEP, CAPSCREEN, QUIT). The MCP server may need a session restart to pick up.
+  - [ ] some agents have trouble with the format or status of the SCREENSHOT command. what could be wrong?
+  - [ ] add some reporting message to the commands so that success or failure are obvious to the agent. this might help with the screenshot, to know where the screenshot is saved?
+  - [ ] update the MCP skill for all of the above. basically we need to make the agents use the MCP and use it effectively.
+
+## Future
 
 - [ ] gamepad support on all architectures. improved to work with our binding system. also bind joystick axis
 - [ ] in game GUI. (TBD: cimgui or custom immediate mode)

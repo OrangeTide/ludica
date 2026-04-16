@@ -106,7 +106,6 @@ struct draw_group {
 };
 
 struct sector_render {
-	lud_mesh_t mesh;
 	struct draw_group groups[MAX_DRAW_GROUPS];
 	int num_groups;
 };
@@ -127,6 +126,7 @@ struct world {
 	const struct map_sector *sectors[MAX_SECTORS];
 	struct sector_render render[MAX_SECTORS];
 	unsigned num_sectors;
+	lud_mesh_t mesh; /* single VBO for all sector geometry */
 	struct texture_set textures[MAX_TEXTURES];
 	unsigned num_textures;
 };
@@ -311,19 +311,26 @@ create_textures(void)
 /* Sector mesh building                                               */
 /* ------------------------------------------------------------------ */
 
+/* Return worst-case vertex count for a sector */
+static int
+sector_max_verts(const struct map_sector *sec)
+{
+	return 2 * (sec->num_sides - 2) * 3 + sec->num_sides * 6;
+}
+
 /*
- * Build all geometry for one sector into a single mesh.
+ * Append geometry for one sector into a shared vertex buffer.
  * Vertices are grouped by texture so we can draw each group with
  * the correct texture bound.
  *
  * Order: floor (tex 0), ceiling (tex 1), then each solid wall.
+ * base_vertex is added to all draw group offsets so they reference
+ * the correct position in the combined world VBO.
  */
-static void
-build_sector_mesh(struct sector_render *sr, const struct map_sector *sec)
+static int
+build_sector_mesh(struct sector_render *sr, const struct map_sector *sec,
+                  struct vertex *verts, int base_vertex)
 {
-	/* worst case vertex count */
-	int max_verts = 2 * (sec->num_sides - 2) * 3 + sec->num_sides * 6;
-	struct vertex *verts = calloc(max_verts, sizeof(*verts));
 	int nv = 0;
 	int ng = 0;
 	unsigned i;
@@ -353,7 +360,8 @@ build_sector_mesh(struct sector_render *sr, const struct map_sector *sec)
 			};
 		}
 		sr->groups[ng++] = (struct draw_group){
-			.tex_index = 0, .first = first, .count = nv - first
+			.tex_index = 0, .first = base_vertex + first,
+			.count = nv - first
 		};
 	}
 
@@ -379,7 +387,8 @@ build_sector_mesh(struct sector_render *sr, const struct map_sector *sec)
 			};
 		}
 		sr->groups[ng++] = (struct draw_group){
-			.tex_index = 1, .first = first, .count = nv - first
+			.tex_index = 1, .first = base_vertex + first,
+			.count = nv - first
 		};
 	}
 
@@ -448,16 +457,42 @@ build_sector_mesh(struct sector_render *sr, const struct map_sector *sec)
 			};
 
 			sr->groups[ng++] = (struct draw_group){
-				.tex_index = ti, .first = first, .count = nv - first
+				.tex_index = ti, .first = base_vertex + first,
+				.count = nv - first
 			};
 		}
 		last = cur;
 	}
 
 	sr->num_groups = ng;
-	sr->mesh = lud_make_mesh(&(lud_mesh_desc_t){
+	return nv;
+}
+
+/*
+ * Build a single merged VBO containing all sector geometry.
+ * Each sector's draw groups reference global vertex offsets.
+ */
+static void
+build_world_mesh(void)
+{
+	unsigned i;
+	int total_max = 0;
+
+	for (i = 0; i < world.num_sectors; i++)
+		total_max += sector_max_verts(world.sectors[i]);
+
+	struct vertex *verts = calloc(total_max, sizeof(*verts));
+	int offset = 0;
+
+	for (i = 0; i < world.num_sectors; i++) {
+		int nv = build_sector_mesh(&world.render[i], world.sectors[i],
+		                           verts + offset, offset);
+		offset += nv;
+	}
+
+	world.mesh = lud_make_mesh(&(lud_mesh_desc_t){
 		.vertices = verts,
-		.vertex_count = nv,
+		.vertex_count = offset,
 		.vertex_stride = sizeof(struct vertex),
 		.layout = {
 			{ .size = 3, .offset = offsetof(struct vertex, x) },
@@ -497,7 +532,7 @@ draw_sector_recursive(unsigned sector_num, int ttl)
 	struct sector_render *sr = &world.render[sector_num];
 	int i;
 
-	/* draw this sector's geometry */
+	/* draw this sector's geometry from the shared world mesh */
 	for (i = 0; i < sr->num_groups; i++) {
 		struct draw_group *g = &sr->groups[i];
 		if (state.use_textures) {
@@ -508,7 +543,7 @@ draw_sector_recursive(unsigned sector_num, int ttl)
 			lud_bind_texture(t->ao, 3);
 			lud_bind_texture(t->height, 4);
 		}
-		lud_draw_range(sr->mesh, g->first, g->count);
+		lud_draw_range(world.mesh, g->first, g->count);
 	}
 
 	/* recurse into portals */
@@ -660,10 +695,9 @@ init(void)
 
 	/* load map */
 	world.num_sectors = ARRAY_SIZE(test_sectors);
-	for (i = 0; i < world.num_sectors; i++) {
+	for (i = 0; i < world.num_sectors; i++)
 		world.sectors[i] = &test_sectors[i];
-		build_sector_mesh(&world.render[i], world.sectors[i]);
-	}
+	build_world_mesh();
 
 	/* init player: center of sector 1, facing 180 degrees */
 	state.player_sector = 1;
@@ -811,8 +845,7 @@ static void
 cleanup(void)
 {
 	unsigned i;
-	for (i = 0; i < world.num_sectors; i++)
-		lud_destroy_mesh(world.render[i].mesh);
+	lud_destroy_mesh(world.mesh);
 	for (i = 0; i < world.num_textures; i++) {
 		lud_destroy_texture(world.textures[i].diffuse);
 		lud_destroy_texture(world.textures[i].normal);
