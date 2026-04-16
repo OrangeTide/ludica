@@ -8,14 +8,20 @@ varying float v_light_dist;
 @end
 
 @vs portal
-attribute vec3 a_position;
-attribute vec2 a_texcoord;
-attribute vec3 a_normal;
-attribute vec3 a_tangent;
-attribute vec3 a_color;
+#version 300 es
+in vec3 a_position;
+in vec2 a_texcoord;
+in vec3 a_normal;
+in vec3 a_tangent;
+in vec3 a_color;
 uniform mat4 u_mvp;
 uniform vec3 u_view_pos;
 uniform vec3 u_light_pos;
+out vec2 v_texcoord;
+out vec3 v_color;
+out vec3 v_tangent_light;
+out vec3 v_tangent_view;
+out float v_light_dist;
 void main() {
     gl_Position = u_mvp * vec4(a_position, 1.0);
     v_texcoord = a_texcoord;
@@ -40,11 +46,20 @@ void main() {
 @end
 
 @fs portal_textured
-uniform sampler2D u_texture;
-uniform sampler2D u_normal_map;
-uniform sampler2D u_roughness_map;
-uniform sampler2D u_ao_map;
-uniform sampler2D u_height_map;
+#version 300 es
+precision mediump float;
+in vec2 v_texcoord;
+in vec3 v_color;
+in vec3 v_tangent_light;
+in vec3 v_tangent_view;
+in float v_light_dist;
+out vec4 out_color;
+uniform sampler2DArray u_texture;
+uniform sampler2DArray u_normal_map;
+uniform sampler2DArray u_roughness_map;
+uniform sampler2DArray u_ao_map;
+uniform sampler2DArray u_height_map;
+uniform int u_texture_layer;
 uniform vec3 u_light_color;
 uniform float u_height_scale;
 
@@ -63,20 +78,20 @@ vec2 parallax_occlusion(vec2 uv, vec3 view_dir) {
     vec2 delta_uv = P / num_layers;
 
     vec2 cur_uv = uv;
-    float cur_height = texture2D(u_height_map, fract(cur_uv)).r;
+    float cur_height = texture(u_height_map, vec3(fract(cur_uv), float(u_texture_layer))).r;
 
     /* step through layers until we hit the surface */
     for (int i = 0; i < 32; i++) {
         if (current_layer >= cur_height) break;
         cur_uv -= delta_uv;
-        cur_height = texture2D(u_height_map, fract(cur_uv)).r;
+        cur_height = texture(u_height_map, vec3(fract(cur_uv), float(u_texture_layer))).r;
         current_layer += layer_depth;
     }
 
     /* interpolate between last two layers for smoother result */
     vec2 prev_uv = cur_uv + delta_uv;
     float after_depth  = cur_height - current_layer;
-    float before_depth = texture2D(u_height_map, fract(prev_uv)).r
+    float before_depth = texture(u_height_map, vec3(fract(prev_uv), float(u_texture_layer))).r
                          - current_layer + layer_depth;
     float weight = after_depth / (after_depth - before_depth);
 
@@ -118,13 +133,13 @@ void main() {
     vec2 uv = parallax_occlusion(v_texcoord, V);
 
     /* albedo from sRGB texture (hardware-decoded to linear by GL_SRGB8) */
-    vec3 albedo = texture2D(u_texture, fract(uv)).rgb;
+    vec3 albedo = texture(u_texture, vec3(fract(uv), float(u_texture_layer))).rgb;
 
     /* sample PBR maps (linear data) */
-    vec3 N = texture2D(u_normal_map, fract(uv)).rgb;
+    vec3 N = texture(u_normal_map, vec3(fract(uv), float(u_texture_layer))).rgb;
     N = normalize(N * 2.0 - 1.0);
-    float roughness = texture2D(u_roughness_map, fract(uv)).r;
-    float ao = texture2D(u_ao_map, fract(uv)).r;
+    float roughness = texture(u_roughness_map, vec3(fract(uv), float(u_texture_layer))).r;
+    float ao = texture(u_ao_map, vec3(fract(uv), float(u_texture_layer))).r;
 
     vec3 L = normalize(v_tangent_light);
     vec3 H = normalize(L + V);
@@ -170,12 +185,20 @@ void main() {
     /* linear -> sRGB gamma correction */
     color = pow(color, vec3(1.0 / 2.2));
 
-    gl_FragColor = vec4(color, 1.0);
+    out_color = vec4(color, 1.0);
 }
 @end
 
 @fs portal_colored
+#version 300 es
+precision mediump float;
+in vec2 v_texcoord;
+in vec3 v_color;
+in vec3 v_tangent_light;
+in vec3 v_tangent_view;
+in float v_light_dist;
+out vec4 out_color;
 void main() {
-    gl_FragColor = vec4(v_color, 1.0);
+    out_color = vec4(v_color, 1.0);
 }
 @end

@@ -22,6 +22,9 @@
 #include <stddef.h>
 #include <stdio.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 #define HANDMADE_MATH_IMPLEMENTATION
 #include "HandmadeMath.h"
 
@@ -114,20 +117,13 @@ struct sector_render {
 /* World                                                              */
 /* ------------------------------------------------------------------ */
 
-struct texture_set {
-	lud_texture_t diffuse;
-	lud_texture_t normal;
-	lud_texture_t roughness;
-	lud_texture_t ao;
-	lud_texture_t height;
-};
-
 struct world {
 	const struct map_sector *sectors[MAX_SECTORS];
 	struct sector_render render[MAX_SECTORS];
 	unsigned num_sectors;
 	lud_mesh_t mesh; /* single VBO for all sector geometry */
-	struct texture_set textures[MAX_TEXTURES];
+	/* texture arrays: 5 arrays (one per PBR channel), each with num_textures layers */
+	lud_texture_t tex_arrays[5]; /* diffuse, normal, roughness, ao, height */
 	unsigned num_textures;
 };
 
@@ -244,21 +240,17 @@ sector_find_center(const struct map_sector *sec, float *cx, float *cy)
 /* Texture loading                                                    */
 /* ------------------------------------------------------------------ */
 
-static struct texture_set
-load_texture_set(const char *color_path, const char *normal_path,
-                 const char *roughness_path, const char *ao_path,
-                 const char *height_path)
-{
-	struct texture_set ts;
-	ts.diffuse   = lud_load_texture_srgb(color_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
-	ts.normal    = lud_load_texture(normal_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
-	ts.roughness = lud_load_texture(roughness_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
-	ts.ao        = lud_load_texture(ao_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
-	ts.height    = lud_load_texture(height_path, LUD_FILTER_LINEAR, LUD_FILTER_LINEAR);
-	return ts;
-}
+/* Per-channel image data for a single texture set */
+struct texture_images {
+	unsigned char *color;
+	unsigned char *normal;
+	unsigned char *roughness;
+	unsigned char *ao;
+	unsigned char *heightmap;
+	int width, height;
+};
 
-/* Load step table for progress reporting.  Each entry loads one texture set. */
+/* Load step table: textures to load with progress reporting */
 struct load_step {
 	const char *label;
 	const char *color, *normal, *roughness, *ao, *height;
@@ -295,15 +287,72 @@ static const struct load_step load_steps[] = {
 static void
 create_textures(void)
 {
-	int i;
+	struct texture_images images[LOAD_STEP_COUNT];
+	int i, w, h;
+
+	/* Pass 1: load all images into memory, track dimensions */
 	for (i = 0; i < LOAD_STEP_COUNT; i++) {
 		lud_draw_progress(i, LOAD_STEP_COUNT, load_steps[i].label);
-		world.textures[i] = load_texture_set(
-			load_steps[i].color, load_steps[i].normal,
-			load_steps[i].roughness, load_steps[i].ao,
-			load_steps[i].height);
+
+		int chan;
+		images[i].color = stbi_load(load_steps[i].color, &w, &h, &chan, 0);
+		images[i].normal = stbi_load(load_steps[i].normal, &w, &h, &chan, 0);
+		images[i].roughness = stbi_load(load_steps[i].roughness, &w, &h, &chan, 0);
+		images[i].ao = stbi_load(load_steps[i].ao, &w, &h, &chan, 0);
+		images[i].heightmap = stbi_load(load_steps[i].height, &w, &h, &chan, 0);
+		images[i].width = w;
+		images[i].height = h;
+
+		if (!images[i].color || !images[i].normal || !images[i].roughness
+		    || !images[i].ao || !images[i].heightmap) {
+			lud_err("failed to load texture set %d", i);
+			return;
+		}
 	}
+
 	world.num_textures = LOAD_STEP_COUNT;
+
+	/* Pass 2: create 5 texture arrays (one per PBR channel) */
+	world.tex_arrays[0] = lud_make_texture_array(&(lud_texture_array_desc_t){
+		.width = w, .height = h, .num_layers = LOAD_STEP_COUNT,
+		.format = LUD_PIXFMT_SRGB8,
+		.min_filter = LUD_FILTER_LINEAR, .mag_filter = LUD_FILTER_LINEAR
+	});
+	world.tex_arrays[1] = lud_make_texture_array(&(lud_texture_array_desc_t){
+		.width = w, .height = h, .num_layers = LOAD_STEP_COUNT,
+		.format = LUD_PIXFMT_RGB8,
+		.min_filter = LUD_FILTER_LINEAR, .mag_filter = LUD_FILTER_LINEAR
+	});
+	world.tex_arrays[2] = lud_make_texture_array(&(lud_texture_array_desc_t){
+		.width = w, .height = h, .num_layers = LOAD_STEP_COUNT,
+		.format = LUD_PIXFMT_RGB8,
+		.min_filter = LUD_FILTER_LINEAR, .mag_filter = LUD_FILTER_LINEAR
+	});
+	world.tex_arrays[3] = lud_make_texture_array(&(lud_texture_array_desc_t){
+		.width = w, .height = h, .num_layers = LOAD_STEP_COUNT,
+		.format = LUD_PIXFMT_RGB8,
+		.min_filter = LUD_FILTER_LINEAR, .mag_filter = LUD_FILTER_LINEAR
+	});
+	world.tex_arrays[4] = lud_make_texture_array(&(lud_texture_array_desc_t){
+		.width = w, .height = h, .num_layers = LOAD_STEP_COUNT,
+		.format = LUD_PIXFMT_RGB8,
+		.min_filter = LUD_FILTER_LINEAR, .mag_filter = LUD_FILTER_LINEAR
+	});
+
+	/* Pass 3: upload each image as a layer */
+	for (i = 0; i < LOAD_STEP_COUNT; i++) {
+		lud_texture_array_set_layer(world.tex_arrays[0], i, images[i].color);
+		lud_texture_array_set_layer(world.tex_arrays[1], i, images[i].normal);
+		lud_texture_array_set_layer(world.tex_arrays[2], i, images[i].roughness);
+		lud_texture_array_set_layer(world.tex_arrays[3], i, images[i].ao);
+		lud_texture_array_set_layer(world.tex_arrays[4], i, images[i].heightmap);
+		stbi_image_free(images[i].color);
+		stbi_image_free(images[i].normal);
+		stbi_image_free(images[i].roughness);
+		stbi_image_free(images[i].ao);
+		stbi_image_free(images[i].heightmap);
+	}
+
 	lud_draw_progress(LOAD_STEP_COUNT, LOAD_STEP_COUNT, "Ready");
 }
 
@@ -517,7 +566,7 @@ build_world_mesh(void)
 static bool sector_drawn[MAX_SECTORS];
 
 static void
-draw_sector_recursive(unsigned sector_num, int ttl)
+draw_sector_recursive(unsigned sector_num, int ttl, lud_shader_t active_shader)
 {
 	if (ttl < 0)
 		return;
@@ -536,12 +585,8 @@ draw_sector_recursive(unsigned sector_num, int ttl)
 	for (i = 0; i < sr->num_groups; i++) {
 		struct draw_group *g = &sr->groups[i];
 		if (state.use_textures) {
-			struct texture_set *t = &world.textures[g->tex_index];
-			lud_bind_texture(t->diffuse, 0);
-			lud_bind_texture(t->normal, 1);
-			lud_bind_texture(t->roughness, 2);
-			lud_bind_texture(t->ao, 3);
-			lud_bind_texture(t->height, 4);
+			/* set texture layer uniform for this draw group */
+			lud_uniform_int(active_shader, "u_texture_layer", g->tex_index);
 		}
 		lud_draw_range(world.mesh, g->first, g->count);
 	}
@@ -552,7 +597,7 @@ draw_sector_recursive(unsigned sector_num, int ttl)
 		for (j = 0; j < sec->num_sides; j++) {
 			unsigned short dest = sec->destination_sector[j];
 			if (dest != SECTOR_NONE)
-				draw_sector_recursive(dest, ttl - 1);
+				draw_sector_recursive(dest, ttl - 1, active_shader);
 		}
 	}
 }
@@ -790,6 +835,13 @@ frame(float dt)
 	lud_apply_shader(active_shader);
 	lud_uniform_mat4(active_shader, "u_mvp", (const float *)mvp.Elements);
 	if (state.use_textures) {
+		/* bind texture arrays once per frame */
+		lud_bind_texture(world.tex_arrays[0], 0);
+		lud_bind_texture(world.tex_arrays[1], 1);
+		lud_bind_texture(world.tex_arrays[2], 2);
+		lud_bind_texture(world.tex_arrays[3], 3);
+		lud_bind_texture(world.tex_arrays[4], 4);
+
 		lud_uniform_int(active_shader, "u_texture", 0);
 		lud_uniform_int(active_shader, "u_normal_map", 1);
 		lud_uniform_int(active_shader, "u_roughness_map", 2);
@@ -819,7 +871,7 @@ frame(float dt)
 	}
 
 	memset(sector_drawn, 0, sizeof(sector_drawn));
-	draw_sector_recursive(state.player_sector, PORTAL_DEPTH);
+	draw_sector_recursive(state.player_sector, PORTAL_DEPTH, active_shader);
 
 	/* restore state for 2D overlay */
 	glDisable(GL_DEPTH_TEST);
@@ -846,10 +898,8 @@ cleanup(void)
 {
 	unsigned i;
 	lud_destroy_mesh(world.mesh);
-	for (i = 0; i < world.num_textures; i++) {
-		lud_destroy_texture(world.textures[i].diffuse);
-		lud_destroy_texture(world.textures[i].normal);
-	}
+	for (i = 0; i < 5; i++)
+		lud_destroy_texture(world.tex_arrays[i]);
 	lud_destroy_shader(shader_textured);
 	lud_destroy_shader(shader_colored);
 	lud_destroy_font(font);
