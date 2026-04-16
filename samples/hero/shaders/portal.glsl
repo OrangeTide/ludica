@@ -1,12 +1,3 @@
-@common
-precision mediump float;
-varying vec2 v_texcoord;
-varying vec3 v_color;
-varying vec3 v_tangent_light;
-varying vec3 v_tangent_view;
-varying float v_light_dist;
-@end
-
 @vs portal
 #version 300 es
 in vec3 a_position;

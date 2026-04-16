@@ -290,16 +290,18 @@ create_textures(void)
 	struct texture_images images[LOAD_STEP_COUNT];
 	int i, w, h;
 
-	/* Pass 1: load all images into memory, track dimensions */
+	/* Pass 1: load all images into memory, track dimensions.
+	 * Force channel counts to match the texture array formats:
+	 * color/normal = 3 (RGB), roughness/ao/height = 1 (grayscale). */
 	for (i = 0; i < LOAD_STEP_COUNT; i++) {
 		lud_draw_progress(i, LOAD_STEP_COUNT, load_steps[i].label);
 
 		int chan;
-		images[i].color = stbi_load(load_steps[i].color, &w, &h, &chan, 0);
-		images[i].normal = stbi_load(load_steps[i].normal, &w, &h, &chan, 0);
-		images[i].roughness = stbi_load(load_steps[i].roughness, &w, &h, &chan, 0);
-		images[i].ao = stbi_load(load_steps[i].ao, &w, &h, &chan, 0);
-		images[i].heightmap = stbi_load(load_steps[i].height, &w, &h, &chan, 0);
+		images[i].color = stbi_load(load_steps[i].color, &w, &h, &chan, 3);
+		images[i].normal = stbi_load(load_steps[i].normal, &w, &h, &chan, 3);
+		images[i].roughness = stbi_load(load_steps[i].roughness, &w, &h, &chan, 1);
+		images[i].ao = stbi_load(load_steps[i].ao, &w, &h, &chan, 1);
+		images[i].heightmap = stbi_load(load_steps[i].height, &w, &h, &chan, 1);
 		images[i].width = w;
 		images[i].height = h;
 
@@ -325,17 +327,17 @@ create_textures(void)
 	});
 	world.tex_arrays[2] = lud_make_texture_array(&(lud_texture_array_desc_t){
 		.width = w, .height = h, .num_layers = LOAD_STEP_COUNT,
-		.format = LUD_PIXFMT_RGB8,
+		.format = LUD_PIXFMT_R8,
 		.min_filter = LUD_FILTER_LINEAR, .mag_filter = LUD_FILTER_LINEAR
 	});
 	world.tex_arrays[3] = lud_make_texture_array(&(lud_texture_array_desc_t){
 		.width = w, .height = h, .num_layers = LOAD_STEP_COUNT,
-		.format = LUD_PIXFMT_RGB8,
+		.format = LUD_PIXFMT_R8,
 		.min_filter = LUD_FILTER_LINEAR, .mag_filter = LUD_FILTER_LINEAR
 	});
 	world.tex_arrays[4] = lud_make_texture_array(&(lud_texture_array_desc_t){
 		.width = w, .height = h, .num_layers = LOAD_STEP_COUNT,
-		.format = LUD_PIXFMT_RGB8,
+		.format = LUD_PIXFMT_R8,
 		.min_filter = LUD_FILTER_LINEAR, .mag_filter = LUD_FILTER_LINEAR
 	});
 
