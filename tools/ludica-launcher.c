@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <netinet/in.h>
+#include <regex.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -342,6 +343,78 @@ log_buf_head(const struct log_buf *b, int n, char *out, size_t out_cap)
 		}
 	}
 	return count;
+}
+
+/* Copy the logical ring contents into out (up to out_cap bytes).
+ * Returns bytes copied. */
+static size_t
+log_buf_linearize(const struct log_buf *b, char *out, size_t out_cap)
+{
+	size_t n = b->len;
+	size_t i;
+
+	if (n > out_cap)
+		n = out_cap;
+	for (i = 0; i < n; i++)
+		out[i] = log_buf_at(b, i);
+	return n;
+}
+
+/* Emit lines numbered `first` through `last` (1-based, inclusive).
+ * Clamps to available range; returns bytes written. */
+static size_t
+log_buf_range(const struct log_buf *b, int first, int last,
+    char *out, size_t out_cap)
+{
+	size_t i, count = 0;
+	int line = 1;
+	int emit = 0;
+
+	if (!b->data || b->len == 0 || first <= 0 || last < first)
+		return 0;
+
+	for (i = 0; i < b->len; i++) {
+		char c = log_buf_at(b, i);
+		emit = (line >= first && line <= last);
+		if (emit && count < out_cap)
+			out[count++] = c;
+		if (c == '\n') {
+			line++;
+			if (line > last)
+				break;
+		}
+	}
+	return count;
+}
+
+/* Invoke cb for each line; stops when cb returns non-zero. */
+typedef int (*line_cb)(const char *buf, size_t len, int line_no, void *arg);
+
+static void
+log_buf_for_each_line(const struct log_buf *b, line_cb cb, void *arg)
+{
+	char *tmp;
+	size_t n, start = 0, i;
+	int line = 1;
+
+	if (!b->data || b->len == 0)
+		return;
+	tmp = malloc(b->len);
+	if (!tmp)
+		return;
+	n = log_buf_linearize(b, tmp, b->len);
+	for (i = 0; i < n; i++) {
+		if (tmp[i] == '\n') {
+			if (cb(tmp + start, i - start + 1, line, arg))
+				goto done;
+			line++;
+			start = i + 1;
+		}
+	}
+	if (start < n)
+		cb(tmp + start, n - start, line, arg);
+done:
+	free(tmp);
 }
 
 /* ========== allowlist ==========
@@ -985,6 +1058,274 @@ cmd_log_head(struct session *s, struct cmd_args *a)
 }
 
 static void
+cmd_log_range(struct session *s, struct cmd_args *a)
+{
+	int first, last;
+	unsigned mask;
+	char *out;
+	size_t written;
+	int streams_selected;
+
+	if (a->argc < 3 ||
+	    parse_positive_int(a->argv[1], &first) < 0 ||
+	    parse_positive_int(a->argv[2], &last) < 0 ||
+	    last < first) {
+		session_writef(s,
+		    "ERR usage: log_range <a> <b> [streams...]\n");
+		return;
+	}
+	mask = parse_streams(a, 3);
+	streams_selected =
+	    !!(mask & (1u << STREAM_STDOUT)) +
+	    !!(mask & (1u << STREAM_STDERR));
+
+	out = malloc(g_log_bytes + 16);
+	if (!out) {
+		session_writef(s, "ERR internal: out of memory\n");
+		return;
+	}
+	session_writef(s, "OK\n");
+	if (mask & (1u << STREAM_STDOUT)) {
+		written = log_buf_range(&s->logs[STREAM_STDOUT], first, last,
+		    out, g_log_bytes);
+		write_log_chunk(s, streams_selected > 1 ? "stdout" : NULL,
+		    out, written);
+	}
+	if (mask & (1u << STREAM_STDERR)) {
+		written = log_buf_range(&s->logs[STREAM_STDERR], first, last,
+		    out, g_log_bytes);
+		write_log_chunk(s, streams_selected > 1 ? "stderr" : NULL,
+		    out, written);
+	}
+	free(out);
+}
+
+struct grep_ctx {
+	struct session *s;
+	regex_t *re;
+	int ctx_before;
+	int ctx_after;
+	const char *stream_label;
+	/* rolling window of recent lines for -B (before-context) */
+	char **hist;
+	size_t *hist_lens;
+	int *hist_lineno;
+	int hist_cap;
+	int hist_count;  /* number of valid entries in the ring */
+	int hist_head;   /* next write position */
+	int after_left;  /* remaining lines to emit after a match */
+	int last_emitted_line;
+};
+
+static void
+grep_emit_line(struct grep_ctx *g, int line_no, const char *buf, size_t len)
+{
+	char header[64];
+	int n;
+	ssize_t w;
+
+	if (g->last_emitted_line > 0 && line_no > g->last_emitted_line + 1) {
+		w = write(g->s->fd, "--\n", 3);
+		(void)w;
+	}
+	if (g->stream_label)
+		n = snprintf(header, sizeof(header), "%s:%d: ",
+		    g->stream_label, line_no);
+	else
+		n = snprintf(header, sizeof(header), "%d: ", line_no);
+	w = write(g->s->fd, header, (size_t)n);
+	(void)w;
+	w = write(g->s->fd, buf, len);
+	(void)w;
+	if (len == 0 || buf[len - 1] != '\n') {
+		w = write(g->s->fd, "\n", 1);
+		(void)w;
+	}
+	g->last_emitted_line = line_no;
+}
+
+static int
+grep_each_line(const char *buf, size_t len, int line_no, void *arg)
+{
+	struct grep_ctx *g = arg;
+	char *nul;
+	int is_match;
+	int i;
+
+	/* regexec needs NUL-terminated input; use a temp copy. */
+	nul = malloc(len + 1);
+	if (!nul)
+		return 0;
+	memcpy(nul, buf, len);
+	if (len > 0 && nul[len - 1] == '\n')
+		nul[len - 1] = '\0';
+	else
+		nul[len] = '\0';
+	is_match = regexec(g->re, nul, 0, NULL, 0) == 0;
+	free(nul);
+
+	if (is_match) {
+		/* flush before-context */
+		if (g->ctx_before > 0 && g->hist_count > 0) {
+			int to_emit = g->hist_count;
+			int start;
+
+			if (to_emit > g->ctx_before)
+				to_emit = g->ctx_before;
+			start = (g->hist_head - to_emit + g->hist_cap) %
+			    g->hist_cap;
+			for (i = 0; i < to_emit; i++) {
+				int idx = (start + i) % g->hist_cap;
+				grep_emit_line(g, g->hist_lineno[idx],
+				    g->hist[idx], g->hist_lens[idx]);
+			}
+		}
+		grep_emit_line(g, line_no, buf, len);
+		g->after_left = g->ctx_after;
+	} else if (g->after_left > 0) {
+		grep_emit_line(g, line_no, buf, len);
+		g->after_left--;
+	}
+
+	/* push into history ring (for next match's before-context) */
+	if (g->ctx_before > 0 && g->hist_cap > 0) {
+		int h = g->hist_head;
+		free(g->hist[h]);
+		g->hist[h] = malloc(len);
+		if (g->hist[h]) {
+			memcpy(g->hist[h], buf, len);
+			g->hist_lens[h] = len;
+			g->hist_lineno[h] = line_no;
+		} else {
+			g->hist_lens[h] = 0;
+			g->hist_lineno[h] = 0;
+		}
+		g->hist_head = (h + 1) % g->hist_cap;
+		if (g->hist_count < g->hist_cap)
+			g->hist_count++;
+	}
+	return 0;
+}
+
+static void
+cmd_log_grep(struct session *s, struct cmd_args *a)
+{
+	unsigned mask;
+	int streams_selected;
+	int ctx = 0;
+	const char *pattern = NULL;
+	regex_t re;
+	int re_ok = 0;
+	struct grep_ctx gctx;
+	int i;
+
+	for (i = 1; i < a->argc; i++) {
+		if (strncmp(a->argv[i], "--ctx=", 6) == 0) {
+			ctx = atoi(a->argv[i] + 6);
+			if (ctx < 0)
+				ctx = 0;
+		} else if (a->argv[i][0] != '-' && !pattern) {
+			pattern = a->argv[i];
+		}
+	}
+	if (!pattern) {
+		session_writef(s,
+		    "ERR usage: log_grep <regex> [--ctx=<n>] [streams...]\n");
+		return;
+	}
+
+	if (regcomp(&re, pattern, REG_EXTENDED | REG_NOSUB) != 0) {
+		session_writef(s, "ERR usage: bad regex: %s\n", pattern);
+		return;
+	}
+	re_ok = 1;
+
+	mask = parse_streams(a, 1);
+	streams_selected =
+	    !!(mask & (1u << STREAM_STDOUT)) +
+	    !!(mask & (1u << STREAM_STDERR));
+
+	memset(&gctx, 0, sizeof(gctx));
+	gctx.s = s;
+	gctx.re = &re;
+	gctx.ctx_before = ctx;
+	gctx.ctx_after = ctx;
+	if (ctx > 0) {
+		gctx.hist_cap = ctx;
+		gctx.hist = calloc((size_t)ctx, sizeof(char *));
+		gctx.hist_lens = calloc((size_t)ctx, sizeof(size_t));
+		gctx.hist_lineno = calloc((size_t)ctx, sizeof(int));
+		if (!gctx.hist || !gctx.hist_lens || !gctx.hist_lineno) {
+			session_writef(s, "ERR internal: out of memory\n");
+			goto cleanup;
+		}
+	}
+
+	session_writef(s, "OK\n");
+
+	if (mask & (1u << STREAM_STDOUT)) {
+		gctx.stream_label = streams_selected > 1 ? "stdout" : NULL;
+		gctx.hist_count = gctx.hist_head = 0;
+		gctx.after_left = 0;
+		gctx.last_emitted_line = 0;
+		log_buf_for_each_line(&s->logs[STREAM_STDOUT],
+		    grep_each_line, &gctx);
+	}
+	if (mask & (1u << STREAM_STDERR)) {
+		gctx.stream_label = streams_selected > 1 ? "stderr" : NULL;
+		gctx.hist_count = gctx.hist_head = 0;
+		gctx.after_left = 0;
+		gctx.last_emitted_line = 0;
+		log_buf_for_each_line(&s->logs[STREAM_STDERR],
+		    grep_each_line, &gctx);
+	}
+
+cleanup:
+	if (re_ok)
+		regfree(&re);
+	if (gctx.hist) {
+		for (i = 0; i < gctx.hist_cap; i++)
+			free(gctx.hist[i]);
+		free(gctx.hist);
+	}
+	free(gctx.hist_lens);
+	free(gctx.hist_lineno);
+}
+
+static void
+cmd_env(struct session *s, struct cmd_args *a)
+{
+	const char *v;
+
+	if (a->argc < 2) {
+		session_writef(s, "ERR usage: env <KEY> [VALUE]\n");
+		return;
+	}
+	if (a->argc >= 3) {
+		if (setenv(a->argv[1], a->argv[2], 1) < 0) {
+			session_writef(s, "ERR internal: setenv: %s\n",
+			    strerror(errno));
+			return;
+		}
+		session_writef(s, "OK %s=%s\n", a->argv[1], a->argv[2]);
+		return;
+	}
+	v = getenv(a->argv[1]);
+	session_writef(s, "OK %s=%s\n", a->argv[1], v ? v : "");
+}
+
+static void
+cmd_unsetenv(struct session *s, struct cmd_args *a)
+{
+	if (a->argc < 2) {
+		session_writef(s, "ERR usage: unsetenv <KEY>\n");
+		return;
+	}
+	unsetenv(a->argv[1]);
+	session_writef(s, "OK\n");
+}
+
+static void
 cmd_log_clear(struct session *s, struct cmd_args *a)
 {
 	unsigned mask = parse_streams(a, 1);
@@ -1025,7 +1366,11 @@ static const struct command commands[] = {
 	{ "kill",         cmd_kill,         "send SIGTERM (or given signal) to child" },
 	{ "log_tail",     cmd_log_tail,     "emit last N lines [streams...]" },
 	{ "log_head",     cmd_log_head,     "emit first N lines [streams...]" },
+	{ "log_range",    cmd_log_range,    "emit lines FIRST..LAST [streams...]" },
+	{ "log_grep",     cmd_log_grep,     "regex search [--ctx=N] PATTERN [streams...]" },
 	{ "log_clear",    cmd_log_clear,    "clear log buffer [streams...]" },
+	{ "env",          cmd_env,          "get/set env var: env KEY [VALUE]" },
+	{ "unsetenv",     cmd_unsetenv,     "unset env var: unsetenv KEY" },
 	{ "session_info", cmd_session_info, "report current session identity" },
 	{ "session_list", cmd_session_list, "list all active sessions globally" },
 	{ NULL, NULL, NULL }
