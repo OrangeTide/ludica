@@ -22,17 +22,25 @@
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define LUDICA_LAUNCHER_VERSION "0.1.0"
 
-#define LINE_MAX_BYTES   (64 * 1024)
-#define DEFAULT_PORT     4000
+#define LINE_MAX_BYTES     (64 * 1024)
+#define DEFAULT_PORT       4000
+#define DEFAULT_LOG_BYTES  (1024 * 1024)
+#define STREAM_STDOUT      0
+#define STREAM_STDERR      1
+#define N_STREAMS          2
+
+static size_t g_log_bytes = DEFAULT_LOG_BYTES;
 
 /* ========== utility: fatal / warn ========== */
 
@@ -198,16 +206,278 @@ load_env_file(const char *path)
 	free(buf);
 }
 
+/* ========== circular log buffer ==========
+ *
+ * One buffer per stream.  `total` tracks bytes ever written so callers
+ * can detect wrap-around.  When the ring is full, oldest bytes are
+ * silently overwritten.  Lines are not indexed; tail/head scan the ring
+ * linearly. */
+
+struct log_buf {
+	char *data;
+	size_t cap;      /* capacity (bytes) */
+	size_t head;     /* write offset within ring */
+	size_t len;      /* bytes currently stored (<= cap) */
+	uint64_t total;  /* bytes ever written */
+};
+
+static int
+log_buf_init(struct log_buf *b, size_t cap)
+{
+	b->data = malloc(cap);
+	if (!b->data)
+		return -1;
+	b->cap = cap;
+	b->head = b->len = 0;
+	b->total = 0;
+	return 0;
+}
+
+static void
+log_buf_free(struct log_buf *b)
+{
+	free(b->data);
+	b->data = NULL;
+	b->cap = b->head = b->len = 0;
+	b->total = 0;
+}
+
+static void
+log_buf_clear(struct log_buf *b)
+{
+	b->head = b->len = 0;
+	/* keep total; it's a monotonic byte counter */
+}
+
+static void
+log_buf_write(struct log_buf *b, const char *src, size_t n)
+{
+	if (!b->data || b->cap == 0)
+		return;
+	b->total += n;
+	if (n >= b->cap) {
+		/* only the last `cap` bytes survive */
+		memcpy(b->data, src + (n - b->cap), b->cap);
+		b->head = 0;
+		b->len = b->cap;
+		return;
+	}
+	{
+		size_t tail_space = b->cap - b->head;
+		if (n <= tail_space) {
+			memcpy(b->data + b->head, src, n);
+			b->head += n;
+			if (b->head == b->cap)
+				b->head = 0;
+		} else {
+			memcpy(b->data + b->head, src, tail_space);
+			memcpy(b->data, src + tail_space, n - tail_space);
+			b->head = n - tail_space;
+		}
+		b->len += n;
+		if (b->len > b->cap)
+			b->len = b->cap;
+	}
+}
+
+/* copy logical byte at index `i` (0 = oldest) */
+static char
+log_buf_at(const struct log_buf *b, size_t i)
+{
+	size_t start;
+
+	if (b->len < b->cap)
+		start = 0;
+	else
+		start = b->head;
+	return b->data[(start + i) % b->cap];
+}
+
+/* write the last `n` lines (newline-terminated) into `out`.
+ * Returns number of bytes written; truncates at out_cap. */
+static size_t
+log_buf_tail(const struct log_buf *b, int n, char *out, size_t out_cap)
+{
+	size_t count, i, newlines = 0, line_start;
+
+	if (!b->data || b->len == 0 || n <= 0)
+		return 0;
+
+	/* Walk backwards from the end to find the start of the last n lines. */
+	i = b->len;
+	while (i > 0) {
+		char c = log_buf_at(b, i - 1);
+		i--;
+		if (c == '\n') {
+			newlines++;
+			if (newlines > (size_t)n) {
+				i++;
+				break;
+			}
+		}
+	}
+	line_start = i;
+
+	count = 0;
+	for (i = line_start; i < b->len && count < out_cap; i++)
+		out[count++] = log_buf_at(b, i);
+	return count;
+}
+
+static size_t
+log_buf_head(const struct log_buf *b, int n, char *out, size_t out_cap)
+{
+	size_t count = 0, i, newlines = 0;
+
+	if (!b->data || b->len == 0 || n <= 0)
+		return 0;
+
+	for (i = 0; i < b->len && count < out_cap; i++) {
+		char c = log_buf_at(b, i);
+		out[count++] = c;
+		if (c == '\n') {
+			newlines++;
+			if (newlines >= (size_t)n)
+				break;
+		}
+	}
+	return count;
+}
+
+/* ========== allowlist ==========
+ *
+ * LUDICA_MCP_ALLOWEXEC is a `:`-separated list of absolute paths.  A
+ * spawn alias either matches the last path component of an entry, or
+ * equals an entry verbatim. */
+
+static int
+allow_match(const char *alias, char *resolved, size_t resolved_cap)
+{
+	const char *env = getenv("LUDICA_MCP_ALLOWEXEC");
+	const char *p, *start;
+
+	if (!env || !*env)
+		return 0;
+
+	p = env;
+	start = p;
+	for (;;) {
+		if (*p == ':' || *p == '\0') {
+			size_t entry_len = (size_t)(p - start);
+			if (entry_len > 0 && entry_len < resolved_cap) {
+				const char *base = start;
+				size_t base_len = entry_len;
+				const char *slash;
+
+				/* full path match */
+				if (strlen(alias) == entry_len &&
+				    memcmp(alias, start, entry_len) == 0) {
+					memcpy(resolved, start, entry_len);
+					resolved[entry_len] = '\0';
+					return 1;
+				}
+				/* basename match */
+				for (slash = start + entry_len - 1;
+				    slash >= start; slash--) {
+					if (*slash == '/') {
+						base = slash + 1;
+						base_len = (size_t)(start + entry_len - base);
+						break;
+					}
+				}
+				if (strlen(alias) == base_len &&
+				    memcmp(alias, base, base_len) == 0) {
+					memcpy(resolved, start, entry_len);
+					resolved[entry_len] = '\0';
+					return 1;
+				}
+			}
+			if (*p == '\0')
+				break;
+			p++;
+			start = p;
+		} else {
+			p++;
+		}
+	}
+	return 0;
+}
+
 /* ========== per-connection session state ========== */
+
+/* process state within a session */
+enum proc_state {
+	PROC_NEVER = 0,
+	PROC_RUNNING,
+	PROC_EXITED,
+	PROC_SIGNALED,
+};
 
 struct session {
 	int fd;
 	char linebuf[LINE_MAX_BYTES];
 	int linelen;
 	struct iox_loop *loop;
+
+	/* child process */
+	enum proc_state pstate;
+	pid_t pid;
+	int exit_code;   /* PROC_EXITED */
+	int exit_signal; /* PROC_SIGNALED */
+	int out_fd;      /* pipe read end for child stdout, -1 if none */
+	int err_fd;      /* pipe read end for child stderr, -1 if none */
+	char bin_path[PATH_MAX];
+
+	/* log buffers */
+	struct log_buf logs[N_STREAMS];
 };
 
 static void session_close(struct session *s);
+
+/* Global session registry.  SIGCHLD needs to find the session that
+ * owns the reaped pid; we scan this list linearly.  Sessions are rare
+ * (one per connected bridge) so O(n) is fine. */
+#define MAX_SESSIONS 64
+static struct session *g_sessions[MAX_SESSIONS];
+
+static void
+session_register(struct session *s)
+{
+	int i;
+
+	for (i = 0; i < MAX_SESSIONS; i++) {
+		if (!g_sessions[i]) {
+			g_sessions[i] = s;
+			return;
+		}
+	}
+}
+
+static void
+session_unregister(struct session *s)
+{
+	int i;
+
+	for (i = 0; i < MAX_SESSIONS; i++) {
+		if (g_sessions[i] == s) {
+			g_sessions[i] = NULL;
+			return;
+		}
+	}
+}
+
+static struct session *
+session_by_pid(pid_t pid)
+{
+	int i;
+
+	for (i = 0; i < MAX_SESSIONS; i++) {
+		if (g_sessions[i] && g_sessions[i]->pid == pid &&
+		    g_sessions[i]->pstate == PROC_RUNNING)
+			return g_sessions[i];
+	}
+	return NULL;
+}
 
 static void
 session_writef(struct session *s, const char *fmt, ...)
@@ -227,6 +497,175 @@ session_writef(struct session *s, const char *fmt, ...)
 
 	w = write(s->fd, buf, (size_t)n);
 	(void)w;
+}
+
+/* ========== child process + log capture ========== */
+
+static void
+pipe_on_readable(struct iox_loop *loop, int fd, unsigned events, void *arg)
+{
+	struct session *s = arg;
+	int stream_idx = (fd == s->out_fd) ? STREAM_STDOUT : STREAM_STDERR;
+	char buf[8192];
+	ssize_t n;
+
+	(void)loop;
+	(void)events;
+
+	n = read(fd, buf, sizeof(buf));
+	if (n <= 0) {
+		/* EOF or error -- stop watching this fd */
+		iox_fd_remove(s->loop, fd);
+		close(fd);
+		if (fd == s->out_fd)
+			s->out_fd = -1;
+		else if (fd == s->err_fd)
+			s->err_fd = -1;
+		return;
+	}
+	log_buf_write(&s->logs[stream_idx], buf, (size_t)n);
+}
+
+/* Drain any remaining readable bytes after child exits so we don't
+ * lose the last few writes.  Non-blocking. */
+static void
+pipe_drain(struct session *s, int fd, int stream_idx)
+{
+	char buf[8192];
+	ssize_t n;
+
+	if (fd < 0)
+		return;
+	for (;;) {
+		n = read(fd, buf, sizeof(buf));
+		if (n <= 0)
+			break;
+		log_buf_write(&s->logs[stream_idx], buf, (size_t)n);
+	}
+}
+
+/* Called when the session or launcher tears down and the process is
+ * still recorded as running -- send SIGKILL, reap, don't leave zombies. */
+static void
+proc_reap_if_running(struct session *s)
+{
+	int status;
+	pid_t r;
+
+	if (s->pstate != PROC_RUNNING || s->pid <= 0)
+		return;
+	kill(s->pid, SIGKILL);
+	r = waitpid(s->pid, &status, 0);
+	if (r == s->pid) {
+		if (WIFEXITED(status)) {
+			s->pstate = PROC_EXITED;
+			s->exit_code = WEXITSTATUS(status);
+		} else if (WIFSIGNALED(status)) {
+			s->pstate = PROC_SIGNALED;
+			s->exit_signal = WTERMSIG(status);
+		}
+	}
+}
+
+/* SIGCHLD self-pipe handler: reap any children that exited, update
+ * the owning session's process state.  Log fds remain open so the
+ * drain callback can still flush remaining bytes. */
+static void
+on_sigchld(struct iox_loop *loop, int signo, void *arg)
+{
+	int status;
+	pid_t pid;
+	struct session *s;
+
+	(void)loop;
+	(void)signo;
+	(void)arg;
+
+	for (;;) {
+		pid = waitpid(-1, &status, WNOHANG);
+		if (pid <= 0)
+			break;
+		s = session_by_pid(pid);
+		if (!s)
+			continue;
+		if (WIFEXITED(status)) {
+			s->pstate = PROC_EXITED;
+			s->exit_code = WEXITSTATUS(status);
+		} else if (WIFSIGNALED(status)) {
+			s->pstate = PROC_SIGNALED;
+			s->exit_signal = WTERMSIG(status);
+		}
+		pipe_drain(s, s->out_fd, STREAM_STDOUT);
+		pipe_drain(s, s->err_fd, STREAM_STDERR);
+	}
+}
+
+/* Fork/exec a child with stdout/stderr piped back to us.
+ * argv[0] will be the resolved binary path.  Returns 0 on success. */
+static int
+proc_spawn(struct session *s, const char *bin, char *const argv[],
+    char *err_out, size_t err_cap)
+{
+	int outp[2], errp[2];
+	pid_t pid;
+	int i;
+
+	if (s->pstate == PROC_RUNNING) {
+		snprintf(err_out, err_cap, "process already running");
+		return -1;
+	}
+
+	if (pipe(outp) < 0) {
+		snprintf(err_out, err_cap, "pipe: %s", strerror(errno));
+		return -1;
+	}
+	if (pipe(errp) < 0) {
+		snprintf(err_out, err_cap, "pipe: %s", strerror(errno));
+		close(outp[0]); close(outp[1]);
+		return -1;
+	}
+
+	pid = fork();
+	if (pid < 0) {
+		snprintf(err_out, err_cap, "fork: %s", strerror(errno));
+		close(outp[0]); close(outp[1]);
+		close(errp[0]); close(errp[1]);
+		return -1;
+	}
+	if (pid == 0) {
+		/* child */
+		dup2(outp[1], STDOUT_FILENO);
+		dup2(errp[1], STDERR_FILENO);
+		close(outp[0]); close(outp[1]);
+		close(errp[0]); close(errp[1]);
+		/* reset SIGPIPE so child sees default behavior */
+		signal(SIGPIPE, SIG_DFL);
+		execv(bin, argv);
+		fprintf(stderr, "exec %s: %s\n", bin, strerror(errno));
+		_exit(127);
+	}
+
+	/* parent */
+	close(outp[1]);
+	close(errp[1]);
+	fcntl(outp[0], F_SETFL, O_NONBLOCK);
+	fcntl(errp[0], F_SETFL, O_NONBLOCK);
+
+	/* previous process state carries log buffers; clear them per design */
+	for (i = 0; i < N_STREAMS; i++)
+		log_buf_clear(&s->logs[i]);
+
+	s->pid = pid;
+	s->pstate = PROC_RUNNING;
+	s->exit_code = 0;
+	s->exit_signal = 0;
+	s->out_fd = outp[0];
+	s->err_fd = errp[0];
+	snprintf(s->bin_path, sizeof(s->bin_path), "%s", bin);
+
+	iox_fd_add(s->loop, s->out_fd, IOX_READ, pipe_on_readable, s);
+	iox_fd_add(s->loop, s->err_fd, IOX_READ, pipe_on_readable, s);
+	return 0;
 }
 
 /* ========== command dispatch ========== */
@@ -299,7 +738,262 @@ static void
 cmd_status(struct session *s, struct cmd_args *a)
 {
 	(void)a;
-	session_writef(s, "OK never\n");
+	switch (s->pstate) {
+	case PROC_NEVER:
+		session_writef(s, "OK never\n");
+		break;
+	case PROC_RUNNING:
+		session_writef(s, "OK running pid=%d\n", (int)s->pid);
+		break;
+	case PROC_EXITED:
+		session_writef(s, "OK exited code=%d\n", s->exit_code);
+		break;
+	case PROC_SIGNALED:
+		session_writef(s, "OK signaled sig=%d\n", s->exit_signal);
+		break;
+	}
+}
+
+static void
+cmd_spawn(struct session *s, struct cmd_args *a)
+{
+	char resolved[PATH_MAX];
+	char err[256];
+	char *child_argv[32];
+	int n_argv = 0;
+	int i;
+
+	if (a->argc < 2) {
+		session_writef(s, "ERR usage: spawn <alias> [args...]\n");
+		return;
+	}
+	if (!allow_match(a->argv[1], resolved, sizeof(resolved))) {
+		session_writef(s,
+		    "ERR not_allowed: %s not in LUDICA_MCP_ALLOWEXEC\n",
+		    a->argv[1]);
+		return;
+	}
+
+	/* kill any existing process first (design: second spawn replaces) */
+	if (s->pstate == PROC_RUNNING) {
+		proc_reap_if_running(s);
+		if (s->out_fd >= 0) {
+			iox_fd_remove(s->loop, s->out_fd);
+			close(s->out_fd);
+			s->out_fd = -1;
+		}
+		if (s->err_fd >= 0) {
+			iox_fd_remove(s->loop, s->err_fd);
+			close(s->err_fd);
+			s->err_fd = -1;
+		}
+	}
+
+	/* build argv: resolved path, then user args after alias */
+	child_argv[n_argv++] = resolved;
+	for (i = 2; i < a->argc &&
+	    n_argv < (int)(sizeof(child_argv) / sizeof(child_argv[0])) - 1;
+	    i++) {
+		child_argv[n_argv++] = a->argv[i];
+	}
+	child_argv[n_argv] = NULL;
+
+	if (proc_spawn(s, resolved, child_argv, err, sizeof(err)) < 0) {
+		session_writef(s, "ERR exec: %s\n", err);
+		return;
+	}
+	session_writef(s, "OK pid=%d\n", (int)s->pid);
+}
+
+static void
+cmd_kill(struct session *s, struct cmd_args *a)
+{
+	int sig = SIGTERM;
+
+	if (s->pstate != PROC_RUNNING) {
+		session_writef(s, "ERR no_process\n");
+		return;
+	}
+	if (a->argc >= 2) {
+		sig = atoi(a->argv[1]);
+		if (sig <= 0) {
+			session_writef(s,
+			    "ERR usage: kill [signal]\n");
+			return;
+		}
+	}
+	if (kill(s->pid, sig) < 0) {
+		session_writef(s, "ERR internal: kill: %s\n",
+		    strerror(errno));
+		return;
+	}
+	session_writef(s, "OK killed pid=%d\n", (int)s->pid);
+}
+
+/* Parse stream args from argv[start..].  Returns a mask of selected
+ * streams; if none specified, returns all. */
+static unsigned
+parse_streams(struct cmd_args *a, int start)
+{
+	unsigned mask = 0;
+	int i;
+
+	for (i = start; i < a->argc; i++) {
+		if (a->argv[i][0] == '-' && a->argv[i][1] == '-')
+			continue; /* skip --flags */
+		if (strcmp(a->argv[i], "stdout") == 0)
+			mask |= (1u << STREAM_STDOUT);
+		else if (strcmp(a->argv[i], "stderr") == 0)
+			mask |= (1u << STREAM_STDERR);
+	}
+	if (mask == 0)
+		mask = (1u << STREAM_STDOUT) | (1u << STREAM_STDERR);
+	return mask;
+}
+
+static int
+parse_positive_int(const char *s, int *out)
+{
+	char *end;
+	long v;
+
+	if (!s || !*s)
+		return -1;
+	v = strtol(s, &end, 10);
+	if (*end != '\0' || v <= 0 || v > INT_MAX)
+		return -1;
+	*out = (int)v;
+	return 0;
+}
+
+static void
+write_log_chunk(struct session *s, const char *stream_label,
+    const char *data, size_t n)
+{
+	/* prefix each line with stream tag when emitting from both streams;
+	 * when only one stream selected we skip the prefix for cleaner
+	 * output. */
+	ssize_t w;
+
+	if (stream_label) {
+		char prefix[32];
+		size_t plen;
+		size_t i = 0, line_start = 0;
+
+		plen = (size_t)snprintf(prefix, sizeof(prefix), "%s: ",
+		    stream_label);
+		while (i < n) {
+			if (data[i] == '\n') {
+				w = write(s->fd, prefix, plen);
+				(void)w;
+				w = write(s->fd, data + line_start,
+				    i - line_start + 1);
+				(void)w;
+				line_start = i + 1;
+			}
+			i++;
+		}
+		if (line_start < n) {
+			w = write(s->fd, prefix, plen);
+			(void)w;
+			w = write(s->fd, data + line_start,
+			    n - line_start);
+			(void)w;
+		}
+	} else {
+		w = write(s->fd, data, n);
+		(void)w;
+	}
+}
+
+static void
+cmd_log_tail(struct session *s, struct cmd_args *a)
+{
+	int n;
+	unsigned mask;
+	char *out;
+	size_t written;
+	int streams_selected;
+
+	if (a->argc < 2 || parse_positive_int(a->argv[1], &n) < 0) {
+		session_writef(s, "ERR usage: log_tail <n> [streams...]\n");
+		return;
+	}
+	mask = parse_streams(a, 2);
+	streams_selected =
+	    !!(mask & (1u << STREAM_STDOUT)) +
+	    !!(mask & (1u << STREAM_STDERR));
+
+	out = malloc(g_log_bytes + 16);
+	if (!out) {
+		session_writef(s, "ERR internal: out of memory\n");
+		return;
+	}
+	session_writef(s, "OK\n");
+	if (mask & (1u << STREAM_STDOUT)) {
+		written = log_buf_tail(&s->logs[STREAM_STDOUT], n, out,
+		    g_log_bytes);
+		write_log_chunk(s, streams_selected > 1 ? "stdout" : NULL,
+		    out, written);
+	}
+	if (mask & (1u << STREAM_STDERR)) {
+		written = log_buf_tail(&s->logs[STREAM_STDERR], n, out,
+		    g_log_bytes);
+		write_log_chunk(s, streams_selected > 1 ? "stderr" : NULL,
+		    out, written);
+	}
+	free(out);
+}
+
+static void
+cmd_log_head(struct session *s, struct cmd_args *a)
+{
+	int n;
+	unsigned mask;
+	char *out;
+	size_t written;
+	int streams_selected;
+
+	if (a->argc < 2 || parse_positive_int(a->argv[1], &n) < 0) {
+		session_writef(s, "ERR usage: log_head <n> [streams...]\n");
+		return;
+	}
+	mask = parse_streams(a, 2);
+	streams_selected =
+	    !!(mask & (1u << STREAM_STDOUT)) +
+	    !!(mask & (1u << STREAM_STDERR));
+
+	out = malloc(g_log_bytes + 16);
+	if (!out) {
+		session_writef(s, "ERR internal: out of memory\n");
+		return;
+	}
+	session_writef(s, "OK\n");
+	if (mask & (1u << STREAM_STDOUT)) {
+		written = log_buf_head(&s->logs[STREAM_STDOUT], n, out,
+		    g_log_bytes);
+		write_log_chunk(s, streams_selected > 1 ? "stdout" : NULL,
+		    out, written);
+	}
+	if (mask & (1u << STREAM_STDERR)) {
+		written = log_buf_head(&s->logs[STREAM_STDERR], n, out,
+		    g_log_bytes);
+		write_log_chunk(s, streams_selected > 1 ? "stderr" : NULL,
+		    out, written);
+	}
+	free(out);
+}
+
+static void
+cmd_log_clear(struct session *s, struct cmd_args *a)
+{
+	unsigned mask = parse_streams(a, 1);
+
+	if (mask & (1u << STREAM_STDOUT))
+		log_buf_clear(&s->logs[STREAM_STDOUT]);
+	if (mask & (1u << STREAM_STDERR))
+		log_buf_clear(&s->logs[STREAM_STDERR]);
+	session_writef(s, "OK cleared\n");
 }
 
 static void
@@ -327,6 +1021,11 @@ static const struct command commands[] = {
 	{ "version",      cmd_version,      "report launcher version" },
 	{ "help",         cmd_help,         "list commands or describe one" },
 	{ "status",       cmd_status,       "report state of the spawned process" },
+	{ "spawn",        cmd_spawn,        "fork/exec an allowlisted binary" },
+	{ "kill",         cmd_kill,         "send SIGTERM (or given signal) to child" },
+	{ "log_tail",     cmd_log_tail,     "emit last N lines [streams...]" },
+	{ "log_head",     cmd_log_head,     "emit first N lines [streams...]" },
+	{ "log_clear",    cmd_log_clear,    "clear log buffer [streams...]" },
 	{ "session_info", cmd_session_info, "report current session identity" },
 	{ "session_list", cmd_session_list, "list all active sessions globally" },
 	{ NULL, NULL, NULL }
@@ -426,25 +1125,59 @@ static struct session *
 session_new(struct iox_loop *loop, int fd)
 {
 	struct session *s;
+	int i;
 
 	s = calloc(1, sizeof(*s));
 	if (!s)
 		return NULL;
 	s->fd = fd;
 	s->loop = loop;
+	s->pstate = PROC_NEVER;
+	s->pid = 0;
+	s->out_fd = s->err_fd = -1;
+
+	for (i = 0; i < N_STREAMS; i++) {
+		if (log_buf_init(&s->logs[i], g_log_bytes) < 0) {
+			while (--i >= 0)
+				log_buf_free(&s->logs[i]);
+			free(s);
+			return NULL;
+		}
+	}
 
 	if (iox_fd_add(loop, fd, IOX_READ, session_on_readable, s) < 0) {
+		for (i = 0; i < N_STREAMS; i++)
+			log_buf_free(&s->logs[i]);
 		free(s);
 		return NULL;
 	}
+	session_register(s);
 	return s;
 }
+
+static void proc_reap_if_running(struct session *s);
 
 static void
 session_close(struct session *s)
 {
+	int i;
+
 	if (!s)
 		return;
+	proc_reap_if_running(s);
+	if (s->out_fd >= 0) {
+		iox_fd_remove(s->loop, s->out_fd);
+		close(s->out_fd);
+		s->out_fd = -1;
+	}
+	if (s->err_fd >= 0) {
+		iox_fd_remove(s->loop, s->err_fd);
+		close(s->err_fd);
+		s->err_fd = -1;
+	}
+	for (i = 0; i < N_STREAMS; i++)
+		log_buf_free(&s->logs[i]);
+	session_unregister(s);
 	iox_fd_remove(s->loop, s->fd);
 	close(s->fd);
 	free(s);
@@ -558,11 +1291,17 @@ main(int argc, char **argv)
 
 	load_env_file(env_file);
 
-	/* env vars override defaults (LUDICA_MCP_PORT) */
+	/* env vars override defaults */
 	{
 		const char *p = getenv("LUDICA_MCP_PORT");
 		if (p && *p)
 			port = atoi(p);
+		p = getenv("LUDICA_MCP_LOG_BYTES");
+		if (p && *p) {
+			long v = atol(p);
+			if (v > 0 && v < (long)INT_MAX)
+				g_log_bytes = (size_t)v;
+		}
 	}
 
 	signal(SIGPIPE, SIG_IGN);
@@ -573,6 +1312,7 @@ main(int argc, char **argv)
 
 	iox_signal_add(loop, SIGINT, on_sigint, NULL);
 	iox_signal_add(loop, SIGTERM, on_sigint, NULL);
+	iox_signal_add(loop, SIGCHLD, on_sigchld, NULL);
 
 	lsn.fd = listen_bind(port);
 	if (lsn.fd < 0)
