@@ -486,68 +486,102 @@ enum proc_state {
 	PROC_SIGNALED,
 };
 
+struct session;
+
+/* A game-session -- state for a spawned child and its captured logs.
+ * Independent of any single TCP connection: a connection (struct session)
+ * is attached to a gsession, and may detach (leaving the gsession alive
+ * for later re-attach) or disconnect (which destroys the gsession unless
+ * it was marked nokill). */
+struct gsession {
+	int id;                 /* monotonically assigned, 1-based */
+	char name[64];          /* "" if unnamed */
+	int nokill;             /* survive owner disconnect */
+
+	enum proc_state pstate;
+	pid_t pid;
+	int exit_code;
+	int exit_signal;
+	int out_fd;
+	int err_fd;
+	char bin_path[PATH_MAX];
+	struct log_buf logs[N_STREAMS];
+
+	struct iox_loop *loop;
+	struct session *owner;  /* currently attached connection, or NULL */
+};
+
 struct session {
 	int fd;
 	char linebuf[LINE_MAX_BYTES];
 	int linelen;
 	struct iox_loop *loop;
-
-	/* child process */
-	enum proc_state pstate;
-	pid_t pid;
-	int exit_code;   /* PROC_EXITED */
-	int exit_signal; /* PROC_SIGNALED */
-	int out_fd;      /* pipe read end for child stdout, -1 if none */
-	int err_fd;      /* pipe read end for child stderr, -1 if none */
-	char bin_path[PATH_MAX];
-
-	/* log buffers */
-	struct log_buf logs[N_STREAMS];
+	struct gsession *g;     /* attached game-session (never NULL while open) */
+	int closed;             /* request deferred close from inside dispatch */
 };
 
 static void session_close(struct session *s);
+static struct gsession *gsession_new(struct iox_loop *loop);
+static void gsession_destroy(struct gsession *g);
 
-/* Global session registry.  SIGCHLD needs to find the session that
- * owns the reaped pid; we scan this list linearly.  Sessions are rare
- * (one per connected bridge) so O(n) is fine. */
+/* Global gsession registry.  SIGCHLD scans this list to locate the
+ * gsession owning a reaped pid; session_list and session_attach scan
+ * it by name.  O(n) is fine for a handful of sessions. */
 #define MAX_SESSIONS 64
-static struct session *g_sessions[MAX_SESSIONS];
+static struct gsession *g_gsessions[MAX_SESSIONS];
+static int g_next_gsession_id = 1;
 
-static void
-session_register(struct session *s)
+static int
+gsession_register(struct gsession *g)
 {
 	int i;
 
 	for (i = 0; i < MAX_SESSIONS; i++) {
-		if (!g_sessions[i]) {
-			g_sessions[i] = s;
+		if (!g_gsessions[i]) {
+			g_gsessions[i] = g;
+			g->id = g_next_gsession_id++;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+static void
+gsession_unregister(struct gsession *g)
+{
+	int i;
+
+	for (i = 0; i < MAX_SESSIONS; i++) {
+		if (g_gsessions[i] == g) {
+			g_gsessions[i] = NULL;
 			return;
 		}
 	}
 }
 
-static void
-session_unregister(struct session *s)
+static struct gsession *
+gsession_by_pid(pid_t pid)
 {
 	int i;
 
 	for (i = 0; i < MAX_SESSIONS; i++) {
-		if (g_sessions[i] == s) {
-			g_sessions[i] = NULL;
-			return;
-		}
+		if (g_gsessions[i] && g_gsessions[i]->pid == pid &&
+		    g_gsessions[i]->pstate == PROC_RUNNING)
+			return g_gsessions[i];
 	}
+	return NULL;
 }
 
-static struct session *
-session_by_pid(pid_t pid)
+static struct gsession *
+gsession_by_name(const char *name)
 {
 	int i;
 
+	if (!name || !*name)
+		return NULL;
 	for (i = 0; i < MAX_SESSIONS; i++) {
-		if (g_sessions[i] && g_sessions[i]->pid == pid &&
-		    g_sessions[i]->pstate == PROC_RUNNING)
-			return g_sessions[i];
+		if (g_gsessions[i] && strcmp(g_gsessions[i]->name, name) == 0)
+			return g_gsessions[i];
 	}
 	return NULL;
 }
@@ -577,8 +611,8 @@ session_writef(struct session *s, const char *fmt, ...)
 static void
 pipe_on_readable(struct iox_loop *loop, int fd, unsigned events, void *arg)
 {
-	struct session *s = arg;
-	int stream_idx = (fd == s->out_fd) ? STREAM_STDOUT : STREAM_STDERR;
+	struct gsession *g = arg;
+	int stream_idx = (fd == g->out_fd) ? STREAM_STDOUT : STREAM_STDERR;
 	char buf[8192];
 	ssize_t n;
 
@@ -588,21 +622,21 @@ pipe_on_readable(struct iox_loop *loop, int fd, unsigned events, void *arg)
 	n = read(fd, buf, sizeof(buf));
 	if (n <= 0) {
 		/* EOF or error -- stop watching this fd */
-		iox_fd_remove(s->loop, fd);
+		iox_fd_remove(g->loop, fd);
 		close(fd);
-		if (fd == s->out_fd)
-			s->out_fd = -1;
-		else if (fd == s->err_fd)
-			s->err_fd = -1;
+		if (fd == g->out_fd)
+			g->out_fd = -1;
+		else if (fd == g->err_fd)
+			g->err_fd = -1;
 		return;
 	}
-	log_buf_write(&s->logs[stream_idx], buf, (size_t)n);
+	log_buf_write(&g->logs[stream_idx], buf, (size_t)n);
 }
 
 /* Drain any remaining readable bytes after child exits so we don't
  * lose the last few writes.  Non-blocking. */
 static void
-pipe_drain(struct session *s, int fd, int stream_idx)
+pipe_drain(struct gsession *g, int fd, int stream_idx)
 {
 	char buf[8192];
 	ssize_t n;
@@ -613,42 +647,42 @@ pipe_drain(struct session *s, int fd, int stream_idx)
 		n = read(fd, buf, sizeof(buf));
 		if (n <= 0)
 			break;
-		log_buf_write(&s->logs[stream_idx], buf, (size_t)n);
+		log_buf_write(&g->logs[stream_idx], buf, (size_t)n);
 	}
 }
 
-/* Called when the session or launcher tears down and the process is
- * still recorded as running -- send SIGKILL, reap, don't leave zombies. */
+/* Called when the gsession tears down and the process is still recorded
+ * as running -- send SIGKILL, reap, don't leave zombies. */
 static void
-proc_reap_if_running(struct session *s)
+proc_reap_if_running(struct gsession *g)
 {
 	int status;
 	pid_t r;
 
-	if (s->pstate != PROC_RUNNING || s->pid <= 0)
+	if (g->pstate != PROC_RUNNING || g->pid <= 0)
 		return;
-	kill(s->pid, SIGKILL);
-	r = waitpid(s->pid, &status, 0);
-	if (r == s->pid) {
+	kill(g->pid, SIGKILL);
+	r = waitpid(g->pid, &status, 0);
+	if (r == g->pid) {
 		if (WIFEXITED(status)) {
-			s->pstate = PROC_EXITED;
-			s->exit_code = WEXITSTATUS(status);
+			g->pstate = PROC_EXITED;
+			g->exit_code = WEXITSTATUS(status);
 		} else if (WIFSIGNALED(status)) {
-			s->pstate = PROC_SIGNALED;
-			s->exit_signal = WTERMSIG(status);
+			g->pstate = PROC_SIGNALED;
+			g->exit_signal = WTERMSIG(status);
 		}
 	}
 }
 
 /* SIGCHLD self-pipe handler: reap any children that exited, update
- * the owning session's process state.  Log fds remain open so the
+ * the owning gsession's process state.  Log fds remain open so the
  * drain callback can still flush remaining bytes. */
 static void
 on_sigchld(struct iox_loop *loop, int signo, void *arg)
 {
 	int status;
 	pid_t pid;
-	struct session *s;
+	struct gsession *g;
 
 	(void)loop;
 	(void)signo;
@@ -658,32 +692,32 @@ on_sigchld(struct iox_loop *loop, int signo, void *arg)
 		pid = waitpid(-1, &status, WNOHANG);
 		if (pid <= 0)
 			break;
-		s = session_by_pid(pid);
-		if (!s)
+		g = gsession_by_pid(pid);
+		if (!g)
 			continue;
 		if (WIFEXITED(status)) {
-			s->pstate = PROC_EXITED;
-			s->exit_code = WEXITSTATUS(status);
+			g->pstate = PROC_EXITED;
+			g->exit_code = WEXITSTATUS(status);
 		} else if (WIFSIGNALED(status)) {
-			s->pstate = PROC_SIGNALED;
-			s->exit_signal = WTERMSIG(status);
+			g->pstate = PROC_SIGNALED;
+			g->exit_signal = WTERMSIG(status);
 		}
-		pipe_drain(s, s->out_fd, STREAM_STDOUT);
-		pipe_drain(s, s->err_fd, STREAM_STDERR);
+		pipe_drain(g, g->out_fd, STREAM_STDOUT);
+		pipe_drain(g, g->err_fd, STREAM_STDERR);
 	}
 }
 
 /* Fork/exec a child with stdout/stderr piped back to us.
  * argv[0] will be the resolved binary path.  Returns 0 on success. */
 static int
-proc_spawn(struct session *s, const char *bin, char *const argv[],
+proc_spawn(struct gsession *g, const char *bin, char *const argv[],
     char *err_out, size_t err_cap)
 {
 	int outp[2], errp[2];
 	pid_t pid;
 	int i;
 
-	if (s->pstate == PROC_RUNNING) {
+	if (g->pstate == PROC_RUNNING) {
 		snprintf(err_out, err_cap, "process already running");
 		return -1;
 	}
@@ -726,18 +760,18 @@ proc_spawn(struct session *s, const char *bin, char *const argv[],
 
 	/* previous process state carries log buffers; clear them per design */
 	for (i = 0; i < N_STREAMS; i++)
-		log_buf_clear(&s->logs[i]);
+		log_buf_clear(&g->logs[i]);
 
-	s->pid = pid;
-	s->pstate = PROC_RUNNING;
-	s->exit_code = 0;
-	s->exit_signal = 0;
-	s->out_fd = outp[0];
-	s->err_fd = errp[0];
-	snprintf(s->bin_path, sizeof(s->bin_path), "%s", bin);
+	g->pid = pid;
+	g->pstate = PROC_RUNNING;
+	g->exit_code = 0;
+	g->exit_signal = 0;
+	g->out_fd = outp[0];
+	g->err_fd = errp[0];
+	snprintf(g->bin_path, sizeof(g->bin_path), "%s", bin);
 
-	iox_fd_add(s->loop, s->out_fd, IOX_READ, pipe_on_readable, s);
-	iox_fd_add(s->loop, s->err_fd, IOX_READ, pipe_on_readable, s);
+	iox_fd_add(g->loop, g->out_fd, IOX_READ, pipe_on_readable, g);
+	iox_fd_add(g->loop, g->err_fd, IOX_READ, pipe_on_readable, g);
 	return 0;
 }
 
@@ -811,18 +845,18 @@ static void
 cmd_status(struct session *s, struct cmd_args *a)
 {
 	(void)a;
-	switch (s->pstate) {
+	switch (s->g->pstate) {
 	case PROC_NEVER:
 		session_writef(s, "OK never\n");
 		break;
 	case PROC_RUNNING:
-		session_writef(s, "OK running pid=%d\n", (int)s->pid);
+		session_writef(s, "OK running pid=%d\n", (int)s->g->pid);
 		break;
 	case PROC_EXITED:
-		session_writef(s, "OK exited code=%d\n", s->exit_code);
+		session_writef(s, "OK exited code=%d\n", s->g->exit_code);
 		break;
 	case PROC_SIGNALED:
-		session_writef(s, "OK signaled sig=%d\n", s->exit_signal);
+		session_writef(s, "OK signaled sig=%d\n", s->g->exit_signal);
 		break;
 	}
 }
@@ -848,17 +882,17 @@ cmd_spawn(struct session *s, struct cmd_args *a)
 	}
 
 	/* kill any existing process first (design: second spawn replaces) */
-	if (s->pstate == PROC_RUNNING) {
-		proc_reap_if_running(s);
-		if (s->out_fd >= 0) {
-			iox_fd_remove(s->loop, s->out_fd);
-			close(s->out_fd);
-			s->out_fd = -1;
+	if (s->g->pstate == PROC_RUNNING) {
+		proc_reap_if_running(s->g);
+		if (s->g->out_fd >= 0) {
+			iox_fd_remove(s->g->loop, s->g->out_fd);
+			close(s->g->out_fd);
+			s->g->out_fd = -1;
 		}
-		if (s->err_fd >= 0) {
-			iox_fd_remove(s->loop, s->err_fd);
-			close(s->err_fd);
-			s->err_fd = -1;
+		if (s->g->err_fd >= 0) {
+			iox_fd_remove(s->g->loop, s->g->err_fd);
+			close(s->g->err_fd);
+			s->g->err_fd = -1;
 		}
 	}
 
@@ -871,11 +905,11 @@ cmd_spawn(struct session *s, struct cmd_args *a)
 	}
 	child_argv[n_argv] = NULL;
 
-	if (proc_spawn(s, resolved, child_argv, err, sizeof(err)) < 0) {
+	if (proc_spawn(s->g, resolved, child_argv, err, sizeof(err)) < 0) {
 		session_writef(s, "ERR exec: %s\n", err);
 		return;
 	}
-	session_writef(s, "OK pid=%d\n", (int)s->pid);
+	session_writef(s, "OK pid=%d\n", (int)s->g->pid);
 }
 
 static void
@@ -883,7 +917,7 @@ cmd_kill(struct session *s, struct cmd_args *a)
 {
 	int sig = SIGTERM;
 
-	if (s->pstate != PROC_RUNNING) {
+	if (s->g->pstate != PROC_RUNNING) {
 		session_writef(s, "ERR no_process\n");
 		return;
 	}
@@ -895,12 +929,12 @@ cmd_kill(struct session *s, struct cmd_args *a)
 			return;
 		}
 	}
-	if (kill(s->pid, sig) < 0) {
+	if (kill(s->g->pid, sig) < 0) {
 		session_writef(s, "ERR internal: kill: %s\n",
 		    strerror(errno));
 		return;
 	}
-	session_writef(s, "OK killed pid=%d\n", (int)s->pid);
+	session_writef(s, "OK killed pid=%d\n", (int)s->g->pid);
 }
 
 /* Parse stream args from argv[start..].  Returns a mask of selected
@@ -1004,13 +1038,13 @@ cmd_log_tail(struct session *s, struct cmd_args *a)
 	}
 	session_writef(s, "OK\n");
 	if (mask & (1u << STREAM_STDOUT)) {
-		written = log_buf_tail(&s->logs[STREAM_STDOUT], n, out,
+		written = log_buf_tail(&s->g->logs[STREAM_STDOUT], n, out,
 		    g_log_bytes);
 		write_log_chunk(s, streams_selected > 1 ? "stdout" : NULL,
 		    out, written);
 	}
 	if (mask & (1u << STREAM_STDERR)) {
-		written = log_buf_tail(&s->logs[STREAM_STDERR], n, out,
+		written = log_buf_tail(&s->g->logs[STREAM_STDERR], n, out,
 		    g_log_bytes);
 		write_log_chunk(s, streams_selected > 1 ? "stderr" : NULL,
 		    out, written);
@@ -1043,13 +1077,13 @@ cmd_log_head(struct session *s, struct cmd_args *a)
 	}
 	session_writef(s, "OK\n");
 	if (mask & (1u << STREAM_STDOUT)) {
-		written = log_buf_head(&s->logs[STREAM_STDOUT], n, out,
+		written = log_buf_head(&s->g->logs[STREAM_STDOUT], n, out,
 		    g_log_bytes);
 		write_log_chunk(s, streams_selected > 1 ? "stdout" : NULL,
 		    out, written);
 	}
 	if (mask & (1u << STREAM_STDERR)) {
-		written = log_buf_head(&s->logs[STREAM_STDERR], n, out,
+		written = log_buf_head(&s->g->logs[STREAM_STDERR], n, out,
 		    g_log_bytes);
 		write_log_chunk(s, streams_selected > 1 ? "stderr" : NULL,
 		    out, written);
@@ -1086,13 +1120,13 @@ cmd_log_range(struct session *s, struct cmd_args *a)
 	}
 	session_writef(s, "OK\n");
 	if (mask & (1u << STREAM_STDOUT)) {
-		written = log_buf_range(&s->logs[STREAM_STDOUT], first, last,
+		written = log_buf_range(&s->g->logs[STREAM_STDOUT], first, last,
 		    out, g_log_bytes);
 		write_log_chunk(s, streams_selected > 1 ? "stdout" : NULL,
 		    out, written);
 	}
 	if (mask & (1u << STREAM_STDERR)) {
-		written = log_buf_range(&s->logs[STREAM_STDERR], first, last,
+		written = log_buf_range(&s->g->logs[STREAM_STDERR], first, last,
 		    out, g_log_bytes);
 		write_log_chunk(s, streams_selected > 1 ? "stderr" : NULL,
 		    out, written);
@@ -1268,7 +1302,7 @@ cmd_log_grep(struct session *s, struct cmd_args *a)
 		gctx.hist_count = gctx.hist_head = 0;
 		gctx.after_left = 0;
 		gctx.last_emitted_line = 0;
-		log_buf_for_each_line(&s->logs[STREAM_STDOUT],
+		log_buf_for_each_line(&s->g->logs[STREAM_STDOUT],
 		    grep_each_line, &gctx);
 	}
 	if (mask & (1u << STREAM_STDERR)) {
@@ -1276,7 +1310,7 @@ cmd_log_grep(struct session *s, struct cmd_args *a)
 		gctx.hist_count = gctx.hist_head = 0;
 		gctx.after_left = 0;
 		gctx.last_emitted_line = 0;
-		log_buf_for_each_line(&s->logs[STREAM_STDERR],
+		log_buf_for_each_line(&s->g->logs[STREAM_STDERR],
 		    grep_each_line, &gctx);
 	}
 
@@ -1331,9 +1365,9 @@ cmd_log_clear(struct session *s, struct cmd_args *a)
 	unsigned mask = parse_streams(a, 1);
 
 	if (mask & (1u << STREAM_STDOUT))
-		log_buf_clear(&s->logs[STREAM_STDOUT]);
+		log_buf_clear(&s->g->logs[STREAM_STDOUT]);
 	if (mask & (1u << STREAM_STDERR))
-		log_buf_clear(&s->logs[STREAM_STDERR]);
+		log_buf_clear(&s->g->logs[STREAM_STDERR]);
 	session_writef(s, "OK cleared\n");
 }
 
@@ -1341,14 +1375,169 @@ static void
 cmd_session_info(struct session *s, struct cmd_args *a)
 {
 	(void)a;
-	session_writef(s, "OK id=1 name=default attached=yes\n");
+	if (!s->g) {
+		session_writef(s, "ERR no_session\n");
+		return;
+	}
+	session_writef(s, "OK id=%d name=%s attached=yes nokill=%s\n",
+	    s->g->id,
+	    s->g->name[0] ? s->g->name : "-",
+	    s->g->nokill ? "yes" : "no");
 }
 
 static void
 cmd_session_list(struct session *s, struct cmd_args *a)
 {
+	int i, first = 1;
+	char buf[1024];
+	size_t off = 0;
+
 	(void)a;
-	session_writef(s, "OK default\n");
+
+	off += (size_t)snprintf(buf + off, sizeof(buf) - off, "OK");
+	for (i = 0; i < MAX_SESSIONS; i++) {
+		const struct gsession *g = g_gsessions[i];
+		const char *name;
+		if (!g)
+			continue;
+		name = g->name[0] ? g->name : "-";
+		if (off < sizeof(buf)) {
+			off += (size_t)snprintf(buf + off, sizeof(buf) - off,
+			    "%sid=%d,name=%s,attached=%s,nokill=%s",
+			    first ? " " : " ",
+			    g->id, name,
+			    g->owner ? "yes" : "no",
+			    g->nokill ? "yes" : "no");
+			first = 0;
+		}
+	}
+	if (first)
+		session_writef(s, "OK (no sessions)\n");
+	else
+		session_writef(s, "%s\n", buf);
+}
+
+static void
+cmd_session_name(struct session *s, struct cmd_args *a)
+{
+	if (a->argc < 2) {
+		session_writef(s, "ERR usage: session_name <name>\n");
+		return;
+	}
+	if (!s->g) {
+		session_writef(s, "ERR no_session\n");
+		return;
+	}
+	if (strlen(a->argv[1]) >= sizeof(s->g->name)) {
+		session_writef(s, "ERR usage: name too long\n");
+		return;
+	}
+	/* reject names that collide with another live gsession */
+	{
+		struct gsession *other = gsession_by_name(a->argv[1]);
+		if (other && other != s->g) {
+			session_writef(s,
+			    "ERR not_allowed: name %s already in use\n",
+			    a->argv[1]);
+			return;
+		}
+	}
+	snprintf(s->g->name, sizeof(s->g->name), "%s", a->argv[1]);
+	session_writef(s, "OK\n");
+}
+
+static void
+cmd_session_nokill(struct session *s, struct cmd_args *a)
+{
+	(void)a;
+	if (!s->g) {
+		session_writef(s, "ERR no_session\n");
+		return;
+	}
+	s->g->nokill = 1;
+	session_writef(s, "OK\n");
+}
+
+static void
+cmd_session_detach(struct session *s, struct cmd_args *a)
+{
+	(void)a;
+	if (!s->g) {
+		session_writef(s, "ERR no_session\n");
+		return;
+	}
+	/* Acknowledge, then drop the connection.  session_close() will
+	 * preserve the gsession iff nokill was set; otherwise the game
+	 * is killed as usual. */
+	session_writef(s, "OK detached\n");
+	s->closed = 1;
+}
+
+static void
+cmd_session_attach(struct session *s, struct cmd_args *a)
+{
+	struct gsession *target;
+
+	if (a->argc < 2) {
+		session_writef(s, "ERR usage: session_attach <name>\n");
+		return;
+	}
+	target = gsession_by_name(a->argv[1]);
+	if (!target) {
+		session_writef(s, "ERR not_allowed: no such session: %s\n",
+		    a->argv[1]);
+		return;
+	}
+	if (target == s->g) {
+		session_writef(s, "OK attached (already)\n");
+		return;
+	}
+	if (target->owner) {
+		session_writef(s,
+		    "ERR not_allowed: session %s already attached\n",
+		    a->argv[1]);
+		return;
+	}
+	/* Swap: destroy our current gsession (if unused & not nokill),
+	 * then adopt the target. */
+	if (s->g) {
+		struct gsession *old = s->g;
+		old->owner = NULL;
+		if (!old->nokill)
+			gsession_destroy(old);
+	}
+	s->g = target;
+	target->owner = s;
+	session_writef(s, "OK attached\n");
+}
+
+static void
+cmd_session_kill(struct session *s, struct cmd_args *a)
+{
+	struct gsession *target;
+
+	if (a->argc < 2) {
+		session_writef(s, "ERR usage: session_kill <name>\n");
+		return;
+	}
+	target = gsession_by_name(a->argv[1]);
+	if (!target) {
+		session_writef(s, "ERR not_allowed: no such session: %s\n",
+		    a->argv[1]);
+		return;
+	}
+	if (target == s->g) {
+		/* killing our own session: detach first so we don't UAF */
+		s->g = NULL;
+		target->owner = NULL;
+	} else if (target->owner) {
+		/* another connection owns it -- orphan that connection's
+		 * gsession pointer so its next access reports no_session */
+		target->owner->g = NULL;
+		target->owner = NULL;
+	}
+	gsession_destroy(target);
+	session_writef(s, "OK\n");
 }
 
 struct command {
@@ -1371,8 +1560,13 @@ static const struct command commands[] = {
 	{ "log_clear",    cmd_log_clear,    "clear log buffer [streams...]" },
 	{ "env",          cmd_env,          "get/set env var: env KEY [VALUE]" },
 	{ "unsetenv",     cmd_unsetenv,     "unset env var: unsetenv KEY" },
-	{ "session_info", cmd_session_info, "report current session identity" },
-	{ "session_list", cmd_session_list, "list all active sessions globally" },
+	{ "session_info",   cmd_session_info,   "report current session identity" },
+	{ "session_list",   cmd_session_list,   "list all active sessions globally" },
+	{ "session_name",   cmd_session_name,   "assign a name to the current session" },
+	{ "session_nokill", cmd_session_nokill, "mark session so game outlives disconnect" },
+	{ "session_detach", cmd_session_detach, "detach connection (closes); game survives if nokill" },
+	{ "session_attach", cmd_session_attach, "attach to an existing named session" },
+	{ "session_kill",   cmd_session_kill,   "force-destroy a named session" },
 	{ NULL, NULL, NULL }
 };
 
@@ -1408,6 +1602,19 @@ dispatch(struct session *s, char *line)
 	parse_args(line, &args);
 	if (args.argc == 0)
 		return;
+
+	/* Re-establish a gsession if ours was destroyed (e.g. another
+	 * connection issued session_kill on it).  Keeps the invariant
+	 * that command handlers can rely on s->g being non-NULL. */
+	if (!s->g) {
+		struct gsession *g = gsession_new(s->loop);
+		if (!g) {
+			session_writef(s, "ERR internal: gsession_new failed\n");
+			return;
+		}
+		s->g = g;
+		g->owner = s;
+	}
 
 	for (c = commands; c->name; c++) {
 		if (strcmp(c->name, args.argv[0]) == 0) {
@@ -1456,6 +1663,10 @@ session_on_readable(struct iox_loop *loop, int fd, unsigned events, void *arg)
 			nl[-1] = '\0';
 
 		dispatch(s, s->linebuf);
+		if (s->closed) {
+			session_close(s);
+			return;
+		}
 
 		i = (int)(nl - s->linebuf) + 1;
 		s->linelen -= i;
@@ -1466,63 +1677,108 @@ session_on_readable(struct iox_loop *loop, int fd, unsigned events, void *arg)
 	}
 }
 
+/* Allocate a fresh gsession, register it, leave it detached (owner=NULL). */
+static struct gsession *
+gsession_new(struct iox_loop *loop)
+{
+	struct gsession *g;
+	int i;
+
+	g = calloc(1, sizeof(*g));
+	if (!g)
+		return NULL;
+	g->loop = loop;
+	g->pstate = PROC_NEVER;
+	g->pid = 0;
+	g->out_fd = g->err_fd = -1;
+	g->owner = NULL;
+	g->nokill = 0;
+	g->name[0] = '\0';
+
+	for (i = 0; i < N_STREAMS; i++) {
+		if (log_buf_init(&g->logs[i], g_log_bytes) < 0) {
+			while (--i >= 0)
+				log_buf_free(&g->logs[i]);
+			free(g);
+			return NULL;
+		}
+	}
+	if (gsession_register(g) < 0) {
+		for (i = 0; i < N_STREAMS; i++)
+			log_buf_free(&g->logs[i]);
+		free(g);
+		return NULL;
+	}
+	return g;
+}
+
+/* Tear down a gsession: kill+reap process, close pipes, free logs. */
+static void
+gsession_destroy(struct gsession *g)
+{
+	int i;
+
+	if (!g)
+		return;
+	proc_reap_if_running(g);
+	if (g->out_fd >= 0) {
+		iox_fd_remove(g->loop, g->out_fd);
+		close(g->out_fd);
+		g->out_fd = -1;
+	}
+	if (g->err_fd >= 0) {
+		iox_fd_remove(g->loop, g->err_fd);
+		close(g->err_fd);
+		g->err_fd = -1;
+	}
+	for (i = 0; i < N_STREAMS; i++)
+		log_buf_free(&g->logs[i]);
+	gsession_unregister(g);
+	free(g);
+}
+
 static struct session *
 session_new(struct iox_loop *loop, int fd)
 {
 	struct session *s;
-	int i;
+	struct gsession *g;
 
 	s = calloc(1, sizeof(*s));
 	if (!s)
 		return NULL;
-	s->fd = fd;
-	s->loop = loop;
-	s->pstate = PROC_NEVER;
-	s->pid = 0;
-	s->out_fd = s->err_fd = -1;
-
-	for (i = 0; i < N_STREAMS; i++) {
-		if (log_buf_init(&s->logs[i], g_log_bytes) < 0) {
-			while (--i >= 0)
-				log_buf_free(&s->logs[i]);
-			free(s);
-			return NULL;
-		}
-	}
-
-	if (iox_fd_add(loop, fd, IOX_READ, session_on_readable, s) < 0) {
-		for (i = 0; i < N_STREAMS; i++)
-			log_buf_free(&s->logs[i]);
+	g = gsession_new(loop);
+	if (!g) {
 		free(s);
 		return NULL;
 	}
-	session_register(s);
+	s->fd = fd;
+	s->loop = loop;
+	s->g = g;
+	g->owner = s;
+
+	if (iox_fd_add(loop, fd, IOX_READ, session_on_readable, s) < 0) {
+		g->owner = NULL;
+		gsession_destroy(g);
+		free(s);
+		return NULL;
+	}
 	return s;
 }
-
-static void proc_reap_if_running(struct session *s);
 
 static void
 session_close(struct session *s)
 {
-	int i;
+	struct gsession *g;
 
 	if (!s)
 		return;
-	proc_reap_if_running(s);
-	if (s->out_fd >= 0) {
-		iox_fd_remove(s->loop, s->out_fd);
-		close(s->out_fd);
-		s->out_fd = -1;
+	g = s->g;
+	if (g) {
+		g->owner = NULL;
+		s->g = NULL;
+		if (!g->nokill)
+			gsession_destroy(g);
 	}
-	if (s->err_fd >= 0) {
-		iox_fd_remove(s->loop, s->err_fd);
-		close(s->err_fd);
-		s->err_fd = -1;
-	}
-	for (i = 0; i < N_STREAMS; i++)
-		log_buf_free(&s->logs[i]);
-	session_unregister(s);
 	iox_fd_remove(s->loop, s->fd);
 	close(s->fd);
 	free(s);
