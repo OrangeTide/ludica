@@ -108,6 +108,13 @@ static int frame_delay;          /* file replay: frames to skip */
 
 static int stepping;             /* frames remaining in STEP command */
 static int wait_frame;           /* WAITEVENT FRAME pending */
+static int ctl_step_pending;     /* nonzero: STEP reply goes to ctl_fd */
+
+#ifndef _WIN32
+static int ctl_fd = -1;          /* inherited control fd (socketpair w/ launcher) */
+static char ctl_linebuf[LINE_BUF_SIZE];
+static int ctl_linelen;
+#endif
 
 static int auto_kill = 1;        /* terminate after first client disconnects */
 static int had_client;            /* true once a client has connected */
@@ -967,6 +974,240 @@ process_command(const char *line)
 	return 0;
 }
 
+/* ---- Control fd (launcher-proxied, lowercase protocol) ---- */
+
+#ifndef _WIN32
+
+static void
+ctl_writef(const char *fmt, ...)
+{
+	va_list ap;
+	int n;
+	if (ctl_fd < 0)
+		return;
+	va_start(ap, fmt);
+	n = vsnprintf(resp_buf, sizeof(resp_buf) - 1, fmt, ap);
+	va_end(ap);
+	if (n > 0) {
+		resp_buf[n] = '\n';
+		if (write(ctl_fd, resp_buf, (size_t)(n + 1)) < 0) {
+			/* peer gone; close */
+			close(ctl_fd);
+			ctl_fd = -1;
+		}
+	}
+}
+
+static void
+ctl_close(void)
+{
+	if (ctl_fd >= 0) {
+		close(ctl_fd);
+		ctl_fd = -1;
+	}
+	ctl_linelen = 0;
+}
+
+/* Lowercase dispatcher. Shares tokens[]/num_tokens with tokenize(). */
+static void
+ctl_dispatch(const char *line)
+{
+	if (tokenize(line) == 0)
+		return;
+
+	if (strcasecmp(tokens[0], "action") == 0) {
+		int mode = 0;
+		if (num_tokens < 2) {
+			ctl_writef("ERR usage: action <name> [hold|release]");
+			return;
+		}
+		if (num_tokens >= 3) {
+			if (strcasecmp(tokens[2], "hold") == 0) mode = 1;
+			else if (strcasecmp(tokens[2], "release") == 0) mode = 2;
+		}
+		if (lud__action_inject(tokens[1], mode) != 0) {
+			ctl_writef("ERR unknown_action");
+			return;
+		}
+		ctl_writef("OK action %s %s", tokens[1],
+			mode == 1 ? "held" : mode == 2 ? "released" : "pressed");
+	} else if (strcasecmp(tokens[0], "step") == 0) {
+		int n = (num_tokens > 1) ? atoi(tokens[1]) : 1;
+		if (n < 1) n = 1;
+		lud__state.paused = 1;
+		stepping = n;
+		ctl_step_pending = 1;
+		/* reply deferred to lud__auto_post_frame */
+	} else if (strcasecmp(tokens[0], "pause") == 0) {
+		lud__state.paused = 1;
+		ctl_writef("OK paused");
+	} else if (strcasecmp(tokens[0], "resume") == 0) {
+		lud__state.paused = 0;
+		ctl_writef("OK resumed");
+	} else if (strcasecmp(tokens[0], "seed") == 0) {
+		unsigned int s;
+		if (num_tokens < 2) {
+			ctl_writef("ERR usage: seed <n>");
+			return;
+		}
+		s = (unsigned int)strtoul(tokens[1], NULL, 10);
+		srand(s);
+		ctl_writef("OK seed=%u", s);
+	} else if (strcasecmp(tokens[0], "query") == 0) {
+		if (num_tokens < 2) {
+			ctl_writef("ERR usage: query frame|size|fps|var <name>");
+			return;
+		}
+		if (strcasecmp(tokens[1], "frame") == 0) {
+			ctl_writef("OK %llu", lud__state.frame_count);
+		} else if (strcasecmp(tokens[1], "size") == 0) {
+			ctl_writef("OK %d %d",
+				lud__state.win_width, lud__state.win_height);
+		} else if (strcasecmp(tokens[1], "fps") == 0) {
+			float fps = (lud__state.frame_dt > 0.0f)
+				? 1.0f / lud__state.frame_dt : 0.0f;
+			ctl_writef("OK %.1f", fps);
+		} else if (strcasecmp(tokens[1], "var") == 0) {
+			int i;
+			if (num_tokens < 3) {
+				ctl_writef("ERR usage: query var <name>");
+				return;
+			}
+			for (i = 0; i < num_vars; i++) {
+				if (strcmp(vars[i].name, tokens[2]) == 0) {
+					if (vars[i].type == VAR_INT)
+						ctl_writef("OK %d", *vars[i].u.ip);
+					else
+						ctl_writef("OK %s",
+							*vars[i].u.sp ? *vars[i].u.sp : "");
+					return;
+				}
+			}
+			ctl_writef("ERR unknown_variable");
+		} else {
+			ctl_writef("ERR unknown_query");
+		}
+	} else if (strcasecmp(tokens[0], "list_actions") == 0) {
+		int n = lud__action_count();
+		char *p = resp_buf;
+		char *end = resp_buf + sizeof(resp_buf) - 2;
+		int i, k;
+		p += snprintf(p, end - p, "OK");
+		for (i = 0; i < n && p < end; i++) {
+			const char *name = lud__action_name(i);
+			int nk = lud__action_key_count(i);
+			p += snprintf(p, end - p, " %s=", name);
+			if (nk == 0) {
+				p += snprintf(p, end - p, "(none)");
+			} else {
+				for (k = 0; k < nk && p < end; k++) {
+					const char *kn = lud__key_name(lud__action_key(i, k));
+					if (k > 0 && p < end) *p++ = ',';
+					if (kn) p += snprintf(p, end - p, "%s", kn);
+				}
+			}
+		}
+		*p++ = '\n';
+		if (write(ctl_fd, resp_buf, (size_t)(p - resp_buf)) < 0) {
+			ctl_close();
+		}
+	} else if (strcasecmp(tokens[0], "list_vars") == 0) {
+		char *p = resp_buf;
+		char *end = resp_buf + sizeof(resp_buf) - 2;
+		int i;
+		p += snprintf(p, end - p, "OK");
+		for (i = 0; i < num_vars && p < end; i++)
+			p += snprintf(p, end - p, " %s", vars[i].name);
+		*p++ = '\n';
+		if (write(ctl_fd, resp_buf, (size_t)(p - resp_buf)) < 0) {
+			ctl_close();
+		}
+	} else if (strcasecmp(tokens[0], "read_pixel") == 0) {
+		unsigned char pixel[4];
+		int x, y, gl_y;
+		if (num_tokens < 3) {
+			ctl_writef("ERR usage: read_pixel <x> <y>");
+			return;
+		}
+		x = atoi(tokens[1]);
+		y = atoi(tokens[2]);
+		gl_y = lud__state.win_height - 1 - y;
+		glReadPixels(x, gl_y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+		ctl_writef("OK %d %d %d", pixel[0], pixel[1], pixel[2]);
+	} else if (strcasecmp(tokens[0], "screenshot") == 0) {
+		ctl_writef("ERR not_implemented");
+	} else {
+		ctl_writef("ERR unknown_command");
+	}
+}
+
+static void
+ctl_poll(void)
+{
+	char tmp[1024];
+	ssize_t n;
+	int i;
+
+	if (ctl_fd < 0)
+		return;
+
+	/* while stepping, don't read more commands (step reply is deferred) */
+	if (stepping > 0)
+		return;
+
+	n = read(ctl_fd, tmp, sizeof(tmp));
+	if (n == 0) {
+		lud_log("automation: control fd closed");
+		ctl_close();
+		return;
+	}
+	if (n < 0) {
+		if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+			return;
+		lud_log("automation: control fd read error: %s", strerror(errno));
+		ctl_close();
+		return;
+	}
+
+	for (i = 0; i < n; i++) {
+		if (tmp[i] == '\n') {
+			ctl_linebuf[ctl_linelen] = '\0';
+			if (ctl_linelen > 0)
+				ctl_dispatch(ctl_linebuf);
+			ctl_linelen = 0;
+			if (stepping > 0)
+				return; /* defer rest of buffer until step completes */
+		} else if (ctl_linelen < LINE_BUF_SIZE - 1) {
+			ctl_linebuf[ctl_linelen++] = tmp[i];
+		}
+	}
+}
+
+static void
+ctl_init_from_argv(void)
+{
+	int i;
+	if (!lud__state.desc.argv)
+		return;
+	for (i = 1; i < lud__state.desc.argc; i++) {
+		if (strncmp(lud__state.desc.argv[i], "---controlfd=", 13) == 0) {
+			int fd = atoi(lud__state.desc.argv[i] + 13);
+			if (fd > 0) {
+				int fl = fcntl(fd, F_GETFL);
+				if (fl >= 0)
+					fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+				fcntl(fd, F_SETFD, FD_CLOEXEC);
+				ctl_fd = fd;
+				ctl_linelen = 0;
+				lud_log("automation: control fd %d ready", fd);
+			}
+			return;
+		}
+	}
+}
+
+#endif /* !_WIN32 */
+
 /* ---- TCP server management ---- */
 
 static int
@@ -1125,6 +1366,8 @@ void
 lud__auto_init(void)
 {
 #ifndef _WIN32
+	ctl_init_from_argv();
+
 	/* Check for inherited listen fd from RESTART (---listenfd=N) */
 	{
 		int i;
@@ -1178,6 +1421,9 @@ lud__auto_poll(void)
 		try_accept();
 		read_and_dispatch();
 	}
+#ifndef _WIN32
+	ctl_poll();
+#endif
 	replay_poll();
 }
 
@@ -1198,7 +1444,15 @@ lud__auto_post_frame(void)
 	if (stepping > 0) {
 		stepping--;
 		if (stepping == 0) {
-			send_resp("OK %llu", lud__state.frame_count);
+#ifndef _WIN32
+			if (ctl_step_pending) {
+				ctl_step_pending = 0;
+				ctl_writef("OK frame=%llu", lud__state.frame_count);
+			} else
+#endif
+			{
+				send_resp("OK %llu", lud__state.frame_count);
+			}
 		}
 	}
 
@@ -1223,6 +1477,9 @@ lud__auto_post_frame(void)
 void
 lud__auto_shutdown(void)
 {
+#ifndef _WIN32
+	ctl_close();
+#endif
 	close_client();
 	if (listen_fd != SOCK_INVALID) {
 		sock_close(listen_fd);
