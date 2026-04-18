@@ -493,6 +493,8 @@ struct session;
  * is attached to a gsession, and may detach (leaving the gsession alive
  * for later re-attach) or disconnect (which destroys the gsession unless
  * it was marked nokill). */
+#define CTL_Q_CAP 16
+
 struct gsession {
 	int id;                 /* monotonically assigned, 1-based */
 	char name[64];          /* "" if unnamed */
@@ -506,6 +508,17 @@ struct gsession {
 	int err_fd;
 	char bin_path[PATH_MAX];
 	struct log_buf logs[N_STREAMS];
+
+	/* control fd: socketpair to in-process automation sidecar
+	 * (---controlfd=N passed to child).  Proxies the Control
+	 * command subset; replies are FIFO-matched to the originating
+	 * session via ctl_q. */
+	int ctl_fd;
+	char ctl_linebuf[8192];
+	int ctl_linelen;
+	struct session *ctl_q[CTL_Q_CAP];
+	int ctl_q_head;
+	int ctl_q_count;
 
 	struct iox_loop *loop;
 	struct session *owner;  /* currently attached connection, or NULL */
@@ -651,6 +664,115 @@ pipe_drain(struct gsession *g, int fd, int stream_idx)
 	}
 }
 
+/* ---- control fd (proxy to in-process automation) ---- */
+
+static int
+ctl_q_push(struct gsession *g, struct session *s)
+{
+	int idx;
+
+	if (g->ctl_q_count >= CTL_Q_CAP)
+		return -1;
+	idx = (g->ctl_q_head + g->ctl_q_count) % CTL_Q_CAP;
+	g->ctl_q[idx] = s;
+	g->ctl_q_count++;
+	return 0;
+}
+
+static struct session *
+ctl_q_pop(struct gsession *g)
+{
+	struct session *s;
+
+	if (g->ctl_q_count == 0)
+		return NULL;
+	s = g->ctl_q[g->ctl_q_head];
+	g->ctl_q[g->ctl_q_head] = NULL;
+	g->ctl_q_head = (g->ctl_q_head + 1) % CTL_Q_CAP;
+	g->ctl_q_count--;
+	return s;
+}
+
+/* Null out any queued pending-reply entries referencing dead.
+ * Called when a session is about to be freed or detaches to a
+ * different gsession -- the reply will still arrive and be read,
+ * but the pop will return NULL and we drop it silently. */
+static void
+ctl_q_scrub_session(struct session *dead)
+{
+	int i, j;
+
+	for (i = 0; i < MAX_SESSIONS; i++) {
+		struct gsession *g = g_gsessions[i];
+		if (!g) continue;
+		for (j = 0; j < CTL_Q_CAP; j++)
+			if (g->ctl_q[j] == dead)
+				g->ctl_q[j] = NULL;
+	}
+}
+
+static void
+ctl_close(struct gsession *g)
+{
+	struct session *s;
+
+	if (g->ctl_fd < 0)
+		return;
+	while ((s = ctl_q_pop(g)) != NULL) {
+		if (s) session_writef(s, "ERR control_closed\n");
+	}
+	iox_fd_remove(g->loop, g->ctl_fd);
+	close(g->ctl_fd);
+	g->ctl_fd = -1;
+	g->ctl_linelen = 0;
+}
+
+static void
+ctl_on_readable(struct iox_loop *loop, int fd, unsigned events, void *arg)
+{
+	struct gsession *g = arg;
+	ssize_t n;
+
+	(void)loop;
+	(void)events;
+
+	n = read(fd, g->ctl_linebuf + g->ctl_linelen,
+	    sizeof(g->ctl_linebuf) - (size_t)g->ctl_linelen - 1);
+	if (n <= 0) {
+		ctl_close(g);
+		return;
+	}
+	g->ctl_linelen += (int)n;
+	g->ctl_linebuf[g->ctl_linelen] = '\0';
+
+	for (;;) {
+		char *nl = memchr(g->ctl_linebuf, '\n',
+		    (size_t)g->ctl_linelen);
+		struct session *s;
+		int consumed;
+
+		if (!nl) {
+			if (g->ctl_linelen >= (int)sizeof(g->ctl_linebuf) - 1)
+				g->ctl_linelen = 0;
+			break;
+		}
+		*nl = '\0';
+		if (nl > g->ctl_linebuf && nl[-1] == '\r')
+			nl[-1] = '\0';
+
+		s = ctl_q_pop(g);
+		if (s)
+			session_writef(s, "%s\n", g->ctl_linebuf);
+
+		consumed = (int)(nl - g->ctl_linebuf) + 1;
+		g->ctl_linelen -= consumed;
+		if (g->ctl_linelen > 0)
+			memmove(g->ctl_linebuf, g->ctl_linebuf + consumed,
+			    (size_t)g->ctl_linelen);
+		g->ctl_linebuf[g->ctl_linelen] = '\0';
+	}
+}
+
 /* Called when the gsession tears down and the process is still recorded
  * as running -- send SIGKILL, reap, don't leave zombies. */
 static void
@@ -714,7 +836,11 @@ proc_spawn(struct gsession *g, const char *bin, char *const argv[],
     char *err_out, size_t err_cap)
 {
 	int outp[2], errp[2];
+	int ctlp[2];
 	pid_t pid;
+	char ctl_arg[32];
+	char *final_argv[34];
+	int n_argv = 0;
 	int i;
 
 	if (g->pstate == PROC_RUNNING) {
@@ -731,12 +857,26 @@ proc_spawn(struct gsession *g, const char *bin, char *const argv[],
 		close(outp[0]); close(outp[1]);
 		return -1;
 	}
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, ctlp) < 0) {
+		ctlp[0] = ctlp[1] = -1;
+	}
+
+	/* build argv with ---controlfd=N appended */
+	for (i = 0; argv[i] && n_argv < 32; i++)
+		final_argv[n_argv++] = argv[i];
+	if (ctlp[1] >= 0 && n_argv < 32) {
+		snprintf(ctl_arg, sizeof(ctl_arg), "---controlfd=%d", ctlp[1]);
+		final_argv[n_argv++] = ctl_arg;
+	}
+	final_argv[n_argv] = NULL;
 
 	pid = fork();
 	if (pid < 0) {
 		snprintf(err_out, err_cap, "fork: %s", strerror(errno));
 		close(outp[0]); close(outp[1]);
 		close(errp[0]); close(errp[1]);
+		if (ctlp[0] >= 0) close(ctlp[0]);
+		if (ctlp[1] >= 0) close(ctlp[1]);
 		return -1;
 	}
 	if (pid == 0) {
@@ -745,9 +885,11 @@ proc_spawn(struct gsession *g, const char *bin, char *const argv[],
 		dup2(errp[1], STDERR_FILENO);
 		close(outp[0]); close(outp[1]);
 		close(errp[0]); close(errp[1]);
+		if (ctlp[0] >= 0) close(ctlp[0]);
+		/* ctlp[1] survives exec; its number is in argv */
 		/* reset SIGPIPE so child sees default behavior */
 		signal(SIGPIPE, SIG_DFL);
-		execv(bin, argv);
+		execv(bin, final_argv);
 		fprintf(stderr, "exec %s: %s\n", bin, strerror(errno));
 		_exit(127);
 	}
@@ -755,8 +897,13 @@ proc_spawn(struct gsession *g, const char *bin, char *const argv[],
 	/* parent */
 	close(outp[1]);
 	close(errp[1]);
+	if (ctlp[1] >= 0) close(ctlp[1]);
 	fcntl(outp[0], F_SETFL, O_NONBLOCK);
 	fcntl(errp[0], F_SETFL, O_NONBLOCK);
+	if (ctlp[0] >= 0) {
+		fcntl(ctlp[0], F_SETFL, O_NONBLOCK);
+		fcntl(ctlp[0], F_SETFD, FD_CLOEXEC);
+	}
 
 	/* previous process state carries log buffers; clear them per design */
 	for (i = 0; i < N_STREAMS; i++)
@@ -768,10 +915,17 @@ proc_spawn(struct gsession *g, const char *bin, char *const argv[],
 	g->exit_signal = 0;
 	g->out_fd = outp[0];
 	g->err_fd = errp[0];
+	g->ctl_fd = ctlp[0];
+	g->ctl_linelen = 0;
+	g->ctl_q_head = 0;
+	g->ctl_q_count = 0;
+	memset(g->ctl_q, 0, sizeof(g->ctl_q));
 	snprintf(g->bin_path, sizeof(g->bin_path), "%s", bin);
 
 	iox_fd_add(g->loop, g->out_fd, IOX_READ, pipe_on_readable, g);
 	iox_fd_add(g->loop, g->err_fd, IOX_READ, pipe_on_readable, g);
+	if (g->ctl_fd >= 0)
+		iox_fd_add(g->loop, g->ctl_fd, IOX_READ, ctl_on_readable, g);
 	return 0;
 }
 
@@ -894,6 +1048,7 @@ cmd_spawn(struct session *s, struct cmd_args *a)
 			close(s->g->err_fd);
 			s->g->err_fd = -1;
 		}
+		ctl_close(s->g);
 	}
 
 	/* build argv: resolved path, then user args after alias */
@@ -1540,6 +1695,47 @@ cmd_session_kill(struct session *s, struct cmd_args *a)
 	session_writef(s, "OK\n");
 }
 
+/* Forward a Control-subset command verbatim over ctl_fd, enqueue the
+ * originating session so the reply line routes back on pop.  All
+ * control commands share this handler because the game side speaks
+ * the same line-oriented text protocol -- the launcher is just a
+ * dumb forwarder for this subset. */
+static void
+cmd_proxy(struct session *s, struct cmd_args *a)
+{
+	char line[LINE_MAX_BYTES];
+	int off = 0, i;
+	ssize_t w;
+
+	if (!s->g || s->g->ctl_fd < 0) {
+		session_writef(s, "ERR no_control\n");
+		return;
+	}
+	if (s->g->ctl_q_count >= CTL_Q_CAP) {
+		session_writef(s, "ERR busy: control queue full\n");
+		return;
+	}
+	for (i = 0; i < a->argc; i++) {
+		int n = snprintf(line + off, sizeof(line) - (size_t)off,
+		    "%s%s", i ? " " : "", a->argv[i]);
+		if (n < 0 || off + n >= (int)sizeof(line) - 1) {
+			session_writef(s, "ERR usage: command too long\n");
+			return;
+		}
+		off += n;
+	}
+	line[off++] = '\n';
+
+	w = write(s->g->ctl_fd, line, (size_t)off);
+	if (w != off) {
+		session_writef(s, "ERR control_write: %s\n",
+		    w < 0 ? strerror(errno) : "short write");
+		ctl_close(s->g);
+		return;
+	}
+	ctl_q_push(s->g, s);
+}
+
 struct command {
 	const char *name;
 	void (*fn)(struct session *s, struct cmd_args *a);
@@ -1567,6 +1763,16 @@ static const struct command commands[] = {
 	{ "session_detach", cmd_session_detach, "detach connection (closes); game survives if nokill" },
 	{ "session_attach", cmd_session_attach, "attach to an existing named session" },
 	{ "session_kill",   cmd_session_kill,   "force-destroy a named session" },
+	{ "action",       cmd_proxy,        "proxy: press/hold/release a named action" },
+	{ "step",         cmd_proxy,        "proxy: advance N frames (default 1)" },
+	{ "pause",        cmd_proxy,        "proxy: pause the game loop" },
+	{ "resume",       cmd_proxy,        "proxy: resume the game loop" },
+	{ "seed",         cmd_proxy,        "proxy: set deterministic RNG seed" },
+	{ "screenshot",   cmd_proxy,        "proxy: capture a screenshot" },
+	{ "read_pixel",   cmd_proxy,        "proxy: read a pixel at X Y" },
+	{ "query",        cmd_proxy,        "proxy: query frame|size|fps|var" },
+	{ "list_actions", cmd_proxy,        "proxy: list registered actions" },
+	{ "list_vars",    cmd_proxy,        "proxy: list registered state vars" },
 	{ NULL, NULL, NULL }
 };
 
@@ -1691,6 +1897,7 @@ gsession_new(struct iox_loop *loop)
 	g->pstate = PROC_NEVER;
 	g->pid = 0;
 	g->out_fd = g->err_fd = -1;
+	g->ctl_fd = -1;
 	g->owner = NULL;
 	g->nokill = 0;
 	g->name[0] = '\0';
@@ -1731,6 +1938,7 @@ gsession_destroy(struct gsession *g)
 		close(g->err_fd);
 		g->err_fd = -1;
 	}
+	ctl_close(g);
 	for (i = 0; i < N_STREAMS; i++)
 		log_buf_free(&g->logs[i]);
 	gsession_unregister(g);
@@ -1772,6 +1980,7 @@ session_close(struct session *s)
 
 	if (!s)
 		return;
+	ctl_q_scrub_session(s);
 	g = s->g;
 	if (g) {
 		g->owner = NULL;
