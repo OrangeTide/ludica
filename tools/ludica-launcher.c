@@ -16,6 +16,7 @@
 #include "iox_signal.h"
 
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -520,6 +521,13 @@ struct gsession {
 	int ctl_q_head;
 	int ctl_q_count;
 
+	/* crash capture (Phase 5): populated on abnormal exit; cleared on
+	 * next spawn.  core_path is the located core file; crash_summary is
+	 * the one-line summary ("file:line in func: SIGNAME"), lazily
+	 * computed on first query. */
+	char core_path[PATH_MAX];
+	char crash_summary[512];
+
 	struct iox_loop *loop;
 	struct session *owner;  /* currently attached connection, or NULL */
 };
@@ -796,6 +804,9 @@ proc_reap_if_running(struct gsession *g)
 	}
 }
 
+static int core_locate_for(const char *binary, pid_t pid,
+    char *out, size_t cap);
+
 /* SIGCHLD self-pipe handler: reap any children that exited, update
  * the owning gsession's process state.  Log fds remain open so the
  * drain callback can still flush remaining bytes. */
@@ -821,8 +832,19 @@ on_sigchld(struct iox_loop *loop, int signo, void *arg)
 			g->pstate = PROC_EXITED;
 			g->exit_code = WEXITSTATUS(status);
 		} else if (WIFSIGNALED(status)) {
+			char path[PATH_MAX];
 			g->pstate = PROC_SIGNALED;
 			g->exit_signal = WTERMSIG(status);
+			/* Attempt auto-capture: try to locate a core file now
+			 * so `gdb_core_find` returns it immediately and the
+			 * coredump is recorded even if the session forgets to
+			 * query.  Failure is non-fatal and silent. */
+			if (g->bin_path[0] &&
+			    core_locate_for(g->bin_path, pid, path,
+			        sizeof(path)) == 0) {
+				snprintf(g->core_path, sizeof(g->core_path),
+				    "%s", path);
+			}
 		}
 		pipe_drain(g, g->out_fd, STREAM_STDOUT);
 		pipe_drain(g, g->err_fd, STREAM_STDERR);
@@ -908,6 +930,10 @@ proc_spawn(struct gsession *g, const char *bin, char *const argv[],
 	/* previous process state carries log buffers; clear them per design */
 	for (i = 0; i < N_STREAMS; i++)
 		log_buf_clear(&g->logs[i]);
+
+	/* clear any crash info from the previous run */
+	g->core_path[0] = '\0';
+	g->crash_summary[0] = '\0';
 
 	g->pid = pid;
 	g->pstate = PROC_RUNNING;
@@ -1736,6 +1762,644 @@ cmd_proxy(struct session *s, struct cmd_args *a)
 	ctl_q_push(s->g, s);
 }
 
+/* ========== gdb / core helpers (Phase 5) ========== */
+
+/* Fork/exec argv, read stdout into `out` up to cap-1 bytes (NUL-terminated),
+ * discard stderr, wait for exit.  Returns number of bytes read (>=0) on
+ * exec success, -1 on fork/pipe/exec failure.  Overflow beyond cap is
+ * silently dropped.
+ *
+ * The global SIGCHLD handler (on_sigchld) uses waitpid(-1, WNOHANG) and
+ * skips pids it doesn't recognize, so our own waitpid(pid,...) here still
+ * succeeds under normal scheduling.
+ */
+static ssize_t
+run_capture_argv(char *const argv[], char *out, size_t cap)
+{
+	int p[2];
+	pid_t pid;
+	ssize_t total = 0, n;
+	int status;
+	int devnull;
+
+	if (!cap)
+		return -1;
+	if (pipe(p) < 0)
+		return -1;
+	pid = fork();
+	if (pid < 0) {
+		close(p[0]); close(p[1]);
+		return -1;
+	}
+	if (pid == 0) {
+		close(p[0]);
+		dup2(p[1], STDOUT_FILENO);
+		devnull = open("/dev/null", O_WRONLY);
+		if (devnull >= 0) {
+			dup2(devnull, STDERR_FILENO);
+			close(devnull);
+		}
+		close(p[1]);
+		execvp(argv[0], argv);
+		_exit(127);
+	}
+	close(p[1]);
+	for (;;) {
+		if (cap > 0 && (size_t)total >= cap - 1)
+			break;
+		n = read(p[0], out + total, cap - 1 - (size_t)total);
+		if (n <= 0) {
+			if (n < 0 && errno == EINTR)
+				continue;
+			break;
+		}
+		total += n;
+	}
+	/* if the child wrote more than we had room for, drain so it exits */
+	if (cap > 0 && (size_t)total >= cap - 1) {
+		char sink[4096];
+		while ((n = read(p[0], sink, sizeof(sink))) > 0)
+			;
+	}
+	close(p[0]);
+	while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+		;
+	out[total] = '\0';
+	return total;
+}
+
+/* Locate the most recent core file for the given binary path.  Strategy:
+ *
+ *   1. Read /proc/sys/kernel/core_pattern.  If it starts with '|', parse
+ *      the pipe helper name (basename of the first whitespace-delimited
+ *      token).
+ *   2. If the helper is systemd-coredump, shell out to `coredumpctl` to
+ *      find the most recent matching core for the binary's basename.
+ *   3. If the helper is apport, scan /var/lib/apport/coredump/ for
+ *      core.<basename>.*.
+ *   4. Otherwise treat core_pattern as a filesystem pattern and check
+ *      CWD, /var/crash, and / — for each, expand %e to basename and
+ *      glob %p.  We accept the most recently modified match.
+ *
+ * Returns 0 on success (writing into out), -1 on no match.
+ */
+static int
+core_locate_for(const char *binary, pid_t pid, char *out, size_t cap)
+{
+	FILE *fp;
+	char pattern[512];
+	char base[PATH_MAX];
+	const char *slash;
+	int found = -1;
+
+	(void)pid;
+
+	slash = strrchr(binary, '/');
+	snprintf(base, sizeof(base), "%s", slash ? slash + 1 : binary);
+
+	pattern[0] = '\0';
+	fp = fopen("/proc/sys/kernel/core_pattern", "r");
+	if (fp) {
+		if (fgets(pattern, sizeof(pattern), fp)) {
+			size_t n = strlen(pattern);
+			while (n > 0 && (pattern[n - 1] == '\n' ||
+			    pattern[n - 1] == ' '))
+				pattern[--n] = '\0';
+		}
+		fclose(fp);
+	}
+
+	/* case 1: piped to systemd-coredump */
+	if (strstr(pattern, "systemd-coredump")) {
+		char *argv[] = {
+			(char *)"coredumpctl", (char *)"-1",
+			(char *)"--no-legend", (char *)"--no-pager",
+			(char *)"info", base, NULL
+		};
+		char buf[8192];
+		char *line, *saveptr;
+		ssize_t got;
+
+		got = run_capture_argv(argv, buf, sizeof(buf));
+		if (got > 0) {
+			for (line = strtok_r(buf, "\n", &saveptr); line;
+			    line = strtok_r(NULL, "\n", &saveptr)) {
+				const char *key = "Storage:";
+				char *p = strstr(line, key);
+				char *end;
+				if (!p)
+					continue;
+				p += strlen(key);
+				while (*p == ' ' || *p == '\t')
+					p++;
+				end = p + strlen(p);
+				while (end > p && (end[-1] == ' ' ||
+				    end[-1] == '\t'))
+					end--;
+				/* strip a trailing " (present)" or similar */
+				{
+					char *paren = strchr(p, '(');
+					if (paren && paren < end) {
+						end = paren;
+						while (end > p && end[-1] == ' ')
+							end--;
+					}
+				}
+				if (end > p) {
+					size_t len = (size_t)(end - p);
+					if (len >= cap)
+						len = cap - 1;
+					memcpy(out, p, len);
+					out[len] = '\0';
+					if (access(out, R_OK) == 0)
+						found = 0;
+				}
+				break;
+			}
+		}
+		if (found == 0)
+			return 0;
+	}
+
+	/* case 2: piped to apport */
+	if (strstr(pattern, "apport")) {
+		char prefix[256];
+		DIR *dir;
+		struct dirent *de;
+		struct stat st;
+		time_t best_mt = 0;
+		char best[PATH_MAX];
+
+		best[0] = '\0';
+		snprintf(prefix, sizeof(prefix), "core.%.200s.", base);
+		dir = opendir("/var/lib/apport/coredump");
+		if (dir) {
+			while ((de = readdir(dir)) != NULL) {
+				char full[PATH_MAX];
+				if (strncmp(de->d_name, prefix,
+				    strlen(prefix)) != 0)
+					continue;
+				snprintf(full, sizeof(full),
+				    "/var/lib/apport/coredump/%s",
+				    de->d_name);
+				if (stat(full, &st) == 0 &&
+				    st.st_mtime > best_mt) {
+					best_mt = st.st_mtime;
+					snprintf(best, sizeof(best), "%s",
+					    full);
+				}
+			}
+			closedir(dir);
+		}
+		if (best[0]) {
+			snprintf(out, cap, "%s", best);
+			return 0;
+		}
+	}
+
+	/* case 3: literal pattern — look in a handful of likely dirs */
+	{
+		static const char *dirs[] = {
+			".", "/var/crash", NULL
+		};
+		int i;
+		struct stat st;
+		time_t best_mt = 0;
+		char best[PATH_MAX];
+		DIR *dir;
+		struct dirent *de;
+
+		best[0] = '\0';
+		for (i = 0; dirs[i]; i++) {
+			dir = opendir(dirs[i]);
+			if (!dir)
+				continue;
+			while ((de = readdir(dir)) != NULL) {
+				char full[PATH_MAX];
+				const char *n = de->d_name;
+				if (strncmp(n, "core", 4) != 0)
+					continue;
+				if (n[4] != '\0' && n[4] != '.')
+					continue;
+				/* if filename contains the basename, prefer it */
+				snprintf(full, sizeof(full), "%s/%s",
+				    dirs[i], n);
+				if (stat(full, &st) != 0)
+					continue;
+				/* skip if name contains a different basename */
+				if (n[4] == '.' && strstr(n, base) == NULL)
+					continue;
+				if (st.st_mtime > best_mt) {
+					best_mt = st.st_mtime;
+					snprintf(best, sizeof(best), "%s",
+					    full);
+				}
+			}
+			closedir(dir);
+		}
+		if (best[0]) {
+			snprintf(out, cap, "%s", best);
+			return 0;
+		}
+	}
+
+	return -1;
+}
+
+/* Is this stack frame function part of the crash noise we skip when
+ * computing a summary? */
+static int
+crash_frame_is_noise(const char *func)
+{
+	static const char *noise[] = {
+		"raise", "abort", "__assert_fail", "__assert_fail_base",
+		"__restore_rt", "_start", "start_thread", "__libc_start_main",
+		NULL
+	};
+	int i;
+
+	if (!func || !*func)
+		return 1;
+	for (i = 0; noise[i]; i++) {
+		if (strcmp(func, noise[i]) == 0)
+			return 1;
+	}
+	if (strncmp(func, "__GI_", 5) == 0)
+		return 1;
+	if (strncmp(func, "__libc_", 7) == 0)
+		return 1;
+	return 0;
+}
+
+/* Extract the function name from a gdb "bt" frame line.  Lines look like:
+ *
+ *   #0  0x000055... in draw_sector_recursive (sec=0x...) at src/hero/hero.c:214
+ *   #5  __GI_raise (sig=11) at ../sysdeps/unix/sysv/linux/raise.c:51
+ *
+ * Writes the function name into func (cap bytes), the file:line into
+ * where (cap bytes); empty strings if absent.  Returns 1 if parse found
+ * anything, 0 otherwise. */
+static int
+parse_gdb_frame_line(const char *line, char *func, size_t fcap,
+    char *where, size_t wcap)
+{
+	const char *p;
+	const char *fstart, *fend;
+	const char *at;
+	size_t n;
+
+	func[0] = '\0';
+	where[0] = '\0';
+
+	if (line[0] != '#')
+		return 0;
+
+	/* skip "#N " */
+	p = line + 1;
+	while (*p && *p != ' ')
+		p++;
+	while (*p == ' ')
+		p++;
+
+	/* optional "0x... in " prefix */
+	if (p[0] == '0' && p[1] == 'x') {
+		const char *space = strchr(p, ' ');
+		if (space && strncmp(space, " in ", 4) == 0)
+			p = space + 4;
+		else
+			return 0;
+	}
+
+	/* function name runs up to " (" */
+	fstart = p;
+	fend = strstr(p, " (");
+	if (!fend)
+		return 0;
+	n = (size_t)(fend - fstart);
+	if (n >= fcap)
+		n = fcap - 1;
+	memcpy(func, fstart, n);
+	func[n] = '\0';
+
+	at = strstr(fend, ") at ");
+	if (at) {
+		at += 5;
+		n = strlen(at);
+		if (n >= wcap)
+			n = wcap - 1;
+		memcpy(where, at, n);
+		where[n] = '\0';
+	}
+	return 1;
+}
+
+/* Run `gdb -batch -nx <gdb_cmds> <binary> <core>` and capture stdout.
+ * cmds is a NULL-terminated array of "-ex"/<command> pairs; the caller
+ * supplies only the commands, we wrap with the setup.  Returns bytes
+ * read, or -1 on failure. */
+static ssize_t
+run_gdb_batch(const char *binary, const char *core, const char *const *cmds,
+    char *out, size_t cap)
+{
+	char *argv[64];
+	int n = 0;
+	int i;
+
+	argv[n++] = (char *)"gdb";
+	argv[n++] = (char *)"-batch";
+	argv[n++] = (char *)"-nx";
+	argv[n++] = (char *)"-ex";
+	argv[n++] = (char *)"set pagination off";
+	argv[n++] = (char *)"-ex";
+	argv[n++] = (char *)"set print thread-events off";
+	for (i = 0; cmds[i] && n < 60; i++) {
+		argv[n++] = (char *)"-ex";
+		argv[n++] = (char *)cmds[i];
+	}
+	argv[n++] = (char *)binary;
+	argv[n++] = (char *)core;
+	argv[n] = NULL;
+	return run_capture_argv(argv, out, cap);
+}
+
+/* Compute a one-line crash summary by walking the backtrace and picking
+ * the top non-noise frame.  Writes into out; returns 0 on success. */
+static int
+compute_crash_summary(const char *binary, const char *core, int sig,
+    char *out, size_t cap)
+{
+	static char buf[64 * 1024];
+	const char *cmds[] = { "bt 50", NULL };
+	ssize_t got;
+	char *line, *saveptr;
+	char func[256], where[PATH_MAX + 64];
+	const char *signame;
+	int found = 0;
+
+	got = run_gdb_batch(binary, core, cmds, buf, sizeof(buf));
+	if (got <= 0)
+		return -1;
+
+	for (line = strtok_r(buf, "\n", &saveptr); line;
+	    line = strtok_r(NULL, "\n", &saveptr)) {
+		if (line[0] != '#')
+			continue;
+		if (!parse_gdb_frame_line(line, func, sizeof(func),
+		    where, sizeof(where)))
+			continue;
+		if (crash_frame_is_noise(func))
+			continue;
+		found = 1;
+		break;
+	}
+	if (!found) {
+		func[0] = '\0';
+		where[0] = '\0';
+	}
+
+	switch (sig) {
+	case SIGSEGV: signame = "SIGSEGV"; break;
+	case SIGABRT: signame = "SIGABRT"; break;
+	case SIGBUS:  signame = "SIGBUS";  break;
+	case SIGFPE:  signame = "SIGFPE";  break;
+	case SIGILL:  signame = "SIGILL";  break;
+	case 0:       signame = "";        break;
+	default:      signame = NULL;      break;
+	}
+
+	if (where[0] && func[0] && signame && signame[0])
+		snprintf(out, cap, "%s in %s: %s", where, func, signame);
+	else if (where[0] && func[0])
+		snprintf(out, cap, "%s in %s", where, func);
+	else if (func[0] && signame && signame[0])
+		snprintf(out, cap, "%s: %s", func, signame);
+	else if (signame && signame[0])
+		snprintf(out, cap, "crash: %s", signame);
+	else
+		snprintf(out, cap, "crash (no frames resolved)");
+	return 0;
+}
+
+/* Resolve the core path to use for a gdb_core_* command: either the one
+ * passed via --core=PATH or the cached one.  Returns NULL if neither. */
+static const char *
+resolve_core_arg(struct session *s, struct cmd_args *a)
+{
+	static char override[PATH_MAX];
+	int i;
+
+	for (i = 1; i < a->argc; i++) {
+		if (strncmp(a->argv[i], "--core=", 7) == 0) {
+			snprintf(override, sizeof(override), "%s",
+			    a->argv[i] + 7);
+			return override;
+		}
+	}
+	if (s->g->core_path[0])
+		return s->g->core_path;
+	return NULL;
+}
+
+static int
+parse_named_int(struct cmd_args *a, const char *key, int *out)
+{
+	size_t klen = strlen(key);
+	int i;
+	for (i = 1; i < a->argc; i++) {
+		if (strncmp(a->argv[i], key, klen) == 0 &&
+		    a->argv[i][klen] == '=') {
+			return parse_positive_int(a->argv[i] + klen + 1, out);
+		}
+	}
+	return -1;
+}
+
+static void
+cmd_gdb_hint(struct session *s, struct cmd_args *a)
+{
+	(void)a;
+	if (s->g->pstate != PROC_RUNNING || s->g->pid <= 0) {
+		session_writef(s, "ERR no_process\n");
+		return;
+	}
+	session_writef(s, "OK pid=%d suggested: gdb -p %d %s\n",
+	    (int)s->g->pid, (int)s->g->pid, s->g->bin_path);
+}
+
+static void
+cmd_gdb_core_find(struct session *s, struct cmd_args *a)
+{
+	char path[PATH_MAX];
+
+	(void)a;
+	if (s->g->core_path[0]) {
+		session_writef(s, "OK path=%s\n", s->g->core_path);
+		return;
+	}
+	if (s->g->bin_path[0] == '\0') {
+		session_writef(s, "ERR no_core: no binary has been spawned\n");
+		return;
+	}
+	if (core_locate_for(s->g->bin_path, s->g->pid, path, sizeof(path)) < 0) {
+		session_writef(s, "ERR no_core: no core file found for %s\n",
+		    s->g->bin_path);
+		return;
+	}
+	snprintf(s->g->core_path, sizeof(s->g->core_path), "%s", path);
+	session_writef(s, "OK path=%s\n", s->g->core_path);
+}
+
+static void
+cmd_gdb_core_list(struct session *s, struct cmd_args *a)
+{
+	char *argv[] = {
+		(char *)"coredumpctl", (char *)"--no-legend",
+		(char *)"--no-pager", (char *)"list", NULL, NULL
+	};
+	static char buf[32 * 1024];
+	const char *slash;
+	char base[PATH_MAX];
+	ssize_t got;
+
+	(void)a;
+	if (s->g->bin_path[0] == '\0') {
+		session_writef(s, "ERR no_core: no binary has been spawned\n");
+		return;
+	}
+	slash = strrchr(s->g->bin_path, '/');
+	snprintf(base, sizeof(base), "%s", slash ? slash + 1 : s->g->bin_path);
+	argv[4] = base;
+	got = run_capture_argv(argv, buf, sizeof(buf));
+	if (got <= 0) {
+		session_writef(s, "ERR no_core: coredumpctl returned nothing\n");
+		return;
+	}
+	session_writef(s, "OK\n");
+	write_log_chunk(s, NULL, buf, (size_t)got);
+}
+
+static void
+cmd_gdb_core_summary(struct session *s, struct cmd_args *a)
+{
+	const char *core;
+	int sig;
+
+	core = resolve_core_arg(s, a);
+	if (!core) {
+		session_writef(s, "ERR no_core: no core path cached; "
+		    "run gdb_core_find first or pass --core=PATH\n");
+		return;
+	}
+	if (s->g->crash_summary[0] && core == s->g->core_path) {
+		session_writef(s, "OK %s\n", s->g->crash_summary);
+		return;
+	}
+	sig = s->g->pstate == PROC_SIGNALED ? s->g->exit_signal : 0;
+	if (compute_crash_summary(s->g->bin_path, core, sig,
+	    s->g->crash_summary, sizeof(s->g->crash_summary)) < 0) {
+		session_writef(s, "ERR internal: gdb invocation failed\n");
+		return;
+	}
+	session_writef(s, "OK %s\n", s->g->crash_summary);
+}
+
+static void
+cmd_gdb_core_backtrace(struct session *s, struct cmd_args *a)
+{
+	const char *core;
+	int limit = 50;
+	char btcmd[32];
+	const char *cmds[2];
+	static char buf[256 * 1024];
+	ssize_t got;
+
+	core = resolve_core_arg(s, a);
+	if (!core) {
+		session_writef(s, "ERR no_core: no core path cached; "
+		    "run gdb_core_find first or pass --core=PATH\n");
+		return;
+	}
+	parse_named_int(a, "--limit", &limit);
+	if (limit < 1) limit = 1;
+	if (limit > 1000) limit = 1000;
+	snprintf(btcmd, sizeof(btcmd), "bt %d", limit);
+	cmds[0] = btcmd;
+	cmds[1] = NULL;
+	got = run_gdb_batch(s->g->bin_path, core, cmds, buf, sizeof(buf));
+	if (got <= 0) {
+		session_writef(s, "ERR internal: gdb invocation failed\n");
+		return;
+	}
+	session_writef(s, "OK\n");
+	write_log_chunk(s, NULL, buf, (size_t)got);
+}
+
+static void
+cmd_gdb_core_frame(struct session *s, struct cmd_args *a)
+{
+	const char *core;
+	int frame;
+	char fcmd[64], icmd[64];
+	const char *cmds[3];
+	static char buf[64 * 1024];
+	ssize_t got;
+
+	if (a->argc < 2 || parse_positive_int(a->argv[1], &frame) < 0) {
+		session_writef(s, "ERR usage: gdb_core_frame <n> "
+		    "[--core=PATH]\n");
+		return;
+	}
+	core = resolve_core_arg(s, a);
+	if (!core) {
+		session_writef(s, "ERR no_core: no core path cached; "
+		    "run gdb_core_find first or pass --core=PATH\n");
+		return;
+	}
+	snprintf(fcmd, sizeof(fcmd), "frame %d", frame);
+	snprintf(icmd, sizeof(icmd), "info frame");
+	cmds[0] = fcmd;
+	cmds[1] = icmd;
+	cmds[2] = NULL;
+	got = run_gdb_batch(s->g->bin_path, core, cmds, buf, sizeof(buf));
+	if (got <= 0) {
+		session_writef(s, "ERR internal: gdb invocation failed\n");
+		return;
+	}
+	session_writef(s, "OK\n");
+	write_log_chunk(s, NULL, buf, (size_t)got);
+}
+
+static void
+cmd_gdb_core_locals(struct session *s, struct cmd_args *a)
+{
+	const char *core;
+	int frame = 0;
+	char fcmd[64];
+	const char *cmds[3];
+	static char buf[64 * 1024];
+	ssize_t got;
+
+	core = resolve_core_arg(s, a);
+	if (!core) {
+		session_writef(s, "ERR no_core: no core path cached; "
+		    "run gdb_core_find first or pass --core=PATH\n");
+		return;
+	}
+	parse_named_int(a, "--frame", &frame);
+	if (frame < 0) frame = 0;
+	snprintf(fcmd, sizeof(fcmd), "frame %d", frame);
+	cmds[0] = fcmd;
+	cmds[1] = "info locals";
+	cmds[2] = NULL;
+	got = run_gdb_batch(s->g->bin_path, core, cmds, buf, sizeof(buf));
+	if (got <= 0) {
+		session_writef(s, "ERR internal: gdb invocation failed\n");
+		return;
+	}
+	session_writef(s, "OK\n");
+	write_log_chunk(s, NULL, buf, (size_t)got);
+}
+
 struct command {
 	const char *name;
 	void (*fn)(struct session *s, struct cmd_args *a);
@@ -1773,6 +2437,13 @@ static const struct command commands[] = {
 	{ "query",        cmd_proxy,        "proxy: query frame|size|fps|var" },
 	{ "list_actions", cmd_proxy,        "proxy: list registered actions" },
 	{ "list_vars",    cmd_proxy,        "proxy: list registered state vars" },
+	{ "gdb_hint",          cmd_gdb_hint,          "return PID + suggested `gdb -p` command" },
+	{ "gdb_core_find",     cmd_gdb_core_find,     "locate most recent core for the spawned binary" },
+	{ "gdb_core_list",     cmd_gdb_core_list,     "list cores (via coredumpctl)" },
+	{ "gdb_core_summary",  cmd_gdb_core_summary,  "one-line crash summary [--core=PATH]" },
+	{ "gdb_core_backtrace",cmd_gdb_core_backtrace,"backtrace [--core=PATH] [--limit=N]" },
+	{ "gdb_core_frame",    cmd_gdb_core_frame,    "info for frame N [--core=PATH]" },
+	{ "gdb_core_locals",   cmd_gdb_core_locals,   "local variables [--core=PATH] [--frame=N]" },
 	{ NULL, NULL, NULL }
 };
 
