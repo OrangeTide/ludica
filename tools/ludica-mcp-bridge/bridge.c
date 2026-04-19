@@ -584,7 +584,36 @@ static const char *tools_json =
 
 "{\"name\":\"help\",\"description\":\"List launcher commands, or describe one.\","
  "\"inputSchema\":{\"type\":\"object\",\"properties\":{"
-  "\"command\":{\"type\":\"string\"}}}}"
+  "\"command\":{\"type\":\"string\"}}}},"
+
+/* gdb / crash forensics */
+"{\"name\":\"gdb_hint\",\"description\":\"Return PID and a suggested `gdb -p` command to attach to the running game.\","
+ "\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
+
+"{\"name\":\"gdb_core_find\",\"description\":\"Locate the most recent core file for the spawned binary.\","
+ "\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
+
+"{\"name\":\"gdb_core_list\",\"description\":\"List available cores for the spawned binary (via coredumpctl).\","
+ "\"inputSchema\":{\"type\":\"object\",\"properties\":{}}},"
+
+"{\"name\":\"gdb_core_summary\",\"description\":\"One-line crash summary (file:line in func: SIGNAME).\","
+ "\"inputSchema\":{\"type\":\"object\",\"properties\":{"
+  "\"core\":{\"type\":\"string\",\"description\":\"path to core (defaults to most recent)\"}}}},"
+
+"{\"name\":\"gdb_core_backtrace\",\"description\":\"Full backtrace from a core.\","
+ "\"inputSchema\":{\"type\":\"object\",\"properties\":{"
+  "\"core\":{\"type\":\"string\"},"
+  "\"limit\":{\"type\":\"integer\",\"description\":\"max frames\"}}}},"
+
+"{\"name\":\"gdb_core_frame\",\"description\":\"Info for a specific frame in the backtrace.\","
+ "\"inputSchema\":{\"type\":\"object\",\"properties\":{"
+  "\"frame\":{\"type\":\"integer\"},"
+  "\"core\":{\"type\":\"string\"}},\"required\":[\"frame\"]}},"
+
+"{\"name\":\"gdb_core_locals\",\"description\":\"Local variables at a given frame.\","
+ "\"inputSchema\":{\"type\":\"object\",\"properties\":{"
+  "\"frame\":{\"type\":\"integer\"},"
+  "\"core\":{\"type\":\"string\"}}}}"
 "]";
 /* clang-format on */
 
@@ -884,6 +913,94 @@ handle_tool_call(const char *json, const jsmntok_t *t, int ntok,
 			snprintf(cmd, sizeof(cmd), "help %s", c);
 		else
 			snprintf(cmd, sizeof(cmd), "help");
+		dispatch_cmd(id_raw, cmd, 1, NULL);
+		return;
+	}
+
+	/* -------- gdb / crash forensics -------- */
+	if (strcmp(name, "gdb_hint") == 0) {
+		dispatch_cmd(id_raw, "gdb_hint", 0, NULL);
+		return;
+	}
+	if (strcmp(name, "gdb_core_find") == 0) {
+		dispatch_cmd(id_raw, "gdb_core_find", 0, NULL);
+		return;
+	}
+	if (strcmp(name, "gdb_core_list") == 0) {
+		dispatch_cmd(id_raw, "gdb_core_list", 1, NULL);
+		return;
+	}
+	if (strcmp(name, "gdb_core_summary") == 0) {
+		char core[240] = "";
+		get_arg_str(json, t, ntok, args_idx, "core", core, sizeof(core));
+		if (core[0]) {
+			if (check_token(core) < 0) {
+				result_text(id_raw, "invalid core path", 17, 1);
+				return;
+			}
+			snprintf(cmd, sizeof(cmd), "gdb_core_summary --core=%s", core);
+		} else {
+			snprintf(cmd, sizeof(cmd), "gdb_core_summary");
+		}
+		dispatch_cmd(id_raw, cmd, 0, NULL);
+		return;
+	}
+	if (strcmp(name, "gdb_core_backtrace") == 0) {
+		char core[240] = "";
+		int limit = 0;
+		char extra[256] = "";
+		get_arg_str(json, t, ntok, args_idx, "core", core, sizeof(core));
+		get_arg_int(json, t, ntok, args_idx, "limit", &limit);
+		if (core[0]) {
+			if (check_token(core) < 0) {
+				result_text(id_raw, "invalid core path", 17, 1);
+				return;
+			}
+			snprintf(extra, sizeof(extra), " --core=%s", core);
+		}
+		if (limit > 0) {
+			size_t n = strlen(extra);
+			snprintf(extra + n, sizeof(extra) - n, " --limit=%d", limit);
+		}
+		snprintf(cmd, sizeof(cmd), "gdb_core_backtrace%s", extra);
+		dispatch_cmd(id_raw, cmd, 1, NULL);
+		return;
+	}
+	if (strcmp(name, "gdb_core_frame") == 0) {
+		char core[240] = "";
+		int frame = 0;
+		get_arg_str(json, t, ntok, args_idx, "core", core, sizeof(core));
+		get_arg_int(json, t, ntok, args_idx, "frame", &frame);
+		if (core[0] && check_token(core) < 0) {
+			result_text(id_raw, "invalid core path", 17, 1);
+			return;
+		}
+		if (core[0])
+			snprintf(cmd, sizeof(cmd),
+			    "gdb_core_frame --frame=%d --core=%s", frame, core);
+		else
+			snprintf(cmd, sizeof(cmd),
+			    "gdb_core_frame --frame=%d", frame);
+		dispatch_cmd(id_raw, cmd, 1, NULL);
+		return;
+	}
+	if (strcmp(name, "gdb_core_locals") == 0) {
+		char core[240] = "";
+		int frame = 0;
+		char extra[256] = "";
+		get_arg_str(json, t, ntok, args_idx, "core", core, sizeof(core));
+		get_arg_int(json, t, ntok, args_idx, "frame", &frame);
+		if (core[0] && check_token(core) < 0) {
+			result_text(id_raw, "invalid core path", 17, 1);
+			return;
+		}
+		if (frame > 0)
+			snprintf(extra, sizeof(extra), " --frame=%d", frame);
+		if (core[0]) {
+			size_t n = strlen(extra);
+			snprintf(extra + n, sizeof(extra) - n, " --core=%s", core);
+		}
+		snprintf(cmd, sizeof(cmd), "gdb_core_locals%s", extra);
 		dispatch_cmd(id_raw, cmd, 1, NULL);
 		return;
 	}

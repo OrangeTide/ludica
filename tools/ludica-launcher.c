@@ -2028,6 +2028,10 @@ crash_frame_is_noise(const char *func)
 		return 1;
 	if (strncmp(func, "__libc_", 7) == 0)
 		return 1;
+	if (strncmp(func, "__pthread_kill", 14) == 0)
+		return 1;
+	if (strstr(func, "pthread_kill"))
+		return 1;
 	return 0;
 }
 
@@ -2093,6 +2097,56 @@ parse_gdb_frame_line(const char *line, char *func, size_t fcap,
 	return 1;
 }
 
+/* If core_in ends in .zst, decompress it to a temp file and store the
+ * path in tmp_out (cap bytes).  Returns the path to use with gdb.
+ * Caller should unlink tmp_out if non-empty. */
+static const char *
+decompress_core_if_needed(const char *core_in, char *tmp_out, size_t cap)
+{
+	const char *ext;
+	char *argv[8];
+	int fd;
+	pid_t pid;
+	int status;
+
+	tmp_out[0] = '\0';
+	ext = strrchr(core_in, '.');
+	if (!ext || strcmp(ext, ".zst") != 0)
+		return core_in;
+
+	snprintf(tmp_out, cap, "/tmp/ludica-core.XXXXXX");
+	fd = mkstemp(tmp_out);
+	if (fd < 0) {
+		tmp_out[0] = '\0';
+		return core_in;
+	}
+
+	pid = fork();
+	if (pid == 0) {
+		dup2(fd, 1);
+		close(fd);
+		argv[0] = (char *)"zstd";
+		argv[1] = (char *)"-dcq";
+		argv[2] = (char *)core_in;
+		argv[3] = NULL;
+		execvp(argv[0], argv);
+		_exit(127);
+	}
+	close(fd);
+	if (pid < 0) {
+		unlink(tmp_out);
+		tmp_out[0] = '\0';
+		return core_in;
+	}
+	if (waitpid(pid, &status, 0) < 0 ||
+	    !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+		unlink(tmp_out);
+		tmp_out[0] = '\0';
+		return core_in;
+	}
+	return tmp_out;
+}
+
 /* Run `gdb -batch -nx <gdb_cmds> <binary> <core>` and capture stdout.
  * cmds is a NULL-terminated array of "-ex"/<command> pairs; the caller
  * supplies only the commands, we wrap with the setup.  Returns bytes
@@ -2102,8 +2156,13 @@ run_gdb_batch(const char *binary, const char *core, const char *const *cmds,
     char *out, size_t cap)
 {
 	char *argv[64];
+	char tmp[64];
+	const char *core_path;
+	ssize_t r;
 	int n = 0;
 	int i;
+
+	core_path = decompress_core_if_needed(core, tmp, sizeof(tmp));
 
 	argv[n++] = (char *)"gdb";
 	argv[n++] = (char *)"-batch";
@@ -2117,9 +2176,12 @@ run_gdb_batch(const char *binary, const char *core, const char *const *cmds,
 		argv[n++] = (char *)cmds[i];
 	}
 	argv[n++] = (char *)binary;
-	argv[n++] = (char *)core;
+	argv[n++] = (char *)core_path;
 	argv[n] = NULL;
-	return run_capture_argv(argv, out, cap);
+	r = run_capture_argv(argv, out, cap);
+	if (tmp[0])
+		unlink(tmp);
+	return r;
 }
 
 /* Compute a one-line crash summary by walking the backtrace and picking
