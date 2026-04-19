@@ -162,20 +162,6 @@ resp_err(const char *msg)
 	send_resp("ERR %s", msg);
 }
 
-/* ---- Send all helper (for large responses) ---- */
-
-static void
-send_all(sock_t fd, const char *buf, size_t len)
-{
-	while (len > 0) {
-		int n = send(fd, buf, (int)len, 0);
-		if (n <= 0)
-			break;
-		buf += n;
-		len -= (size_t)n;
-	}
-}
-
 /* ---- Base64 encoding ---- */
 
 static const char b64_table[] =
@@ -277,13 +263,60 @@ build_capture_path(char *out, size_t outsz, const char *name)
 		         lud__state.frame_count);
 }
 
-/* Capture a rectangle and either write to file or send base64 over TCP */
+/* Transport abstraction for capture output. Either a TCP socket
+ * (send()) or a plain fd (write()) is supported. */
+enum cap_kind { CAP_SOCK, CAP_FD };
+
+struct cap_out {
+	enum cap_kind kind;
+	int fd;
+};
+
 static void
-send_capture(int x, int y, int w, int h, int use_base64, const char *filename)
+cap_write_raw(struct cap_out *o, const void *buf, size_t len)
+{
+	const char *p = buf;
+	while (len > 0) {
+		int n;
+		if (o->kind == CAP_SOCK)
+			n = (int)send((sock_t)o->fd, p, (int)len, 0);
+		else
+#ifndef _WIN32
+			n = (int)write(o->fd, p, len);
+#else
+			n = -1;
+#endif
+		if (n <= 0)
+			break;
+		p += n;
+		len -= (size_t)n;
+	}
+}
+
+static void
+cap_writef(struct cap_out *o, const char *fmt, ...)
+{
+	va_list ap;
+	int n;
+	va_start(ap, fmt);
+	n = vsnprintf(resp_buf, sizeof(resp_buf) - 1, fmt, ap);
+	va_end(ap);
+	if (n > 0) {
+		resp_buf[n] = '\n';
+		cap_write_raw(o, resp_buf, (size_t)(n + 1));
+	}
+}
+
+/* Capture a rectangle and either write to file or send base64.
+ * legacy=1 preserves the old TCP "OK saved WxH PNG to <path>" reply;
+ * legacy=0 produces the Control-protocol "OK <path>" reply. */
+static void
+send_capture_to(struct cap_out *o, int x, int y, int w, int h,
+                int use_base64, const char *filename, int legacy)
 {
 	unsigned char *pixels = capture_pixels(x, y, w, h);
 	if (!pixels) {
-		resp_err("capture failed");
+		cap_writef(o, "ERR capture failed");
 		return;
 	}
 
@@ -297,7 +330,7 @@ send_capture(int x, int y, int w, int h, int use_base64, const char *filename)
 		                       w * 4);
 		free(pixels);
 		if (!mw.buf) {
-			resp_err("PNG encode failed");
+			cap_writef(o, "ERR PNG encode failed");
 			return;
 		}
 
@@ -305,7 +338,7 @@ send_capture(int x, int y, int w, int h, int use_base64, const char *filename)
 		b64 = malloc(b64len + 32);
 		if (!b64) {
 			free(mw.buf);
-			resp_err("out of memory");
+			cap_writef(o, "ERR out of memory");
 			return;
 		}
 
@@ -315,20 +348,34 @@ send_capture(int x, int y, int w, int h, int use_base64, const char *filename)
 
 		total = (size_t)prefix + b64len;
 		b64[total] = '\n';
-		if (client_fd != SOCK_INVALID)
-			send_all(client_fd, b64, total + 1);
+		cap_write_raw(o, b64, total + 1);
 		free(b64);
 	} else {
 		char path[512];
 		build_capture_path(path, sizeof(path), filename);
 		if (!stbi_write_png(path, w, h, 4, pixels, w * 4)) {
 			free(pixels);
-			resp_err("write failed — could not save PNG to file");
+			cap_writef(o, "ERR write failed — could not save PNG to file");
 			return;
 		}
 		free(pixels);
-		send_resp("OK saved %dx%d PNG to %s", w, h, path);
+		if (legacy)
+			cap_writef(o, "OK saved %dx%d PNG to %s", w, h, path);
+		else
+			cap_writef(o, "OK %s", path);
 	}
+}
+
+/* Legacy TCP wrapper: targets client_fd, preserves original reply format. */
+static void
+send_capture(int x, int y, int w, int h, int use_base64, const char *filename)
+{
+	struct cap_out o;
+	o.kind = CAP_SOCK;
+	o.fd = (int)client_fd;
+	if (client_fd == SOCK_INVALID)
+		return;
+	send_capture_to(&o, x, y, w, h, use_base64, filename, 1);
 }
 
 /* Capture full screen to file (used by SIGUSR1) */
@@ -1135,7 +1182,39 @@ ctl_dispatch(const char *line)
 		glReadPixels(x, gl_y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
 		ctl_writef("OK %d %d %d", pixel[0], pixel[1], pixel[2]);
 	} else if (strcasecmp(tokens[0], "screenshot") == 0) {
-		ctl_writef("ERR not_implemented");
+		/* screenshot [x y w h] [--base64|--file=PATH] */
+		int x = 0, y = 0, w = lud__state.win_width, h = lud__state.win_height;
+		int use_base64 = 0;
+		const char *filename = NULL;
+		int i = 1;
+		struct cap_out o;
+
+		/* Optional rect: four leading integer tokens. */
+		if (num_tokens >= 5 && tokens[1][0] != '-' && tokens[2][0] != '-'
+		    && tokens[3][0] != '-' && tokens[4][0] != '-') {
+			x = atoi(tokens[1]);
+			y = atoi(tokens[2]);
+			w = atoi(tokens[3]);
+			h = atoi(tokens[4]);
+			/* convert top-left to GL bottom-left origin */
+			y = lud__state.win_height - y - h;
+			i = 5;
+		}
+		for (; i < num_tokens; i++) {
+			if (strcmp(tokens[i], "--base64") == 0)
+				use_base64 = 1;
+			else if (strncmp(tokens[i], "--file=", 7) == 0)
+				filename = tokens[i] + 7;
+			else {
+				ctl_writef("ERR usage: screenshot [x y w h] "
+				           "[--base64|--file=PATH]");
+				return;
+			}
+		}
+
+		o.kind = CAP_FD;
+		o.fd = ctl_fd;
+		send_capture_to(&o, x, y, w, h, use_base64, filename, 0);
 	} else {
 		ctl_writef("ERR unknown_command");
 	}
