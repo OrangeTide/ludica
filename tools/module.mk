@@ -14,6 +14,8 @@ ludica-launcher_SRCS  = ludica-launcher.c
 ludica-launcher_LIBS  = iox
 endif
 
+SUBDIRS += ludica-mcp-bridge
+
 # font2slug -- offline TTF/OTF to .slugfont converter (skip on Emscripten)
 ifeq ($(findstring emscripten,$(TARGET_TRIPLET)),)
 EXECUTABLES += font2slug
