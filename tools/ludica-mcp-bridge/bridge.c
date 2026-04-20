@@ -509,6 +509,18 @@ static const char *tools_json =
   "\"streams\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"stdout\",\"stderr\"]}}},"
   "\"required\":[\"pattern\"]}},"
 
+"{\"name\":\"log_where\",\"description\":\"Structural filter over JSON log lines. Each predicate is 'key=value' (equality) or 'key~regex' (POSIX extended regex on the field). All predicates must match.\","
+ "\"inputSchema\":{\"type\":\"object\",\"properties\":{"
+  "\"predicates\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},"
+  "\"streams\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"stdout\",\"stderr\"]}}},"
+  "\"required\":[\"predicates\"]}},"
+
+"{\"name\":\"log_jq\",\"description\":\"Pipe JSON log lines through jq. Non-JSON lines are skipped. Syntax errors or non-zero exit come back as ERR jq: <reason>.\","
+ "\"inputSchema\":{\"type\":\"object\",\"properties\":{"
+  "\"expr\":{\"type\":\"string\",\"description\":\"jq expression\"},"
+  "\"streams\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"stdout\",\"stderr\"]}}},"
+  "\"required\":[\"expr\"]}},"
+
 "{\"name\":\"log_clear\",\"description\":\"Clear log buffer(s).\","
  "\"inputSchema\":{\"type\":\"object\",\"properties\":{"
   "\"streams\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"stdout\",\"stderr\"]}}}}},"
@@ -633,6 +645,36 @@ check_token(const char *s)
 	return 0;
 }
 
+/* Append a double-quoted, backslash-escaped copy of src to dst (with a
+ * preceding space).  The launcher's tokenizer recognises "..." with \ as
+ * an in-string escape.  Returns 0 on success, -1 if truncated or if src
+ * contains a newline (which would break protocol framing). */
+static int
+append_quoted(char *dst, size_t cap, const char *src)
+{
+	size_t len = strlen(dst);
+	const char *p;
+	if (!src) return -1;
+	for (p = src; *p; p++)
+		if (*p == '\n' || *p == '\r') return -1;
+	if (len + 3 >= cap) return -1;
+	dst[len++] = ' ';
+	dst[len++] = '"';
+	for (p = src; *p; p++) {
+		if (*p == '"' || *p == '\\') {
+			if (len + 3 >= cap) return -1;
+			dst[len++] = '\\';
+		} else if (len + 2 >= cap) {
+			return -1;
+		}
+		dst[len++] = *p;
+	}
+	if (len + 2 >= cap) return -1;
+	dst[len++] = '"';
+	dst[len] = '\0';
+	return 0;
+}
+
 static void
 handle_tool_call(const char *json, const jsmntok_t *t, int ntok,
                  const char *id_raw, int params_idx)
@@ -743,6 +785,54 @@ handle_tool_call(const char *json, const jsmntok_t *t, int ntok,
 			snprintf(cmd, sizeof(cmd), "log_grep --ctx=%d %s", ctx, pat);
 		else
 			snprintf(cmd, sizeof(cmd), "log_grep %s", pat);
+		append_str_array(json, t, ntok, args_idx, "streams",
+		                 cmd, sizeof(cmd));
+		dispatch_cmd(id_raw, cmd, 1, NULL);
+		return;
+	}
+	if (strcmp(name, "log_where") == 0) {
+		int vi, i, count = 0;
+		snprintf(cmd, sizeof(cmd), "log_where");
+		vi = args_idx >= 0
+		    ? json_obj_find(json, t, ntok, args_idx, "predicates")
+		    : -1;
+		if (vi < 0 || t[vi].type != JSMN_ARRAY || t[vi].size == 0) {
+			result_text(id_raw, "missing or empty predicates", 27, 1);
+			return;
+		}
+		for (i = 0; i < t[vi].size; i++) {
+			int ei = vi + 1 + i;
+			char pred[512];
+			if (ei >= ntok) break;
+			tok_str(json, &t[ei], pred, sizeof(pred));
+			if (append_quoted(cmd, sizeof(cmd), pred) < 0) {
+				result_text(id_raw, "predicate too long or invalid",
+				    29, 1);
+				return;
+			}
+			count++;
+		}
+		if (count == 0) {
+			result_text(id_raw, "no valid predicates", 19, 1);
+			return;
+		}
+		append_str_array(json, t, ntok, args_idx, "streams",
+		                 cmd, sizeof(cmd));
+		dispatch_cmd(id_raw, cmd, 1, NULL);
+		return;
+	}
+	if (strcmp(name, "log_jq") == 0) {
+		char expr[2048] = "";
+		get_arg_str(json, t, ntok, args_idx, "expr", expr, sizeof(expr));
+		if (!expr[0]) {
+			result_text(id_raw, "missing expr", 12, 1);
+			return;
+		}
+		snprintf(cmd, sizeof(cmd), "log_jq");
+		if (append_quoted(cmd, sizeof(cmd), expr) < 0) {
+			result_text(id_raw, "expr too long or invalid", 24, 1);
+			return;
+		}
 		append_str_array(json, t, ntok, args_idx, "streams",
 		                 cmd, sizeof(cmd));
 		dispatch_cmd(id_raw, cmd, 1, NULL);
