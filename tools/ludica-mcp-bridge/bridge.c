@@ -267,10 +267,15 @@ tcp_drop(void)
  * Response model: every command returns at least one line starting with
  * "OK" or "ERR". Some commands (log_tail, log_head, log_range, log_grep,
  * help) follow the status line with additional data lines. There is no
- * explicit end-of-response marker in the current launcher protocol, so
- * we read the first line (blocking), then drain remaining bytes using a
- * short poll timeout. This is safe on localhost where the launcher
- * finishes writing in well under the timeout.
+ * Multi-line framing: body lines follow the `OK\n` status line, and the
+ * body is terminated by a sentinel line at column 0:
+ *   `END\n`               -- success
+ *   `END ERR <reason>\n`  -- async failure
+ * Body lines that begin with `\` or with the three bytes `END` are
+ * escape-encoded by the launcher with one extra leading `\`; we strip
+ * one leading `\` from every body line.  A `END ERR ...` terminator is
+ * rewritten into a plain `ERR <reason>\n` so downstream code can treat
+ * it like any other error.
  *
  * Returns total byte length written into tcp_buf (NUL-terminated), or
  * -1 on I/O failure.
@@ -312,22 +317,77 @@ tcp_command(const char *cmd, int multiline_ok)
 	if (!multiline_ok || strncmp(tcp_buf, "ERR", 3) == 0)
 		return total;
 
-	/* Drain any additional data with a short timeout. */
-	for (;;) {
-		struct pollfd pf;
-		int pr;
-		pf.fd = game_fd;
-		pf.events = POLLIN;
-		pr = poll(&pf, 1, 150);
-		if (pr <= 0)
-			break;
-		n = recv(game_fd, tcp_buf + total, TCP_BUF_SZ - 1 - total, 0);
-		if (n <= 0)
-			break;
-		total += n;
-		tcp_buf[total] = '\0';
-		if (total >= TCP_BUF_SZ - 1)
-			break;
+	/* Multi-line body: read until a line starting with "END" (followed
+	 * by '\n' or ' ') is seen at a line boundary. */
+	{
+		size_t body_start = (size_t)(nl - tcp_buf) + 1;
+		size_t scan_from = body_start;
+		size_t term_start = 0, term_end = 0;
+		int found = 0;
+
+		for (;;) {
+			while (scan_from < (size_t)total) {
+				char *lnl = memchr(tcp_buf + scan_from, '\n',
+				    (size_t)total - scan_from);
+				if (!lnl)
+					break;
+				size_t llen = (size_t)(lnl - (tcp_buf
+				    + scan_from));
+				if (llen >= 3 &&
+				    tcp_buf[scan_from] == 'E' &&
+				    tcp_buf[scan_from + 1] == 'N' &&
+				    tcp_buf[scan_from + 2] == 'D' &&
+				    (llen == 3 ||
+				     tcp_buf[scan_from + 3] == ' ')) {
+					term_start = scan_from;
+					term_end = (size_t)(lnl - tcp_buf) + 1;
+					found = 1;
+					break;
+				}
+				scan_from = (size_t)(lnl - tcp_buf) + 1;
+			}
+			if (found)
+				break;
+			if (total >= TCP_BUF_SZ - 1)
+				goto fail;
+			n = recv(game_fd, tcp_buf + total,
+			    TCP_BUF_SZ - 1 - total, 0);
+			if (n <= 0)
+				goto fail;
+			total += n;
+			tcp_buf[total] = '\0';
+		}
+
+		/* Check for error terminator: "END ERR <reason>\n". */
+		if (term_end - term_start >= 8 &&
+		    memcmp(tcp_buf + term_start, "END ERR ", 8) == 0) {
+			size_t rlen = term_end - term_start - 4; /* drop "END " */
+			memmove(tcp_buf, tcp_buf + term_start + 4, rlen);
+			total = (int)rlen;
+			tcp_buf[total] = '\0';
+			return total;
+		}
+
+		/* Success: strip terminator and unescape body lines in place.
+		 * For each body line, if its first char is '\\', drop it. */
+		{
+			size_t src = body_start;
+			size_t dst = body_start;
+			int at_line_start = 1;
+			while (src < term_start) {
+				char c = tcp_buf[src];
+				if (at_line_start && c == '\\') {
+					src++;
+					at_line_start = 0;
+					continue;
+				}
+				tcp_buf[dst++] = c;
+				at_line_start = (c == '\n');
+				src++;
+			}
+			total = (int)dst;
+			tcp_buf[total] = '\0';
+		}
 	}
 	return total;
 

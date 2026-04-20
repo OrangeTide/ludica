@@ -246,6 +246,34 @@ OK [data]
 ERR <reason>
 ```
 
+Commands that return multiple lines (`log_tail`, `log_grep`, `log_jq`,
+`gdb_core_backtrace`, `help` listing, etc.) wrap their body in an
+explicit frame so clients don't need to guess where the response ends:
+
+```
+OK\n                        <- status line
+<body line 1>\n
+<body line 2>\n
+...
+END\n                       <- success terminator
+```
+
+If the body fails asynchronously (e.g. `log_jq`'s jq child exits
+non-zero), the terminator carries the reason instead:
+
+```
+END ERR <reason>\n
+```
+
+Body lines that would otherwise be ambiguous are escape-encoded: if a
+body line begins with `\` or with the three bytes `END`, the launcher
+prepends one extra `\`. Decoders strip one leading `\` from every body
+line. With `nc`, the end of a response can be found with
+`grep -n '^END\( \|$\)'` and bodies unescaped with `sed 's/^\\\\/\\/'`.
+
+`ERR <reason>\n` single-line responses are **not** wrapped — no `END`
+terminator follows.
+
 The launcher may also emit asynchronous event lines:
 
 ```

@@ -555,6 +555,12 @@ struct session {
 	struct gsession *g;     /* attached game-session (never NULL while open) */
 	int closed;             /* request deferred close from inside dispatch */
 	unsigned sub_flags;     /* EV_* mask: events this session wants */
+	/* Body-framing scratch (see session_body_*).  A multi-line response
+	 * is framed as `OK\n` <body> `END\n`; any body line starting with `\`
+	 * or equal to `END` is escaped by prepending a single `\`. */
+	char *body_line;
+	size_t body_line_len;
+	size_t body_line_cap;
 };
 
 static void session_close(struct session *s);
@@ -663,6 +669,141 @@ session_writef(struct session *s, const char *fmt, ...)
 		n = (int)sizeof(buf) - 1;
 
 	w = write(s->fd, buf, (size_t)n);
+	(void)w;
+}
+
+/* ========== multi-line body framing ==========
+ *
+ * Protocol: a multi-line response is framed as an `OK\n` status line
+ * followed by zero or more body lines, terminated by a sentinel line:
+ *   - `END\n`             — success
+ *   - `END ERR <reason>\n` — async failure (e.g. log_jq non-zero exit)
+ * Body-line escape rule: if a body line starts with `\` (single
+ * backslash) or with the three bytes `END`, one extra leading `\` is
+ * prepended.  Decoders strip a single leading `\` from any body line.
+ * `nc` users can find the end with `grep -n '^END\( \|$\)'` and
+ * unescape with `sed 's/^\\\\/\\/'`.
+ *
+ * The session carries a small per-line buffer so arbitrary byte chunks
+ * can be written across multiple calls: we accumulate until we see a
+ * newline, then decide whether to prepend the escape.
+ */
+static void
+body_flush_line(struct session *s, int has_nl)
+{
+	char *l = s->body_line;
+	size_t n = s->body_line_len;
+	int needs_esc = 0;
+	ssize_t w;
+
+	if (n > 0 && l[0] == '\\')
+		needs_esc = 1;
+	else if (n >= 3 && l[0] == 'E' && l[1] == 'N' && l[2] == 'D')
+		needs_esc = 1;
+	if (needs_esc) {
+		w = write(s->fd, "\\", 1);
+		(void)w;
+	}
+	if (n > 0) {
+		w = write(s->fd, l, n);
+		(void)w;
+	}
+	if (has_nl) {
+		w = write(s->fd, "\n", 1);
+		(void)w;
+	}
+	s->body_line_len = 0;
+}
+
+static void
+session_body_begin(struct session *s)
+{
+	ssize_t w = write(s->fd, "OK\n", 3);
+	(void)w;
+	s->body_line_len = 0;
+}
+
+static void
+session_body_write(struct session *s, const void *vbuf, size_t n)
+{
+	const char *buf = vbuf;
+	size_t i;
+
+	for (i = 0; i < n; i++) {
+		if (buf[i] == '\n') {
+			body_flush_line(s, 1);
+			continue;
+		}
+		if (s->body_line_len + 1 > s->body_line_cap) {
+			size_t ncap = s->body_line_cap ? s->body_line_cap * 2
+			                               : 256;
+			char *nb = realloc(s->body_line, ncap);
+			if (!nb)
+				return; /* drop overflow on OOM */
+			s->body_line = nb;
+			s->body_line_cap = ncap;
+		}
+		s->body_line[s->body_line_len++] = buf[i];
+	}
+}
+
+static void
+session_body_writef(struct session *s, const char *fmt, ...)
+{
+	char buf[4096];
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	n = vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+	if (n < 0)
+		return;
+	if (n >= (int)sizeof(buf))
+		n = (int)sizeof(buf) - 1;
+	session_body_write(s, buf, (size_t)n);
+}
+
+static void
+session_body_end(struct session *s)
+{
+	ssize_t w;
+	if (s->body_line_len > 0) {
+		/* Unterminated trailing fragment: flush with a synthesized
+		 * newline so the END sentinel lands at column 0. */
+		body_flush_line(s, 1);
+	}
+	w = write(s->fd, "END\n", 4);
+	(void)w;
+}
+
+/* Terminate a multi-line response with an async-failure sentinel.  The
+ * reason is sanitized to stay on a single line. */
+static void
+session_body_end_err(struct session *s, const char *fmt, ...)
+{
+	char buf[512], line[600];
+	va_list ap;
+	int n, m;
+	size_t i;
+	ssize_t w;
+
+	if (s->body_line_len > 0)
+		body_flush_line(s, 1);
+
+	va_start(ap, fmt);
+	n = vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+	if (n < 0) n = 0;
+	if (n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
+	for (i = 0; i < (size_t)n; i++) {
+		if (buf[i] == '\n' || buf[i] == '\r')
+			buf[i] = ' ';
+	}
+	m = snprintf(line, sizeof(line), "END ERR %.*s\n", n, buf);
+	if (m < 0) return;
+	if (m >= (int)sizeof(line)) m = (int)sizeof(line) - 1;
+	w = write(s->fd, line, (size_t)m);
 	(void)w;
 }
 
@@ -1277,9 +1418,8 @@ write_log_chunk(struct session *s, const char *stream_label,
 {
 	/* prefix each line with stream tag when emitting from both streams;
 	 * when only one stream selected we skip the prefix for cleaner
-	 * output. */
-	ssize_t w;
-
+	 * output.  Routed through session_body_write so lines are escaped
+	 * per the multi-line framing rule. */
 	if (stream_label) {
 		char prefix[32];
 		size_t plen;
@@ -1289,25 +1429,20 @@ write_log_chunk(struct session *s, const char *stream_label,
 		    stream_label);
 		while (i < n) {
 			if (data[i] == '\n') {
-				w = write(s->fd, prefix, plen);
-				(void)w;
-				w = write(s->fd, data + line_start,
+				session_body_write(s, prefix, plen);
+				session_body_write(s, data + line_start,
 				    i - line_start + 1);
-				(void)w;
 				line_start = i + 1;
 			}
 			i++;
 		}
 		if (line_start < n) {
-			w = write(s->fd, prefix, plen);
-			(void)w;
-			w = write(s->fd, data + line_start,
+			session_body_write(s, prefix, plen);
+			session_body_write(s, data + line_start,
 			    n - line_start);
-			(void)w;
 		}
 	} else {
-		w = write(s->fd, data, n);
-		(void)w;
+		session_body_write(s, data, n);
 	}
 }
 
@@ -1334,7 +1469,7 @@ cmd_log_tail(struct session *s, struct cmd_args *a)
 		session_writef(s, "ERR internal: out of memory\n");
 		return;
 	}
-	session_writef(s, "OK\n");
+	session_body_begin(s);
 	if (mask & (1u << STREAM_STDOUT)) {
 		written = log_buf_tail(&s->g->logs[STREAM_STDOUT], n, out,
 		    g_log_bytes);
@@ -1347,6 +1482,7 @@ cmd_log_tail(struct session *s, struct cmd_args *a)
 		write_log_chunk(s, streams_selected > 1 ? "stderr" : NULL,
 		    out, written);
 	}
+	session_body_end(s);
 	free(out);
 }
 
@@ -1373,7 +1509,7 @@ cmd_log_head(struct session *s, struct cmd_args *a)
 		session_writef(s, "ERR internal: out of memory\n");
 		return;
 	}
-	session_writef(s, "OK\n");
+	session_body_begin(s);
 	if (mask & (1u << STREAM_STDOUT)) {
 		written = log_buf_head(&s->g->logs[STREAM_STDOUT], n, out,
 		    g_log_bytes);
@@ -1386,6 +1522,7 @@ cmd_log_head(struct session *s, struct cmd_args *a)
 		write_log_chunk(s, streams_selected > 1 ? "stderr" : NULL,
 		    out, written);
 	}
+	session_body_end(s);
 	free(out);
 }
 
@@ -1416,7 +1553,7 @@ cmd_log_range(struct session *s, struct cmd_args *a)
 		session_writef(s, "ERR internal: out of memory\n");
 		return;
 	}
-	session_writef(s, "OK\n");
+	session_body_begin(s);
 	if (mask & (1u << STREAM_STDOUT)) {
 		written = log_buf_range(&s->g->logs[STREAM_STDOUT], first, last,
 		    out, g_log_bytes);
@@ -1429,6 +1566,7 @@ cmd_log_range(struct session *s, struct cmd_args *a)
 		write_log_chunk(s, streams_selected > 1 ? "stderr" : NULL,
 		    out, written);
 	}
+	session_body_end(s);
 	free(out);
 }
 
@@ -1454,25 +1592,18 @@ grep_emit_line(struct grep_ctx *g, int line_no, const char *buf, size_t len)
 {
 	char header[64];
 	int n;
-	ssize_t w;
 
-	if (g->last_emitted_line > 0 && line_no > g->last_emitted_line + 1) {
-		w = write(g->s->fd, "--\n", 3);
-		(void)w;
-	}
+	if (g->last_emitted_line > 0 && line_no > g->last_emitted_line + 1)
+		session_body_write(g->s, "--\n", 3);
 	if (g->stream_label)
 		n = snprintf(header, sizeof(header), "%s:%d: ",
 		    g->stream_label, line_no);
 	else
 		n = snprintf(header, sizeof(header), "%d: ", line_no);
-	w = write(g->s->fd, header, (size_t)n);
-	(void)w;
-	w = write(g->s->fd, buf, len);
-	(void)w;
-	if (len == 0 || buf[len - 1] != '\n') {
-		w = write(g->s->fd, "\n", 1);
-		(void)w;
-	}
+	session_body_write(g->s, header, (size_t)n);
+	session_body_write(g->s, buf, len);
+	if (len == 0 || buf[len - 1] != '\n')
+		session_body_write(g->s, "\n", 1);
 	g->last_emitted_line = line_no;
 }
 
@@ -1593,7 +1724,7 @@ cmd_log_grep(struct session *s, struct cmd_args *a)
 		}
 	}
 
-	session_writef(s, "OK\n");
+	session_body_begin(s);
 
 	if (mask & (1u << STREAM_STDOUT)) {
 		gctx.stream_label = streams_selected > 1 ? "stdout" : NULL;
@@ -1611,6 +1742,8 @@ cmd_log_grep(struct session *s, struct cmd_args *a)
 		log_buf_for_each_line(&s->g->logs[STREAM_STDERR],
 		    grep_each_line, &gctx);
 	}
+
+	session_body_end(s);
 
 cleanup:
 	if (re_ok)
@@ -1856,25 +1989,18 @@ where_emit_line(struct where_ctx *g, int line_no, const char *buf, size_t len)
 {
 	char header[64];
 	int n;
-	ssize_t w;
 
-	if (g->last_emitted_line > 0 && line_no > g->last_emitted_line + 1) {
-		w = write(g->s->fd, "--\n", 3);
-		(void)w;
-	}
+	if (g->last_emitted_line > 0 && line_no > g->last_emitted_line + 1)
+		session_body_write(g->s, "--\n", 3);
 	if (g->stream_label)
 		n = snprintf(header, sizeof(header), "%s:%d: ",
 		    g->stream_label, line_no);
 	else
 		n = snprintf(header, sizeof(header), "%d: ", line_no);
-	w = write(g->s->fd, header, (size_t)n);
-	(void)w;
-	w = write(g->s->fd, buf, len);
-	(void)w;
-	if (len == 0 || buf[len - 1] != '\n') {
-		w = write(g->s->fd, "\n", 1);
-		(void)w;
-	}
+	session_body_write(g->s, header, (size_t)n);
+	session_body_write(g->s, buf, len);
+	if (len == 0 || buf[len - 1] != '\n')
+		session_body_write(g->s, "\n", 1);
 	g->last_emitted_line = line_no;
 }
 
@@ -1974,7 +2100,7 @@ cmd_log_where(struct session *s, struct cmd_args *a)
 	gctx.preds = preds;
 	gctx.npred = npred;
 
-	session_writef(s, "OK\n");
+	session_body_begin(s);
 
 	if (mask & (1u << STREAM_STDOUT)) {
 		gctx.stream_label = streams_selected > 1 ? "stdout" : NULL;
@@ -1988,6 +2114,8 @@ cmd_log_where(struct session *s, struct cmd_args *a)
 		log_buf_for_each_line(&s->g->logs[STREAM_STDERR],
 		    where_each_line, &gctx);
 	}
+
+	session_body_end(s);
 
 cleanup:
 	for (i = 0; i < npred; i++) {
@@ -2045,11 +2173,13 @@ jq_job_finalize(struct log_jq_job *j)
 				j->errlen--;
 			j->errbuf[j->errlen < sizeof(j->errbuf)
 			    ? j->errlen : sizeof(j->errbuf) - 1] = '\0';
-			session_writef(j->s, "ERR jq: %s\n",
+			session_body_end_err(j->s, "jq: %s",
 			    j->errbuf[0] ? j->errbuf : "non-zero exit");
 		} else if (WIFSIGNALED(j->exit_status)) {
-			session_writef(j->s, "ERR jq: signal %d\n",
+			session_body_end_err(j->s, "jq: signal %d",
 			    WTERMSIG(j->exit_status));
+		} else {
+			session_body_end(j->s);
 		}
 	}
 	jq_job_unlink(j);
@@ -2111,8 +2241,7 @@ jq_on_stdout_readable(struct iox_loop *loop, int fd, unsigned events,
 		return;
 	}
 	if (j->s) {
-		ssize_t w = write(j->s->fd, buf, (size_t)n);
-		(void)w;
+		session_body_write(j->s, buf, (size_t)n);
 	}
 }
 
@@ -2265,7 +2394,7 @@ cmd_log_jq(struct session *s, struct cmd_args *a)
 	j->next = g_jq_jobs;
 	g_jq_jobs = j;
 
-	session_writef(s, "OK\n");
+	session_body_begin(s);
 
 	iox_fd_add(s->loop, j->stdout_fd, IOX_READ,
 	    jq_on_stdout_readable, j);
@@ -3119,8 +3248,9 @@ cmd_gdb_core_list(struct session *s, struct cmd_args *a)
 		session_writef(s, "ERR no_core: coredumpctl returned nothing\n");
 		return;
 	}
-	session_writef(s, "OK\n");
+	session_body_begin(s);
 	write_log_chunk(s, NULL, buf, (size_t)got);
+	session_body_end(s);
 }
 
 static void
@@ -3175,8 +3305,9 @@ cmd_gdb_core_backtrace(struct session *s, struct cmd_args *a)
 		session_writef(s, "ERR internal: gdb invocation failed\n");
 		return;
 	}
-	session_writef(s, "OK\n");
+	session_body_begin(s);
 	write_log_chunk(s, NULL, buf, (size_t)got);
+	session_body_end(s);
 }
 
 static void
@@ -3210,8 +3341,9 @@ cmd_gdb_core_frame(struct session *s, struct cmd_args *a)
 		session_writef(s, "ERR internal: gdb invocation failed\n");
 		return;
 	}
-	session_writef(s, "OK\n");
+	session_body_begin(s);
 	write_log_chunk(s, NULL, buf, (size_t)got);
+	session_body_end(s);
 }
 
 static void
@@ -3241,8 +3373,9 @@ cmd_gdb_core_locals(struct session *s, struct cmd_args *a)
 		session_writef(s, "ERR internal: gdb invocation failed\n");
 		return;
 	}
-	session_writef(s, "OK\n");
+	session_body_begin(s);
 	write_log_chunk(s, NULL, buf, (size_t)got);
+	session_body_end(s);
 }
 
 /* Phase 6: map an event name (or "*") to a bitmask.  Returns 0 on
@@ -3367,9 +3500,11 @@ cmd_help(struct session *s, struct cmd_args *a)
 		return;
 	}
 
-	session_writef(s, "OK commands:\n");
+	session_body_begin(s);
+	session_body_writef(s, "commands:\n");
 	for (c = commands; c->name; c++)
-		session_writef(s, " %-16s %s\n", c->name, c->summary);
+		session_body_writef(s, " %-16s %s\n", c->name, c->summary);
+	session_body_end(s);
 }
 
 static void
@@ -3573,6 +3708,7 @@ session_close(struct session *s)
 	}
 	iox_fd_remove(s->loop, s->fd);
 	close(s->fd);
+	free(s->body_line);
 	free(s);
 }
 
