@@ -67,8 +67,49 @@ int         lud_set_config(const char *key, const char *value);
 void lud_set_fullscreen(int fullscreen); /* 0 = windowed, non-zero = fullscreen */
 int  lud_is_fullscreen(void);
 
-/* Logging */
+/* Logging.
+ *
+ * Two APIs:
+ *   lud_log / lud_err : printf-style; formatted result goes into the
+ *                       JSON "msg" field of a {"t":..,"lvl":..,"msg":..}\n line.
+ *   lud_logj          : structured varargs; caller supplies typed key/value
+ *                       pairs terminated by NULL.  Emits one JSON object per
+ *                       call, one line, to stderr.
+ *
+ * Example:
+ *   lud_logj(LUD_LOG_INFO, "loaded texture",
+ *            "tex",   LUD_STR(name),
+ *            "bytes", LUD_INT(sz),
+ *            (const char *)0);
+ */
+typedef enum {
+	LUD_LOG_DEBUG = 0,
+	LUD_LOG_INFO  = 1,
+	LUD_LOG_WARN  = 2,
+	LUD_LOG_ERROR = 3,
+} lud_log_level_t;
+
+/* Value tags used by lud_logj varargs.  Prefer the LUD_STR / LUD_INT / ...
+ * helper macros below so the call site reads as key/value pairs. */
+enum {
+	LUD_LOGV_END  = 0,
+	LUD_LOGV_STR  = 1,   /* const char * */
+	LUD_LOGV_INT  = 2,   /* long long */
+	LUD_LOGV_UINT = 3,   /* unsigned long long */
+	LUD_LOGV_HEX  = 4,   /* unsigned long long (rendered 0x..) */
+	LUD_LOGV_FLT  = 5,   /* double */
+	LUD_LOGV_BOOL = 6,   /* int (0 = false, nonzero = true) */
+};
+
+#define LUD_STR(x)  LUD_LOGV_STR,  (const char *)(x)
+#define LUD_INT(x)  LUD_LOGV_INT,  (long long)(x)
+#define LUD_UINT(x) LUD_LOGV_UINT, (unsigned long long)(x)
+#define LUD_HEX(x)  LUD_LOGV_HEX,  (unsigned long long)(x)
+#define LUD_FLT(x)  LUD_LOGV_FLT,  (double)(x)
+#define LUD_BOOL(x) LUD_LOGV_BOOL, (int)((x) ? 1 : 0)
+
 void lud_log(const char *msg, ...);
 void lud_err(const char *msg, ...);
+void lud_logj(lud_log_level_t lvl, const char *msg, ...);
 
 #endif /* LUDICA_H_ */
