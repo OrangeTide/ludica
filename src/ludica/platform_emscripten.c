@@ -460,12 +460,12 @@ lud__platform_init(const lud_desc_t *desc)
 
 	gl_context = emscripten_webgl_create_context("#canvas", &attrs);
 	if (gl_context <= 0) {
-		fprintf(stderr, "ludica: failed to create WebGL context\n");
+		lud_err("failed to create WebGL context");
 		return LUD_ERR;
 	}
 	EMSCRIPTEN_RESULT r = emscripten_webgl_make_context_current(gl_context);
 	if (r != EMSCRIPTEN_RESULT_SUCCESS) {
-		fprintf(stderr, "ludica: failed to make WebGL context current (%d)\n", r);
+		lud_err("failed to make WebGL context current (%d)", r);
 		return LUD_ERR;
 	}
 

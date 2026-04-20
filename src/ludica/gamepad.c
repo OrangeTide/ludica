@@ -1,4 +1,5 @@
 #include "gamepad.h"
+#include "ludica.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -56,11 +57,17 @@ gamepad_dump(void)
 	for (i = 0; i < GAMEPAD_MAX; i++) {
 		if (!gamepad_exists(i))
 			continue;
-		fprintf(stderr, "pad%u: buttons=%08X%08X\n", i,
-				gamepad_state[i].button[0],
-				gamepad_state[i].button[1]);
+		lud_logj(LUD_LOG_DEBUG, "gamepad state",
+		         "pad", LUD_UINT(i),
+		         "buttons_hi", LUD_HEX(gamepad_state[i].button[0]),
+		         "buttons_lo", LUD_HEX(gamepad_state[i].button[1]),
+		         (const char *)0);
 		for (j = 0; j < gamepad_info[i].num_axis; j++ ) {
-			fprintf(stderr, "        Axis #%u : %g\n", j, gamepad_axis(i, j));
+			lud_logj(LUD_LOG_DEBUG, "gamepad axis",
+			         "pad", LUD_UINT(i),
+			         "axis", LUD_UINT(j),
+			         "value", LUD_FLT(gamepad_axis(i, j)),
+			         (const char *)0);
 		}
 	}
 }

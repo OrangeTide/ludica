@@ -1,5 +1,6 @@
 #include "gamepad.h"
 #include "gamepad-linux.h"
+#include "ludica.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
@@ -82,8 +83,12 @@ gamepad_open_one(int id)
 	info->num_button = num_button;
 	info->exists = true;
 
-	fprintf(stderr, "gamepad%u: name=\"%s\" axes=%d buttons=%d\n",
-			id, info->name, info->num_axis, info->num_button);
+	lud_logj(LUD_LOG_INFO, "gamepad detected",
+	         "pad", LUD_UINT(id),
+	         "name", LUD_STR(info->name),
+	         "axes", LUD_INT(info->num_axis),
+	         "buttons", LUD_INT(info->num_button),
+	         (const char *)0);
 
 	return true;
 }
