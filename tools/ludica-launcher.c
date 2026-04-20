@@ -528,9 +528,24 @@ struct gsession {
 	char core_path[PATH_MAX];
 	char crash_summary[512];
 
+	/* Phase 6 event line assembly: one accumulator per stream for
+	 * EV_LOG_STDOUT_LINE / EV_LOG_STDERR_LINE emission.  Only grown
+	 * while the owning session is subscribed. */
+	char ev_line[N_STREAMS][2048];
+	int ev_linelen[N_STREAMS];
+
 	struct iox_loop *loop;
 	struct session *owner;  /* currently attached connection, or NULL */
 };
+
+/* Phase 6 event flags (bitmask stored in session->sub_flags). */
+#define EV_LOG_STDOUT_LINE (1u << 0)
+#define EV_LOG_STDERR_LINE (1u << 1)
+#define EV_PROCESS_EXIT    (1u << 2)
+#define EV_CRASH           (1u << 3)
+#define EV_CRASH_SUMMARY   (1u << 4)
+#define EV_ALL             (EV_LOG_STDOUT_LINE | EV_LOG_STDERR_LINE | \
+                            EV_PROCESS_EXIT | EV_CRASH | EV_CRASH_SUMMARY)
 
 struct session {
 	int fd;
@@ -539,6 +554,7 @@ struct session {
 	struct iox_loop *loop;
 	struct gsession *g;     /* attached game-session (never NULL while open) */
 	int closed;             /* request deferred close from inside dispatch */
+	unsigned sub_flags;     /* EV_* mask: events this session wants */
 };
 
 static void session_close(struct session *s);
@@ -629,6 +645,41 @@ session_writef(struct session *s, const char *fmt, ...)
 
 /* ========== child process + log capture ========== */
 
+static int compute_crash_summary(const char *binary, const char *core,
+    int sig, char *out, size_t cap);
+
+/* Feed bytes through the per-stream line accumulator, emitting an
+ * EVENT log_{stdout,stderr}_line line for each complete '\n'-terminated
+ * run when the owner is subscribed.  Silently truncates lines longer
+ * than the accumulator. */
+static void
+ev_feed_stream(struct gsession *g, int stream_idx, const char *buf, size_t n)
+{
+	unsigned want = (stream_idx == STREAM_STDOUT)
+	    ? EV_LOG_STDOUT_LINE : EV_LOG_STDERR_LINE;
+	const char *tag = (stream_idx == STREAM_STDOUT)
+	    ? "log_stdout_line" : "log_stderr_line";
+	char *acc = g->ev_line[stream_idx];
+	int *accn = &g->ev_linelen[stream_idx];
+	size_t cap = sizeof(g->ev_line[stream_idx]);
+	size_t i;
+
+	if (!g->owner || !(g->owner->sub_flags & want)) {
+		*accn = 0;
+		return;
+	}
+	for (i = 0; i < n; i++) {
+		char c = buf[i];
+		if (c == '\n') {
+			acc[*accn] = '\0';
+			session_writef(g->owner, "EVENT %s %s\n", tag, acc);
+			*accn = 0;
+		} else if ((size_t)*accn + 1 < cap) {
+			acc[(*accn)++] = c;
+		}
+	}
+}
+
 static void
 pipe_on_readable(struct iox_loop *loop, int fd, unsigned events, void *arg)
 {
@@ -652,6 +703,7 @@ pipe_on_readable(struct iox_loop *loop, int fd, unsigned events, void *arg)
 		return;
 	}
 	log_buf_write(&g->logs[stream_idx], buf, (size_t)n);
+	ev_feed_stream(g, stream_idx, buf, (size_t)n);
 }
 
 /* Drain any remaining readable bytes after child exits so we don't
@@ -669,6 +721,7 @@ pipe_drain(struct gsession *g, int fd, int stream_idx)
 		if (n <= 0)
 			break;
 		log_buf_write(&g->logs[stream_idx], buf, (size_t)n);
+		ev_feed_stream(g, stream_idx, buf, (size_t)n);
 	}
 }
 
@@ -848,6 +901,38 @@ on_sigchld(struct iox_loop *loop, int signo, void *arg)
 		}
 		pipe_drain(g, g->out_fd, STREAM_STDOUT);
 		pipe_drain(g, g->err_fd, STREAM_STDERR);
+
+		/* Phase 6: emit lifecycle events to a subscribed owner. */
+		if (g->owner) {
+			if (WIFEXITED(status) &&
+			    (g->owner->sub_flags & EV_PROCESS_EXIT)) {
+				session_writef(g->owner,
+				    "EVENT process_exit pid=%d code=%d\n",
+				    (int)pid, g->exit_code);
+			}
+			if (WIFSIGNALED(status)) {
+				if (g->owner->sub_flags & EV_CRASH) {
+					session_writef(g->owner,
+					    "EVENT crash pid=%d sig=%d core=%s\n",
+					    (int)pid, g->exit_signal,
+					    g->core_path[0] ? g->core_path : "none");
+				}
+				if ((g->owner->sub_flags & EV_CRASH_SUMMARY) &&
+				    g->core_path[0] && g->bin_path[0]) {
+					char summary[512];
+					if (compute_crash_summary(g->bin_path,
+					        g->core_path, g->exit_signal,
+					        summary, sizeof(summary)) == 0) {
+						snprintf(g->crash_summary,
+						    sizeof(g->crash_summary),
+						    "%s", summary);
+						session_writef(g->owner,
+						    "EVENT crash_summary %s\n",
+						    summary);
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -2462,6 +2547,59 @@ cmd_gdb_core_locals(struct session *s, struct cmd_args *a)
 	write_log_chunk(s, NULL, buf, (size_t)got);
 }
 
+/* Phase 6: map an event name (or "*") to a bitmask.  Returns 0 on
+ * unknown. */
+static unsigned
+event_flag_by_name(const char *name)
+{
+	if (strcmp(name, "*") == 0 || strcmp(name, "all") == 0)
+		return EV_ALL;
+	if (strcmp(name, "log_stdout_line") == 0) return EV_LOG_STDOUT_LINE;
+	if (strcmp(name, "log_stderr_line") == 0) return EV_LOG_STDERR_LINE;
+	if (strcmp(name, "process_exit") == 0)    return EV_PROCESS_EXIT;
+	if (strcmp(name, "crash") == 0)           return EV_CRASH;
+	if (strcmp(name, "crash_summary") == 0)   return EV_CRASH_SUMMARY;
+	return 0;
+}
+
+static void
+cmd_subscribe(struct session *s, struct cmd_args *a)
+{
+	unsigned mask;
+
+	if (a->argc < 2) {
+		session_writef(s, "ERR usage: subscribe <event>|*\n");
+		return;
+	}
+	mask = event_flag_by_name(a->argv[1]);
+	if (!mask) {
+		session_writef(s,
+		    "ERR usage: unknown event '%s' "
+		    "(log_stdout_line|log_stderr_line|process_exit|crash|crash_summary|*)\n",
+		    a->argv[1]);
+		return;
+	}
+	s->sub_flags |= mask;
+	session_writef(s, "OK subscribed\n");
+}
+
+static void
+cmd_unsubscribe(struct session *s, struct cmd_args *a)
+{
+	if (a->argc >= 2) {
+		unsigned mask = event_flag_by_name(a->argv[1]);
+		if (!mask) {
+			session_writef(s, "ERR usage: unknown event '%s'\n",
+			    a->argv[1]);
+			return;
+		}
+		s->sub_flags &= ~mask;
+	} else {
+		s->sub_flags = 0;
+	}
+	session_writef(s, "OK\n");
+}
+
 struct command {
 	const char *name;
 	void (*fn)(struct session *s, struct cmd_args *a);
@@ -2506,6 +2644,8 @@ static const struct command commands[] = {
 	{ "gdb_core_backtrace",cmd_gdb_core_backtrace,"backtrace [--core=PATH] [--limit=N]" },
 	{ "gdb_core_frame",    cmd_gdb_core_frame,    "info for frame N [--core=PATH]" },
 	{ "gdb_core_locals",   cmd_gdb_core_locals,   "local variables [--core=PATH] [--frame=N]" },
+	{ "subscribe",         cmd_subscribe,         "subscribe to event stream (EVENT lines)" },
+	{ "unsubscribe",       cmd_unsubscribe,       "unsubscribe from events (all or one)" },
 	{ NULL, NULL, NULL }
 };
 
