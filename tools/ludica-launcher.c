@@ -561,6 +561,29 @@ static void session_close(struct session *s);
 static struct gsession *gsession_new(struct iox_loop *loop);
 static void gsession_destroy(struct gsession *g);
 
+/* Active `log_jq` child subprocesses.  The list lets SIGCHLD locate jobs
+ * by pid and lets session_close orphan them so stray async writes won't
+ * touch freed sessions. */
+struct log_jq_job {
+	struct log_jq_job *next;
+	struct session *s;      /* NULL if session closed (orphaned) */
+	struct iox_loop *loop;
+	pid_t pid;
+	int stdin_fd;
+	int stdout_fd;
+	int stderr_fd;
+	char *inbuf;
+	size_t in_size;
+	size_t in_off;
+	char errbuf[512];
+	size_t errlen;
+	int reaped;
+	int exit_status;
+};
+static struct log_jq_job *g_jq_jobs;
+
+static void jq_job_finalize(struct log_jq_job *j);
+
 /* Global gsession registry.  SIGCHLD scans this list to locate the
  * gsession owning a reaped pid; session_list and session_attach scan
  * it by name.  O(n) is fine for a handful of sessions. */
@@ -875,9 +898,18 @@ on_sigchld(struct iox_loop *loop, int signo, void *arg)
 	(void)arg;
 
 	for (;;) {
+		struct log_jq_job *j;
 		pid = waitpid(-1, &status, WNOHANG);
 		if (pid <= 0)
 			break;
+		for (j = g_jq_jobs; j; j = j->next) {
+			if (j->pid == pid) {
+				j->reaped = 1;
+				j->exit_status = status;
+				jq_job_finalize(j);
+				break;
+			}
+		}
 		g = gsession_by_pid(pid);
 		if (!g)
 			continue;
@@ -1964,6 +1996,300 @@ cleanup:
 	free(preds);
 }
 
+/*
+ * log_jq: pipe JSON log lines through /usr/bin/jq.
+ *
+ * Only lines that start with '{' (i.e. produced by lud_logj) are fed to
+ * jq; other lines are skipped so a legacy fprintf won't abort jq.  All
+ * I/O is wired through libiox: stdin is drained as the pipe becomes
+ * writable, stdout is forwarded to the session as it arrives, and stderr
+ * is captured for an `ERR jq: ...` reply on non-zero exit.
+ */
+
+static void
+jq_job_unlink(struct log_jq_job *j)
+{
+	struct log_jq_job **pp;
+
+	for (pp = &g_jq_jobs; *pp; pp = &(*pp)->next) {
+		if (*pp == j) {
+			*pp = j->next;
+			return;
+		}
+	}
+}
+
+static void
+jq_close_fd(struct log_jq_job *j, int *fdp)
+{
+	if (*fdp >= 0) {
+		iox_fd_remove(j->loop, *fdp);
+		close(*fdp);
+		*fdp = -1;
+	}
+}
+
+static void
+jq_job_finalize(struct log_jq_job *j)
+{
+	if (!j->reaped || j->stdout_fd >= 0 || j->stderr_fd >= 0)
+		return;
+	jq_close_fd(j, &j->stdin_fd);
+	if (j->s) {
+		if (WIFEXITED(j->exit_status) &&
+		    WEXITSTATUS(j->exit_status) != 0) {
+			/* trim trailing newline on errbuf */
+			while (j->errlen > 0 &&
+			    (j->errbuf[j->errlen - 1] == '\n' ||
+			     j->errbuf[j->errlen - 1] == '\r'))
+				j->errlen--;
+			j->errbuf[j->errlen < sizeof(j->errbuf)
+			    ? j->errlen : sizeof(j->errbuf) - 1] = '\0';
+			session_writef(j->s, "ERR jq: %s\n",
+			    j->errbuf[0] ? j->errbuf : "non-zero exit");
+		} else if (WIFSIGNALED(j->exit_status)) {
+			session_writef(j->s, "ERR jq: signal %d\n",
+			    WTERMSIG(j->exit_status));
+		}
+	}
+	jq_job_unlink(j);
+	free(j->inbuf);
+	free(j);
+}
+
+static void
+jq_kill_job(struct log_jq_job *j)
+{
+	if (j->pid > 0 && !j->reaped)
+		kill(j->pid, SIGKILL);
+	jq_close_fd(j, &j->stdin_fd);
+	jq_close_fd(j, &j->stdout_fd);
+	jq_close_fd(j, &j->stderr_fd);
+}
+
+static void
+jq_on_writable(struct iox_loop *loop, int fd, unsigned events, void *arg)
+{
+	struct log_jq_job *j = arg;
+	ssize_t n;
+
+	(void)loop;
+	(void)events;
+
+	if (j->in_off >= j->in_size) {
+		jq_close_fd(j, &j->stdin_fd);
+		return;
+	}
+	n = write(fd, j->inbuf + j->in_off, j->in_size - j->in_off);
+	if (n < 0) {
+		if (errno == EAGAIN || errno == EINTR)
+			return;
+		/* EPIPE or similar: jq closed stdin early.  Drop writer. */
+		jq_close_fd(j, &j->stdin_fd);
+		return;
+	}
+	j->in_off += (size_t)n;
+	if (j->in_off >= j->in_size)
+		jq_close_fd(j, &j->stdin_fd);
+}
+
+static void
+jq_on_stdout_readable(struct iox_loop *loop, int fd, unsigned events,
+    void *arg)
+{
+	struct log_jq_job *j = arg;
+	char buf[4096];
+	ssize_t n;
+
+	(void)loop;
+	(void)events;
+
+	n = read(fd, buf, sizeof(buf));
+	if (n <= 0) {
+		jq_close_fd(j, &j->stdout_fd);
+		jq_job_finalize(j);
+		return;
+	}
+	if (j->s) {
+		ssize_t w = write(j->s->fd, buf, (size_t)n);
+		(void)w;
+	}
+}
+
+static void
+jq_on_stderr_readable(struct iox_loop *loop, int fd, unsigned events,
+    void *arg)
+{
+	struct log_jq_job *j = arg;
+	char buf[512];
+	ssize_t n;
+	size_t room;
+
+	(void)loop;
+	(void)events;
+
+	n = read(fd, buf, sizeof(buf));
+	if (n <= 0) {
+		jq_close_fd(j, &j->stderr_fd);
+		jq_job_finalize(j);
+		return;
+	}
+	room = sizeof(j->errbuf) - j->errlen;
+	if (room > 0) {
+		size_t take = (size_t)n < room ? (size_t)n : room;
+		memcpy(j->errbuf + j->errlen, buf, take);
+		j->errlen += take;
+	}
+}
+
+/* Collect log bytes from one stream; append only lines that look like
+ * JSON objects (start with '{'). */
+static size_t
+jq_append_stream(const struct log_buf *b, char *out, size_t off, size_t cap)
+{
+	char *tmp;
+	size_t n, i, start = 0;
+
+	if (!b->data || b->len == 0)
+		return off;
+	tmp = malloc(b->len);
+	if (!tmp)
+		return off;
+	n = log_buf_linearize(b, tmp, b->len);
+	for (i = 0; i < n; i++) {
+		if (tmp[i] == '\n') {
+			size_t llen = i - start + 1;
+			if (tmp[start] == '{' && off + llen <= cap) {
+				memcpy(out + off, tmp + start, llen);
+				off += llen;
+			}
+			start = i + 1;
+		}
+	}
+	if (start < n && tmp[start] == '{') {
+		size_t llen = n - start;
+		if (off + llen + 1 <= cap) {
+			memcpy(out + off, tmp + start, llen);
+			off += llen;
+			out[off++] = '\n';
+		}
+	}
+	free(tmp);
+	return off;
+}
+
+static void
+cmd_log_jq(struct session *s, struct cmd_args *a)
+{
+	const char *expr = NULL;
+	unsigned mask;
+	int i;
+	int in_pipe[2] = { -1, -1 };
+	int out_pipe[2] = { -1, -1 };
+	int err_pipe[2] = { -1, -1 };
+	pid_t pid;
+	struct log_jq_job *j = NULL;
+	char *inbuf = NULL;
+	size_t in_off = 0, cap;
+
+	for (i = 1; i < a->argc; i++) {
+		if (a->argv[i][0] != '-' && !expr) {
+			expr = a->argv[i];
+			break;
+		}
+	}
+	if (!expr) {
+		session_writef(s, "ERR usage: log_jq <jq-expr> [streams...]\n");
+		return;
+	}
+	mask = parse_streams(a, i + 1);
+
+	cap = g_log_bytes * 2 + 16;
+	inbuf = malloc(cap);
+	if (!inbuf) {
+		session_writef(s, "ERR internal: out of memory\n");
+		return;
+	}
+	if (mask & (1u << STREAM_STDOUT))
+		in_off = jq_append_stream(&s->g->logs[STREAM_STDOUT],
+		    inbuf, in_off, cap);
+	if (mask & (1u << STREAM_STDERR))
+		in_off = jq_append_stream(&s->g->logs[STREAM_STDERR],
+		    inbuf, in_off, cap);
+
+	if (pipe(in_pipe) < 0 || pipe(out_pipe) < 0 || pipe(err_pipe) < 0) {
+		session_writef(s, "ERR internal: pipe: %s\n", strerror(errno));
+		goto fail;
+	}
+
+	pid = fork();
+	if (pid < 0) {
+		session_writef(s, "ERR internal: fork: %s\n", strerror(errno));
+		goto fail;
+	}
+	if (pid == 0) {
+		dup2(in_pipe[0], 0);
+		dup2(out_pipe[1], 1);
+		dup2(err_pipe[1], 2);
+		close(in_pipe[0]); close(in_pipe[1]);
+		close(out_pipe[0]); close(out_pipe[1]);
+		close(err_pipe[0]); close(err_pipe[1]);
+		execlp("jq", "jq", "-c", expr, (char *)0);
+		_exit(127);
+	}
+
+	close(in_pipe[0]);  in_pipe[0] = -1;
+	close(out_pipe[1]); out_pipe[1] = -1;
+	close(err_pipe[1]); err_pipe[1] = -1;
+
+	/* Non-blocking I/O on all three pipes. */
+	fcntl(in_pipe[1],  F_SETFL, O_NONBLOCK);
+	fcntl(out_pipe[0], F_SETFL, O_NONBLOCK);
+	fcntl(err_pipe[0], F_SETFL, O_NONBLOCK);
+
+	j = calloc(1, sizeof(*j));
+	if (!j) {
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		session_writef(s, "ERR internal: out of memory\n");
+		goto fail;
+	}
+	j->s = s;
+	j->loop = s->loop;
+	j->pid = pid;
+	j->stdin_fd  = in_pipe[1];
+	j->stdout_fd = out_pipe[0];
+	j->stderr_fd = err_pipe[0];
+	j->inbuf = inbuf;
+	j->in_size = in_off;
+	j->next = g_jq_jobs;
+	g_jq_jobs = j;
+
+	session_writef(s, "OK\n");
+
+	iox_fd_add(s->loop, j->stdout_fd, IOX_READ,
+	    jq_on_stdout_readable, j);
+	iox_fd_add(s->loop, j->stderr_fd, IOX_READ,
+	    jq_on_stderr_readable, j);
+	if (j->in_size > 0) {
+		iox_fd_add(s->loop, j->stdin_fd, IOX_WRITE,
+		    jq_on_writable, j);
+	} else {
+		close(j->stdin_fd);
+		j->stdin_fd = -1;
+	}
+	return;
+
+fail:
+	if (in_pipe[0]  >= 0) close(in_pipe[0]);
+	if (in_pipe[1]  >= 0) close(in_pipe[1]);
+	if (out_pipe[0] >= 0) close(out_pipe[0]);
+	if (out_pipe[1] >= 0) close(out_pipe[1]);
+	if (err_pipe[0] >= 0) close(err_pipe[0]);
+	if (err_pipe[1] >= 0) close(err_pipe[1]);
+	free(inbuf);
+}
+
 static void
 cmd_env(struct session *s, struct cmd_args *a)
 {
@@ -2990,6 +3316,7 @@ static const struct command commands[] = {
 	{ "log_range",    cmd_log_range,    "emit lines FIRST..LAST [streams...]" },
 	{ "log_grep",     cmd_log_grep,     "regex search [--ctx=N] PATTERN [streams...]" },
 	{ "log_where",    cmd_log_where,    "structural filter KEY=VAL|KEY~REGEX ... [streams...]" },
+	{ "log_jq",       cmd_log_jq,       "pipe JSON log through jq EXPR [streams...]" },
 	{ "log_clear",    cmd_log_clear,    "clear log buffer [streams...]" },
 	{ "env",          cmd_env,          "get/set env var: env KEY [VALUE]" },
 	{ "unsetenv",     cmd_unsetenv,     "unset env var: unsetenv KEY" },
@@ -3223,9 +3550,19 @@ static void
 session_close(struct session *s)
 {
 	struct gsession *g;
+	struct log_jq_job *j;
 
 	if (!s)
 		return;
+	/* Orphan any in-flight log_jq jobs belonging to this session so
+	 * their async callbacks stop writing to the dying fd.  The child
+	 * itself gets killed; SIGCHLD will finalize and free the job. */
+	for (j = g_jq_jobs; j; j = j->next) {
+		if (j->s == s) {
+			j->s = NULL;
+			jq_kill_job(j);
+		}
+	}
 	ctl_q_scrub_session(s);
 	g = s->g;
 	if (g) {
