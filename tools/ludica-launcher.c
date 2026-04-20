@@ -1592,6 +1592,378 @@ cleanup:
 	free(gctx.hist_lineno);
 }
 
+/*
+ * log_where: structural filter over JSON log lines.
+ *
+ * Each argument of the form KEY=VAL or KEY~REGEX is a predicate.  A line
+ * matches when it parses as a flat JSON object AND every predicate holds.
+ * Non-JSON lines and lines missing a predicate's key are skipped.
+ */
+
+/* Skip ASCII whitespace.  Advances *p while *p < end && isspace. */
+static void
+jw_skip_ws(const char **p, const char *end)
+{
+	while (*p < end) {
+		char c = **p;
+		if (c == ' ' || c == '\t' || c == '\n' || c == '\r')
+			(*p)++;
+		else
+			break;
+	}
+}
+
+/* Advance past a JSON string starting at *p (points at opening '"').
+ * On success, leaves *p just past the closing '"' and returns 0. */
+static int
+jw_skip_string(const char **p, const char *end)
+{
+	if (*p >= end || **p != '"')
+		return -1;
+	(*p)++;
+	while (*p < end) {
+		char c = **p;
+		if (c == '\\') {
+			if (*p + 1 >= end) return -1;
+			*p += 2;
+			continue;
+		}
+		if (c == '"') { (*p)++; return 0; }
+		(*p)++;
+	}
+	return -1;
+}
+
+/* Compare a quoted JSON string at *p (points at '"') to a C string `want`,
+ * honoring simple backslash escapes ("\\\"", "\\\\", "\\n", "\\t", "\\r",
+ * "\\b", "\\f", and "\\uXXXX" for code points < 0x80).  Advances *p past
+ * the closing quote on success.  Returns 1 on match, 0 on no-match. */
+static int
+jw_string_eq(const char **p, const char *end, const char *want)
+{
+	const char *q = *p;
+	if (q >= end || *q != '"') return 0;
+	q++;
+	const char *w = want;
+	while (q < end && *q != '"') {
+		char out;
+		if (*q == '\\') {
+			if (q + 1 >= end) return 0;
+			switch (q[1]) {
+			case '"':  out = '"';  q += 2; break;
+			case '\\': out = '\\'; q += 2; break;
+			case '/':  out = '/';  q += 2; break;
+			case 'n':  out = '\n'; q += 2; break;
+			case 'r':  out = '\r'; q += 2; break;
+			case 't':  out = '\t'; q += 2; break;
+			case 'b':  out = '\b'; q += 2; break;
+			case 'f':  out = '\f'; q += 2; break;
+			case 'u': {
+				if (q + 6 > end) return 0;
+				unsigned v = 0;
+				for (int i = 0; i < 4; i++) {
+					char c = q[2 + i];
+					v <<= 4;
+					if (c >= '0' && c <= '9') v |= c - '0';
+					else if (c >= 'a' && c <= 'f') v |= 10 + c - 'a';
+					else if (c >= 'A' && c <= 'F') v |= 10 + c - 'A';
+					else return 0;
+				}
+				if (v >= 0x80) return 0; /* unsupported; fail compare */
+				out = (char)v;
+				q += 6;
+				break;
+			}
+			default: return 0;
+			}
+		} else {
+			out = *q++;
+		}
+		if (*w++ != out) {
+			/* consume the rest of the string and bail */
+			while (q < end && *q != '"') {
+				if (*q == '\\' && q + 1 < end) q += 2;
+				else q++;
+			}
+			if (q < end) q++;
+			*p = q;
+			return 0;
+		}
+	}
+	if (q >= end || *q != '"') return 0;
+	q++;
+	*p = q;
+	return *w == '\0';
+}
+
+/* Decode the quoted JSON string at *p into out (NUL-terminated, truncated to
+ * cap-1 bytes).  Advances *p past closing quote.  Returns 0 on success. */
+static int
+jw_string_decode(const char **p, const char *end, char *out, size_t cap)
+{
+	const char *q = *p;
+	size_t n = 0;
+	if (q >= end || *q != '"') return -1;
+	q++;
+	while (q < end && *q != '"') {
+		char c;
+		if (*q == '\\') {
+			if (q + 1 >= end) return -1;
+			switch (q[1]) {
+			case '"':  c = '"';  q += 2; break;
+			case '\\': c = '\\'; q += 2; break;
+			case '/':  c = '/';  q += 2; break;
+			case 'n':  c = '\n'; q += 2; break;
+			case 'r':  c = '\r'; q += 2; break;
+			case 't':  c = '\t'; q += 2; break;
+			case 'b':  c = '\b'; q += 2; break;
+			case 'f':  c = '\f'; q += 2; break;
+			case 'u': {
+				if (q + 6 > end) return -1;
+				unsigned v = 0;
+				for (int i = 0; i < 4; i++) {
+					char ch = q[2 + i];
+					v <<= 4;
+					if (ch >= '0' && ch <= '9') v |= ch - '0';
+					else if (ch >= 'a' && ch <= 'f') v |= 10 + ch - 'a';
+					else if (ch >= 'A' && ch <= 'F') v |= 10 + ch - 'A';
+					else return -1;
+				}
+				q += 6;
+				if (v < 0x80) c = (char)v;
+				else c = '?'; /* punt high codepoints */
+				break;
+			}
+			default: return -1;
+			}
+		} else {
+			c = *q++;
+		}
+		if (n + 1 < cap) out[n++] = c;
+	}
+	if (q >= end || *q != '"') return -1;
+	q++;
+	if (n < cap) out[n] = '\0';
+	else if (cap > 0) out[cap - 1] = '\0';
+	*p = q;
+	return 0;
+}
+
+/* Locate the value for `key` in a flat JSON object.  On success writes an
+ * unescaped-string form of the value into `out` (for strings), or the raw
+ * token text (for numbers/true/false/null).  Returns 1 on found, 0 if key
+ * absent, -1 if buf is not a JSON object. */
+static int
+jw_get(const char *buf, size_t len, const char *key, char *out, size_t cap)
+{
+	const char *p = buf, *end = buf + len;
+	jw_skip_ws(&p, end);
+	if (p >= end || *p != '{') return -1;
+	p++;
+	for (;;) {
+		jw_skip_ws(&p, end);
+		if (p >= end) return -1;
+		if (*p == '}') return 0;
+		if (*p != '"') return -1;
+		int matched = jw_string_eq(&p, end, key);
+		if (!matched && (p == buf || p > end)) return -1;
+		jw_skip_ws(&p, end);
+		if (p >= end || *p != ':') return -1;
+		p++;
+		jw_skip_ws(&p, end);
+		if (p >= end) return -1;
+		const char *vbeg = p, *vend;
+		if (*p == '"') {
+			if (matched) {
+				if (jw_string_decode(&p, end, out, cap) < 0)
+					return -1;
+				return 1;
+			}
+			if (jw_skip_string(&p, end) < 0) return -1;
+		} else {
+			/* scan to , or } or ws at depth 0 */
+			while (p < end && *p != ',' && *p != '}'
+			    && *p != ' ' && *p != '\t'
+			    && *p != '\n' && *p != '\r')
+				p++;
+			vend = p;
+			if (matched) {
+				size_t n = (size_t)(vend - vbeg);
+				if (n >= cap) n = cap - 1;
+				memcpy(out, vbeg, n);
+				out[n] = '\0';
+				return 1;
+			}
+		}
+		jw_skip_ws(&p, end);
+		if (p >= end) return -1;
+		if (*p == ',') { p++; continue; }
+		if (*p == '}') return 0;
+		return -1;
+	}
+}
+
+struct where_pred {
+	const char *key;
+	int op;             /* '=' or '~' */
+	const char *val;    /* eq text */
+	regex_t re;
+	int re_ok;
+};
+
+struct where_ctx {
+	struct session *s;
+	struct where_pred *preds;
+	int npred;
+	const char *stream_label;
+	int last_emitted_line;
+};
+
+static void
+where_emit_line(struct where_ctx *g, int line_no, const char *buf, size_t len)
+{
+	char header[64];
+	int n;
+	ssize_t w;
+
+	if (g->last_emitted_line > 0 && line_no > g->last_emitted_line + 1) {
+		w = write(g->s->fd, "--\n", 3);
+		(void)w;
+	}
+	if (g->stream_label)
+		n = snprintf(header, sizeof(header), "%s:%d: ",
+		    g->stream_label, line_no);
+	else
+		n = snprintf(header, sizeof(header), "%d: ", line_no);
+	w = write(g->s->fd, header, (size_t)n);
+	(void)w;
+	w = write(g->s->fd, buf, len);
+	(void)w;
+	if (len == 0 || buf[len - 1] != '\n') {
+		w = write(g->s->fd, "\n", 1);
+		(void)w;
+	}
+	g->last_emitted_line = line_no;
+}
+
+static int
+where_each_line(const char *buf, size_t len, int line_no, void *arg)
+{
+	struct where_ctx *g = arg;
+	char val[512];
+	int i;
+
+	/* strip trailing newline for scanning */
+	size_t scan_len = len;
+	if (scan_len > 0 && buf[scan_len - 1] == '\n') scan_len--;
+
+	for (i = 0; i < g->npred; i++) {
+		struct where_pred *p = &g->preds[i];
+		int r = jw_get(buf, scan_len, p->key, val, sizeof(val));
+		if (r != 1) return 0; /* not JSON or field missing */
+		if (p->op == '=') {
+			if (strcmp(val, p->val) != 0) return 0;
+		} else { /* '~' */
+			if (!p->re_ok) return 0;
+			if (regexec(&p->re, val, 0, NULL, 0) != 0) return 0;
+		}
+	}
+	where_emit_line(g, line_no, buf, len);
+	return 0;
+}
+
+static void
+cmd_log_where(struct session *s, struct cmd_args *a)
+{
+	unsigned mask;
+	int streams_selected;
+	struct where_pred *preds = NULL;
+	int npred = 0;
+	struct where_ctx gctx;
+	int i;
+
+	if (a->argc < 2) {
+		session_writef(s,
+		    "ERR usage: log_where KEY=VAL|KEY~REGEX ... [streams...]\n");
+		return;
+	}
+
+	preds = calloc((size_t)a->argc, sizeof(*preds));
+	if (!preds) {
+		session_writef(s, "ERR internal: out of memory\n");
+		return;
+	}
+
+	for (i = 1; i < a->argc; i++) {
+		char *arg = a->argv[i];
+		if (arg[0] == '-' && arg[1] == '-') continue;
+		if (strcmp(arg, "stdout") == 0 || strcmp(arg, "stderr") == 0)
+			continue;
+		char *eq = strchr(arg, '=');
+		char *tl = strchr(arg, '~');
+		char *sep;
+		int op;
+		if (eq && (!tl || eq < tl)) { sep = eq; op = '='; }
+		else if (tl)                { sep = tl; op = '~'; }
+		else {
+			session_writef(s,
+			    "ERR usage: predicate '%s' missing = or ~\n", arg);
+			goto cleanup;
+		}
+		*sep = '\0';
+		preds[npred].key = arg;
+		preds[npred].op = op;
+		preds[npred].val = sep + 1;
+		if (op == '~') {
+			if (regcomp(&preds[npred].re, preds[npred].val,
+			    REG_EXTENDED | REG_NOSUB) != 0) {
+				session_writef(s, "ERR usage: bad regex: %s\n",
+				    preds[npred].val);
+				goto cleanup;
+			}
+			preds[npred].re_ok = 1;
+		}
+		npred++;
+	}
+
+	if (npred == 0) {
+		session_writef(s,
+		    "ERR usage: at least one KEY=VAL or KEY~REGEX required\n");
+		goto cleanup;
+	}
+
+	mask = parse_streams(a, 1);
+	streams_selected =
+	    !!(mask & (1u << STREAM_STDOUT)) +
+	    !!(mask & (1u << STREAM_STDERR));
+
+	memset(&gctx, 0, sizeof(gctx));
+	gctx.s = s;
+	gctx.preds = preds;
+	gctx.npred = npred;
+
+	session_writef(s, "OK\n");
+
+	if (mask & (1u << STREAM_STDOUT)) {
+		gctx.stream_label = streams_selected > 1 ? "stdout" : NULL;
+		gctx.last_emitted_line = 0;
+		log_buf_for_each_line(&s->g->logs[STREAM_STDOUT],
+		    where_each_line, &gctx);
+	}
+	if (mask & (1u << STREAM_STDERR)) {
+		gctx.stream_label = streams_selected > 1 ? "stderr" : NULL;
+		gctx.last_emitted_line = 0;
+		log_buf_for_each_line(&s->g->logs[STREAM_STDERR],
+		    where_each_line, &gctx);
+	}
+
+cleanup:
+	for (i = 0; i < npred; i++) {
+		if (preds[i].re_ok) regfree(&preds[i].re);
+	}
+	free(preds);
+}
+
 static void
 cmd_env(struct session *s, struct cmd_args *a)
 {
@@ -2617,6 +2989,7 @@ static const struct command commands[] = {
 	{ "log_head",     cmd_log_head,     "emit first N lines [streams...]" },
 	{ "log_range",    cmd_log_range,    "emit lines FIRST..LAST [streams...]" },
 	{ "log_grep",     cmd_log_grep,     "regex search [--ctx=N] PATTERN [streams...]" },
+	{ "log_where",    cmd_log_where,    "structural filter KEY=VAL|KEY~REGEX ... [streams...]" },
 	{ "log_clear",    cmd_log_clear,    "clear log buffer [streams...]" },
 	{ "env",          cmd_env,          "get/set env var: env KEY [VALUE]" },
 	{ "unsetenv",     cmd_unsetenv,     "unset env var: unsetenv KEY" },
