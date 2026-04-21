@@ -126,17 +126,20 @@ Polled: `lud_key_down()`, `lud_mouse_pos()`, `lud_mouse_button_down()`,
 
 ## Automation & MCP
 
-Ludica games can be observed and controlled by AI agents via a TCP
-automation server and an MCP bridge. Launch any game with:
+Ludica games can be observed and controlled by AI agents via a
+long-lived launcher daemon (`ludica-mcp`) and an MCP stdio bridge
+(`ludica-mcp-bridge`). Start the launcher once per session:
 
 ```sh
-_out/x86_64-linux-gnu/bin/hero --auto-port 4000 --paused --fixed-dt
+LUDICA_MCP_ALLOWEXEC=$(echo _out/*/bin/* | tr ' ' ':') ludica-mcp &
 ```
 
-The `ludica-mcp` tool (built by `make`) bridges MCP JSON-RPC on stdio to
-the TCP protocol. It is pre-configured in `.claude/settings.json`.
-Use the `/ludica-mcp` skill for detailed tool usage and workflow guidance.
-See `doc/manual/automation.md` for the full protocol reference.
+The launcher owns spawned game processes, captures stdout/stderr,
+proxies each game's control fd, and collects crash cores.
+`ludica-mcp-bridge` adapts the launcher's line protocol to MCP
+JSON-RPC on stdio and is pre-configured in `.claude/settings.json`.
+Use the `/ludica-mcp` skill for tool usage and workflow recipes.
+See `doc/manual/ludica-mcp.md` for the full protocol reference.
 
 To make a game automation-friendly, register actions and state variables:
 

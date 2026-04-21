@@ -1,143 +1,210 @@
 ---
 name: ludica-mcp
-description: Interact with a running ludica game via the MCP automation server. Use this skill whenever you need to observe, test, play, or control a ludica-based game -- taking screenshots, sending input, stepping frames, reading game state, or recording audio. Activate when the user asks you to play a game, test gameplay, automate a game, or debug visual output.
+description: Observe, control, and debug ludica games through the ludica-mcp launcher. Use when the user asks you to play a game, test gameplay, reproduce a bug, inspect a crash, automate a UI, or step through frames.
 ---
 
-# Ludica MCP -- AI Game Automation
+# Ludica MCP — Agent Guide
 
-You are connected to a running ludica game through the `ludica-mcp` MCP
-server. This gives you tools to observe and control the game in a
-frame-by-frame loop.
+You drive ludica games through `ludica-mcp-bridge`, a stdio MCP server
+wired up in `.claude/settings.json`. The bridge talks over TCP to
+`ludica-mcp` — a long-lived launcher the user starts once at the
+beginning of the work session. The launcher owns the game process,
+captures its stdout/stderr, proxies a control fd for input/frame-step,
+and collects crash cores. The full protocol reference is
+`doc/manual/ludica-mcp.md`; this skill is the how-to-drive version.
 
-## Setup
+## Before you start
 
-The game must be launched with automation flags:
+- The launcher must already be running. If tool calls fail with
+  something like `not_connected`, ask the user to run `ludica-mcp &`.
+  Don't try to spawn it yourself.
+- `LUDICA_MCP_ALLOWEXEC` on the launcher gates what binaries you can
+  spawn. Only aliases in that list work. Typical setup:
+  `LUDICA_MCP_ALLOWEXEC=$(echo _out/*/bin/* | tr ' ' ':')` in `.env`.
+- Every bridge process is its own session. When your connection closes
+  the game is killed — call `session_nokill` early if you need it to
+  survive a reconnect.
 
-```sh
-_out/x86_64-linux-gnu/bin/<game> --auto-port 4000 --paused --fixed-dt
+## Core flow
+
+```
+ping            -> OK pong           (is the launcher there?)
+spawn <alias>   -> OK pid=<n>        (start a game; clears prior logs)
+list_actions    -> jump=Space ...    (what input names the game exposes)
+list_vars       -> score health ...  (what state you can query)
+pause  / step   -> advance by frames (deterministic observe/act loop)
+screenshot      -> base64 PNG        (or file=PATH to save)
+query what=var  -> numeric state     (cheaper than screenshot)
+kill            -> OK killed         (stop the game)
 ```
 
-- `--paused` freezes the game until you send STEP commands
-- `--fixed-dt` uses constant 1/60s timesteps for determinism
-- `--auto-port 4000` opens the TCP automation port
+Every command replies `OK [data]` or `ERR <reason>`. Multi-line bodies
+are framed; the bridge handles framing, you just read the text.
 
-The MCP server connects to this port. If the game isn't running or the
-port doesn't match, tool calls return "not connected to game".
-
-## Core Loop
-
-Your primary workflow is observe-decide-act-step:
-
-1. **Observe**: `screenshot` to see the screen, `query` or `read_pixel` for state
-2. **Decide**: Analyze what you see and determine the right input
-3. **Act**: `do_action` (preferred) or `send_keys` (fallback)
-4. **Step**: `step` to advance frames and see the result
-
-The game is frozen between steps. Nothing happens until you call `step`.
-
-## Tools
-
-### Discovery (call these first)
-
-- **`list_actions`** -- Returns available game actions as `name=Key` pairs.
-  These are the semantic inputs the game defines (e.g., `jump=Space`,
-  `move_left=A`). Always call this first and use `do_action` with these
-  names rather than raw keys.
-
-- **`list_vars`** -- Returns registered state variable names. Use
-  `query(what="var", name="...")` to read their values.
-
-### Input
-
-- **`do_action(name, mode?)`** -- Preferred input method. Triggers a game
-  action by name. Modes:
-  - `press` (default): activate for one frame, auto-releases
-  - `hold`: keep active across multiple steps
-  - `release`: release a held action
-
-  Example: `do_action(name="jump")` or `do_action(name="move_left", mode="hold")`
-
-- **`send_keys(key, action?)`** -- Low-level fallback. Key names are
-  case-insensitive. Common names: A-Z, 0-9, Space, Escape, Enter, Tab,
-  Left, Right, Up, Down, F1-F12, LeftShift, LeftControl, LeftAlt.
-  Actions: `press` (default, down+up), `down`, `up`.
-
-- **`mouse_click(x, y, button?)`** -- Click at screen coordinates.
-  Button defaults to 1 (left).
-
-### Observation
-
-- **`screenshot(x?, y?, width?, height?, file?)`** -- Capture the screen.
-  With no arguments, returns a full-screen base64 PNG that you can see
-  directly. Provide x/y/width/height for a sub-region. Provide `file` to
-  save to disk instead of returning inline.
-
-- **`read_pixel(x, y)`** -- Returns `R G B` values (0-255) at a coordinate.
-  Faster than a full screenshot when checking a specific spot.
-
-- **`query(what, name?)`** -- Read game state:
-  - `what="frame"` -- current frame number
-  - `what="size"` -- window size as `W H`
-  - `what="fps"` -- current frame rate
-  - `what="var"` -- value of a named variable (pass `name`)
-
-### Frame Control
-
-- **`step(count?)`** -- Advance `count` frames (default 1). Returns the
-  new frame number. This is how time passes -- the game does nothing
-  until you step. After sending input, step at least once to see the
-  effect.
-
-### Audio
-
-- **`audio_capture(action, file?)`** -- `action="start"` begins recording
-  all game audio. `action="stop"` writes a WAV file (44100 Hz, stereo,
-  16-bit) and returns the path.
+## Tool reference
 
 ### Lifecycle
+- **`spawn(alias, args?)`** — fork/exec a game. `alias` is a bare
+  filename or full path in `LUDICA_MCP_ALLOWEXEC`. `args` is a string
+  array, passed through verbatim. A second `spawn` kills the prior game
+  and clears its log buffer.
+- **`kill(signal?)`** — send signal (default TERM); `KILL`, `INT`, etc.
+- **`status()`** — `running pid=N` | `exited code=N` | `signaled sig=N`
+  | `never`. Check this after an unresponsive game to see if it crashed.
+- **`env(key, value?)`** / **`unsetenv(key)`** — modify the launcher's
+  env for the *next* spawn. Not the running game.
 
-- **`quit`** -- Ask the game to exit cleanly.
+### Control (game must be spawned with a control fd — ludica games always are)
+- **`list_actions()`** — returns `name=Key ...`. Always call first.
+- **`list_vars()`** — returns registered `lud_auto_register_*` names.
+- **`action(name, mode?)`** — `mode`: `press` (default, one frame),
+  `hold`, `release`. Prefer this over any key-level API.
+- **`step(n?)`** — advance N frames (default 1). Requires the game to
+  be paused; pair with `pause` first.
+- **`pause()`** / **`resume()`** — toggle the run state.
+- **`seed(n)`** — set the deterministic RNG seed before a repro run.
+- **`screenshot(x?, y?, width?, height?, file?)`** — full screen by
+  default. `file=PATH` writes to disk and returns the path; otherwise
+  returns base64 PNG inline.
+- **`read_pixel(x, y)`** — `R G B`. Much cheaper than a screenshot when
+  you only care about one spot.
+- **`query(what, name?)`** — `what` is `frame`, `size`, `fps`, or `var`
+  (pass `name` for `var`).
 
-- **`nokill`** -- Disable auto-terminate. By default the game exits when
-  the first TCP client disconnects. Call this early if you want the game
-  to keep running for multiple sessions.
+### Logs (survive game exit; cleared on next `spawn`)
+- **`log_tail(n, streams?)`** / **`log_head(n, streams?)`** —
+  last/first N lines. `streams` is `["stdout"]`, `["stderr"]`, or
+  `["stdout","stderr"]` (default both, lines prefixed).
+- **`log_range(a, b, streams?)`** — 1-based inclusive slice.
+- **`log_grep(pattern, ctx?, streams?)`** — POSIX extended regex.
+- **`log_where(predicates, streams?)`** — structural filter over JSON
+  log lines. Predicates are `key=value` or `key~regex`.
+- **`log_jq(expr, streams?)`** — pipe through `jq`.
+- **`log_clear(streams?)`** — drop buffered lines.
 
-- **`restart`** -- Re-exec the game process with the latest built binary.
-  The listen port is preserved. Call this after rebuilding to pick up code
-  changes without manually restarting. Your TCP connection will close —
-  reconnect after a brief pause.
+### Crash forensics (work whether or not the game is currently running)
+- **`gdb_hint()`** — pid + a `gdb -p` command for the user to paste.
+- **`gdb_core_find()`** — path of the most recent core for the last
+  spawned binary. `ERR no_core` with diagnostics if none.
+- **`gdb_core_list()`** — all available cores for that binary.
+- **`gdb_core_summary(core?)`** — one-liner: `file:line in func: SIGNAME`.
+- **`gdb_core_backtrace(core?, limit?)`** — full trace.
+- **`gdb_core_frame(frame, core?)`** — detail for one frame.
+- **`gdb_core_locals(frame?, core?)`** — locals at a frame.
 
-- **`help(command?)`** -- List all TCP commands with summaries, or get
-  detailed help for a specific command. Useful when you need to understand
-  the protocol or check available commands.
+### Sessions (usually you don't need these)
+- **`session_info()`** — id, name, attached state.
+- **`session_name(name)`** — give the session a stable handle so you
+  can reconnect after a rebuild/restart.
+- **`session_nokill()`** — keep the game alive after this bridge
+  disconnects.
+- **`session_list()`** — see what other agents are doing on the same
+  launcher.
+- **`session_kill(name)`** — force-destroy another session. Careful.
+
+### Meta
+- **`help()`** — list every launcher command with a one-line summary.
+  Start here if you're unsure what's available.
+- **`help(command="spawn")`** — detailed help for one command, as a
+  ground-truth source for syntax.
+- **`version()`**, **`ping()`** — launcher sanity checks.
+
+## Pre-canned recipes
+
+### Sanity check the launcher
+```
+ping                         -> OK pong
+version                      -> OK <semver>
+session_info                 -> OK id=<n> ...
+```
+
+### Start a deterministic run, paused
+```
+spawn(alias="hero", args=["--paused", "--fixed-dt"])
+list_actions
+list_vars
+query(what="size")           -> W H
+screenshot                   -> title/intro frame
+```
+`--paused --fixed-dt` are ludica flags (not launcher flags); they tell
+the game to start frozen and use fixed 1/60s timesteps. The launcher
+passes them through `args` untouched.
+
+### Observe/act loop
+```
+action(name="move_right", mode="hold")
+step(n=30)                   -> frame=30
+action(name="move_right", mode="release")
+screenshot                   -> see the result
+query(what="var", name="score")
+```
+
+### Find errors in logs
+```
+log_tail(n=50, streams=["stderr"])
+log_where(predicates=["lvl=error"])           # structured lines
+log_grep(pattern="assert|SIGSEGV", ctx=3)
+log_jq(expr='select(.lvl=="warn") | .msg')
+```
+
+### Triage a crash
+```
+status                       -> signaled sig=11 ...
+gdb_core_summary             -> src/hero/hero.c:214 in draw_x: SIGSEGV
+gdb_core_backtrace(limit=20)
+gdb_core_frame(frame=3)
+gdb_core_locals(frame=3)
+log_tail(n=40, streams=["stderr"])   # last output before the crash
+```
+
+### Survive a rebuild
+```
+session_name(name="worktree-x")
+session_nokill
+# user rebuilds and restarts their own game manually, or:
+kill                         # stop old build
+spawn(alias="hero", ...)     # start fresh build, logs cleared
+```
+
+### Discover an unknown command
+```
+help                         -> full command list with one-liners
+help(command="log_where")    -> detailed syntax for one command
+```
 
 ## Tips
 
-- Always call `list_actions` at the start. Prefer `do_action` over
-  `send_keys` -- it uses the game's own action names so you don't need
-  to know key bindings.
+- **Start with `help` or `list_actions` when in doubt.** Both are cheap
+  and confirm the launcher is alive and the game is controllable.
+- **Prefer `query`/`read_pixel` over `screenshot`.** Screenshots are
+  large; a number or a pixel RGB is often enough to check game state.
+- **`--fixed-dt` + `pause`/`step` is how you get deterministic
+  repros.** Same seed + same inputs + same steps = same frames.
+- **Logs persist across game exit.** After a crash, `log_tail` still
+  shows the final output. Combined with `gdb_core_summary` that's
+  usually enough to locate a bug.
+- **`spawn` clears the log buffer.** If you need to preserve logs
+  across a run, save them first with `log_tail n=10000`.
+- **Multi-line tool results come back as a single `text` content
+  block** with `\n`-joined lines. The bridge unescapes framed bodies
+  automatically.
+- **Error prefixes** you'll see: `ERR exec:` (allowlist/path),
+  `ERR no_process` (no spawn yet), `ERR no_control` (game doesn't have
+  a control fd), `ERR no_core` (no crash dump found),
+  `ERR usage:` (bad args), `ERR jq:` (jq error).
 
-- After sending input, call `step(count=1)` to advance one frame, then
-  `screenshot` to see the result. If you need to hold a direction for
-  movement, use `do_action(name="move_right", mode="hold")`, then step
-  multiple frames, then `do_action(name="move_right", mode="release")`.
+## Making a game automatable
 
-- For animations or testing over time, step multiple frames:
-  `step(count=60)` advances one second of game time.
+For a game to expose meaningful `list_actions`/`list_vars`, its source
+needs to register them:
 
-- Use `query(what="var", name="score")` to check game state numerically
-  rather than trying to read numbers from screenshots.
+```c
+lud_action_t jump = lud_make_action("jump");
+lud_bind_key(jump, LUD_KEY_SPACE);
 
-- Screenshots are the most expensive operation. Use `read_pixel` or
-  `query` when you only need a specific value.
+lud_auto_register_int("score", &score);
+lud_auto_register_str("level_name", &level_name);
+```
 
-- If a tool returns "not connected to game", the game isn't running or
-  is on a different port. The game must be started separately with
-  `--auto-port`.
-
-- All commands return descriptive messages on success (e.g. "action jump
-  pressed", "saved 800x600 PNG to ./capture/frame_000042.png"). Check
-  these messages to confirm the operation worked as expected.
-
-- Call `help` to see all available commands. Call `help(command="STEP")`
-  for a detailed description of any specific command.
+No extra setup beyond that — `lud_run` and the control-fd handshake
+are automatic when the launcher passes `---controlfd=N`.
