@@ -24,3 +24,12 @@ font2slug_SRCS  = font2slug.c
 font2slug_CPPFLAGS = -I$(font2slug_DIR)../src/thirdparty -I$(font2slug_DIR)../src/ludica
 font2slug_LDLIBS = -lm
 endif
+
+# font2msdf -- offline TTF/OTF to .msdffont converter (skip on Emscripten)
+ifeq ($(findstring emscripten,$(TARGET_TRIPLET)),)
+EXECUTABLES += font2msdf
+font2msdf_DIR  := $(dir $(lastword $(MAKEFILE_LIST)))
+font2msdf_SRCS  = font2msdf.c
+font2msdf_CPPFLAGS = -I$(font2msdf_DIR)../src/thirdparty -I$(font2msdf_DIR)../src/ludica
+font2msdf_LDLIBS = -lm
+endif

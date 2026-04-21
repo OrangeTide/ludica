@@ -21,7 +21,7 @@ Each `module.mk` declares targets via `EXECUTABLES`, `LIBRARIES`, and
 ## Directory Layout
 
 - `src/ludica/` — Core library: platform, shaders, meshes, textures, sprites, fonts
-  - `src/ludica/include/` — Public headers (`ludica.h`, `ludica_gfx.h`, `ludica_input.h`, `ludica_font.h`, `ludica_anim.h`, `ludica_audio.h`, `ludica_auto.h`)
+  - `src/ludica/include/` — Public headers (`ludica.h`, `ludica_gfx.h`, `ludica_input.h`, `ludica_font.h`, `ludica_vfont.h`, `ludica_slug.h`, `ludica_anim.h`, `ludica_audio.h`, `ludica_auto.h`)
   - `src/ludica/platform_x11.c` — Linux/X11 backend
   - `src/ludica/win32/` — Windows backend
 - `src/thirdparty/` — Header-only deps (stb_image, stb_ds, miniaudio)
@@ -95,6 +95,20 @@ built-in shaders (sprite, framebuffer) work on both versions unchanged.
 Programs that request GLES3 can use either shader syntax.
 
 Query at runtime: `lud_gles_version()` returns 2 or 3.
+
+### Vector Fonts (`ludica_vfont.h`)
+
+Resolution-independent text with automatic backend selection:
+GLES3 uses Slug (GPU Bezier evaluation), GLES2 uses SDF (distance field atlas).
+
+- Load: `lud_load_vfont("data/fonts/dejavu-sans")` — appends `.slugfont` or `.msdffont`
+- Draw: `lud_vfont_begin()` / `lud_vfont_draw()` / `lud_vfont_end()`
+- Measure: `lud_vfont_text_width()`
+- Convert: `font2slug input.ttf -o output.slugfont`, `font2msdf input.ttf -o output.msdffont`
+- Override backend: `LUD_VFONT_BACKEND=slug|msdf` environment variable
+
+Multiple fonts can be loaded simultaneously — each `lud_vfont_t` handle
+tracks its own backend. See `doc/manual/vector-fonts.md` for details.
 
 ### Key Conventions
 
