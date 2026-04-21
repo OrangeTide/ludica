@@ -10,8 +10,8 @@
  * All values are little-endian.
  *
  * Channel count depends on flags:
- *   SDF  (flags & MSDF_FLAG_MULTICHANNEL == 0): 1 channel (R8)
- *   MSDF (flags & MSDF_FLAG_MULTICHANNEL != 0): 3 channels (RGB8)
+ *   MSDF_FLAG_MULTICHANNEL set:   3 channels (RGB8)
+ *   MSDF_FLAG_MULTICHANNEL clear: 1 channel (R8) — deprecated
  *
  * Atlas format field controls compression:
  *   MSDF_ATLAS_RAW (0): uncompressed pixel data

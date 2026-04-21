@@ -13,7 +13,7 @@ Games use one API regardless of backend.
 static lud_vfont_t font;
 
 void init(void) {
-    font = lud_load_vfont("data/fonts/dejavu-sans");
+    font = lud_load_vfont("assets/fonts/dejavu-sans");
 }
 
 void frame(float dt) {
@@ -30,7 +30,7 @@ void cleanup(void) {
 `lud_load_vfont()` accepts a base path without extension. It tries the
 preferred backend's extension first (`.slugfont` on GLES3, `.msdffont`
 on GLES2), then falls back to the other. Explicit extensions also work:
-`lud_load_vfont("data/fonts/dejavu-sans.msdffont")`.
+`lud_load_vfont("assets/fonts/dejavu-sans.msdffont")`.
 
 ## Converting Fonts
 
@@ -38,17 +38,17 @@ Two command-line tools convert TTF/OTF files to ludica's binary formats:
 
 ```sh
 # Slug (GLES3) — GPU Bezier curve evaluation
-font2slug DejaVuSans.ttf -o data/fonts/dejavu-sans.slugfont
+font2slug DejaVuSans.ttf -o assets/fonts/dejavu-sans.slugfont
 
 # SDF (GLES2) — signed distance field atlas
-font2msdf DejaVuSans.ttf -o data/fonts/dejavu-sans.msdffont
+font2msdf DejaVuSans.ttf -o assets/fonts/dejavu-sans.msdffont
 ```
 
 For a game that ships on both GLES2 and GLES3, convert the same TTF
 with both tools and place both files alongside each other:
 
-    data/fonts/dejavu-sans.slugfont
-    data/fonts/dejavu-sans.msdffont
+    assets/fonts/dejavu-sans.slugfont
+    assets/fonts/dejavu-sans.msdffont
 
 The loader picks the right one at runtime.
 
@@ -90,9 +90,9 @@ static lud_vfont_t font_title;
 static lud_vfont_t font_mono;
 
 void init(void) {
-    font_ui    = lud_load_vfont("data/fonts/dejavu-sans");
-    font_title = lud_load_vfont("data/fonts/dejavu-serif");
-    font_mono  = lud_load_vfont("data/fonts/hack-regular");
+    font_ui    = lud_load_vfont("assets/fonts/dejavu-sans");
+    font_title = lud_load_vfont("assets/fonts/dejavu-serif");
+    font_mono  = lud_load_vfont("assets/fonts/hack-regular");
 }
 ```
 
@@ -115,17 +115,17 @@ Ludica treats each variant as a separate font file. To support bold
 and italic, convert each variant separately:
 
 ```sh
-font2msdf DejaVuSans.ttf        -o data/fonts/dejavu-sans.msdffont
-font2msdf DejaVuSans-Bold.ttf   -o data/fonts/dejavu-sans-bold.msdffont
-font2msdf DejaVuSans-Oblique.ttf -o data/fonts/dejavu-sans-italic.msdffont
+font2msdf DejaVuSans.ttf        -o assets/fonts/dejavu-sans.msdffont
+font2msdf DejaVuSans-Bold.ttf   -o assets/fonts/dejavu-sans-bold.msdffont
+font2msdf DejaVuSans-Oblique.ttf -o assets/fonts/dejavu-sans-italic.msdffont
 ```
 
 Then load them as separate handles in your game:
 
 ```c
-lud_vfont_t font_regular = lud_load_vfont("data/fonts/dejavu-sans");
-lud_vfont_t font_bold    = lud_load_vfont("data/fonts/dejavu-sans-bold");
-lud_vfont_t font_italic  = lud_load_vfont("data/fonts/dejavu-sans-italic");
+lud_vfont_t font_regular = lud_load_vfont("assets/fonts/dejavu-sans");
+lud_vfont_t font_bold    = lud_load_vfont("assets/fonts/dejavu-sans-bold");
+lud_vfont_t font_italic  = lud_load_vfont("assets/fonts/dejavu-sans-italic");
 ```
 
 There is no built-in font style or family management — your game
@@ -155,6 +155,33 @@ LUD_VFONT_BACKEND=slug ./mygame   # force Slug even if SDF files exist
 ```
 
 The corresponding font file must exist or loading will fail.
+
+## Why Pre-generated Font Files (Not Runtime TTF)
+
+Ludica pre-converts fonts to `.msdffont` / `.slugfont` rather than
+loading TTF files and generating atlases at init. The reasons:
+
+- **Load speed.** A pre-built font file is fread + glTexImage2D —
+  sub-millisecond. Single-channel SDF generation via stb_truetype for
+  ~200 Latin glyphs at 48px takes 20-50ms on desktop and 200-500ms on
+  Pi Zero. Proper multi-channel MSDF (edge coloring, per-channel
+  distance computation) is 3-5x slower still — that's why msdfgen and
+  msdf-atlas-gen treat it as an offline step.
+
+- **No runtime rasterization dependency.** The game binary doesn't need
+  stb_truetype or msdfgen linked in. Less code, fewer moving parts.
+
+- **Deterministic output.** The same atlas is loaded every time — no
+  platform-dependent rasterization differences.
+
+- **Embedded targets.** On Pi Zero the CPU cost of SDF generation at
+  init is noticeable; MSDF generation is prohibitive.
+
+The tradeoff is a fixed glyph set baked at build time plus an extra
+tooling step. If a game ever needs dynamic glyph coverage (CJK, user
+input in arbitrary scripts), a hybrid approach works: pre-baked base
+atlas for the common set, lazy runtime generation for overflow glyphs.
+That is not implemented today because Latin-1 covers current needs.
 
 ## Recommended Fonts
 

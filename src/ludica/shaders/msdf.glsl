@@ -1,10 +1,11 @@
 @common
 #version 100
 /*
- * SDF / MSDF font rendering shader — GLSL ES 100 (GLES2).
+ * SDF / MSDF font rendering shader — GLSL ES 100 (GLES2+).
  *
- * Single-channel SDF today; when MSDF atlas support is added,
- * the median(r,g,b) path activates via u_multichannel uniform.
+ * Atlas is always RGB8: SDF stores identical values in all three
+ * channels, MSDF stores independent distance fields per channel.
+ * median(r,g,b) handles both cases.
  *
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
@@ -44,10 +45,8 @@ float median(float r, float g, float b)
 void main()
 {
 	vec4 s = texture2D(u_atlas, v_uv);
-	/* SDF: distance is in the red (or luminance) channel.
-	 * MSDF: distance is median of RGB channels.
-	 * For single-channel atlas, r == g == b after GL_LUMINANCE sampling,
-	 * so median() is a no-op — one path handles both. */
+	/* SDF: R==G==B, so median is identity.
+	 * MSDF: independent per-channel distances, median selects edge. */
 	float d = median(s.r, s.g, s.b);
 	float w = fwidth(d);
 	float alpha = smoothstep(0.5 - w, 0.5 + w, d);

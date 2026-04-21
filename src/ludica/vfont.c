@@ -57,7 +57,13 @@ preferred_backend(void)
 {
 	const char *env = getenv("LUD_VFONT_BACKEND");
 	if (env) {
-		if (strcmp(env, "slug") == 0) return VFONT_SLUG;
+		if (strcmp(env, "slug") == 0) {
+			if (lud__state.gles_version < 3) {
+				lud_err("LUD_VFONT_BACKEND=slug requires GLES3");
+				return VFONT_MSDF;
+			}
+			return VFONT_SLUG;
+		}
 		if (strcmp(env, "msdf") == 0) return VFONT_MSDF;
 	}
 	return (lud__state.gles_version >= 3) ? VFONT_SLUG : VFONT_MSDF;

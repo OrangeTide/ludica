@@ -346,21 +346,21 @@ main(int argc, char **argv)
 		g->advance = (float)adv * em_scale;
 		g->lsb = (float)lsb_raw * em_scale;
 
-		/* Bounding box (em-space) */
-		int x0, y0, x1, y1;
-		if (stbtt_GetGlyphBox(&font, gi, &x0, &y0, &x1, &y1)) {
-			g->bbox_x0 = (float)x0 * em_scale;
-			g->bbox_y0 = (float)y0 * em_scale;
-			g->bbox_x1 = (float)x1 * em_scale;
-			g->bbox_y1 = (float)y1 * em_scale;
-		}
-
 		/* Generate SDF bitmap */
 		int sw = 0, sh = 0, sxoff = 0, syoff = 0;
 		unsigned char *sdf = stbtt_GetGlyphSDF(&font, scale, gi,
 		                                        pxrange, onedge_value,
 		                                        pixel_dist_scale,
 		                                        &sw, &sh, &sxoff, &syoff);
+
+		/* Bounding box from SDF bitmap (em-space, includes pxrange padding) */
+		if (sdf && sw > 0 && sh > 0) {
+			float px_to_em = em_scale / scale;
+			g->bbox_x0 = (float)sxoff * px_to_em;
+			g->bbox_y0 = -(float)(syoff + sh) * px_to_em;
+			g->bbox_x1 = (float)(sxoff + sw) * px_to_em;
+			g->bbox_y1 = -(float)syoff * px_to_em;
+		}
 		g->sdf_pixels = sdf;
 		g->sdf_w = sw;
 		g->sdf_h = sh;
@@ -387,8 +387,9 @@ main(int argc, char **argv)
 	if (verbose)
 		fprintf(stderr, "  atlas: %d x %d\n", atlas_w, atlas_h);
 
-	/* Blit SDF bitmaps into atlas */
-	size_t atlas_size = (size_t)atlas_w * (size_t)atlas_h;
+	/* Blit SDF bitmaps into RGB atlas (R=G=B per texel) */
+	size_t atlas_pixels = (size_t)atlas_w * (size_t)atlas_h;
+	size_t atlas_size = atlas_pixels * 3;
 	unsigned char *atlas = calloc(atlas_size, 1);
 
 	for (int i = 0; i < glyph_count; i++) {
@@ -397,9 +398,14 @@ main(int argc, char **argv)
 			continue;
 
 		for (int row = 0; row < g->sdf_h; row++) {
-			memcpy(atlas + (size_t)(g->atlas_y + row) * (size_t)atlas_w + (size_t)g->atlas_x,
-			       g->sdf_pixels + (size_t)row * (size_t)g->sdf_w,
-			       (size_t)g->sdf_w);
+			for (int col = 0; col < g->sdf_w; col++) {
+				unsigned char v = g->sdf_pixels[row * g->sdf_w + col];
+				size_t dst = ((size_t)(g->atlas_y + row) * (size_t)atlas_w +
+				              (size_t)(g->atlas_x + col)) * 3;
+				atlas[dst + 0] = v;
+				atlas[dst + 1] = v;
+				atlas[dst + 2] = v;
+			}
 		}
 	}
 
@@ -464,7 +470,7 @@ main(int argc, char **argv)
 	memset(&hdr, 0, sizeof(hdr));
 	memcpy(hdr.magic, MSDF_MAGIC, 4);
 	hdr.version = MSDF_VERSION;
-	hdr.flags = 0; /* single-channel SDF */
+	hdr.flags = MSDF_FLAG_MULTICHANNEL;
 	hdr.glyph_count = (uint16_t)glyph_count;
 	hdr.kern_count = (uint16_t)kern_count;
 	hdr.units_per_em = units_per_em;
@@ -510,7 +516,7 @@ main(int argc, char **argv)
 		fwrite(&kp, sizeof(kp), 1, fout);
 	}
 
-	/* Write atlas data (single-channel R8) */
+	/* Write atlas data (RGB8) */
 	fwrite(atlas, 1, atlas_size, fout);
 
 	fclose(fout);
