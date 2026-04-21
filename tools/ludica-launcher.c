@@ -3320,10 +3320,34 @@ cmd_gdb_core_frame(struct session *s, struct cmd_args *a)
 	static char buf[64 * 1024];
 	ssize_t got;
 
-	if (a->argc < 2 || parse_positive_int(a->argv[1], &frame) < 0) {
-		session_writef(s, "ERR usage: gdb_core_frame <n> "
-		    "[--core=PATH]\n");
-		return;
+	{
+		int i, have = 0;
+		char *end;
+		long v;
+		for (i = 1; i < a->argc; i++) {
+			const char *arg = a->argv[i];
+			const char *num = NULL;
+			if (strncmp(arg, "--frame=", 8) == 0)
+				num = arg + 8;
+			else if (arg[0] != '-' && !have)
+				num = arg;
+			if (!num)
+				continue;
+			v = strtol(num, &end, 10);
+			if (*num == '\0' || *end != '\0' || v < 0 ||
+			    v > INT_MAX) {
+				session_writef(s, "ERR usage: gdb_core_frame "
+				    "<n> [--core=PATH]  (or --frame=N)\n");
+				return;
+			}
+			frame = (int)v;
+			have = 1;
+		}
+		if (!have) {
+			session_writef(s, "ERR usage: gdb_core_frame <n> "
+			    "[--core=PATH]  (or --frame=N)\n");
+			return;
+		}
 	}
 	core = resolve_core_arg(s, a);
 	if (!core) {
@@ -3475,7 +3499,7 @@ static const struct command commands[] = {
 	{ "gdb_core_list",     cmd_gdb_core_list,     "list cores (via coredumpctl)" },
 	{ "gdb_core_summary",  cmd_gdb_core_summary,  "one-line crash summary [--core=PATH]" },
 	{ "gdb_core_backtrace",cmd_gdb_core_backtrace,"backtrace [--core=PATH] [--limit=N]" },
-	{ "gdb_core_frame",    cmd_gdb_core_frame,    "info for frame N [--core=PATH]" },
+	{ "gdb_core_frame",    cmd_gdb_core_frame,    "info for frame N (positional or --frame=N) [--core=PATH]" },
 	{ "gdb_core_locals",   cmd_gdb_core_locals,   "local variables [--core=PATH] [--frame=N]" },
 	{ "subscribe",         cmd_subscribe,         "subscribe to event stream (EVENT lines)" },
 	{ "unsubscribe",       cmd_unsubscribe,       "unsubscribe from events (all or one)" },
