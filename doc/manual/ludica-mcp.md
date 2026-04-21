@@ -365,6 +365,13 @@ These proxy through the game's control fd. If the game was not spawned
 with a control fd (or the fd has been closed), they return
 `ERR no_control`.
 
+**Proxy contract.** Each proxied command receives exactly one line of
+reply from the game, routed back verbatim to the requesting client. The
+game must not emit multi-line `OK\n...END\n` frames on the control fd —
+the launcher does not scan for `END` on proxy replies. A handler that
+needs to return more than a single line should base64-encode its payload
+(as `screenshot --base64` does) or write to a file and return the path.
+
 ```
 action <name> [hold|release]          -> OK action <name> pressed|held|released
 step [n]                              -> OK frame=<n>
@@ -406,6 +413,7 @@ gdb_core_list                                  -> OK <path1> <path2> ...
 gdb_core_summary   [--core=<path>]             -> OK <file:line in func: <signal>>
 gdb_core_backtrace [--core=<path>] [--limit=N] -> OK <backtrace>
 gdb_core_frame <n> [--core=<path>]             -> OK <frame detail>
+                   (also accepts --frame=N in place of the positional <n>)
 gdb_core_locals    [--core=<path>] [--frame=N] -> OK <locals>
 ```
 
@@ -417,7 +425,7 @@ runs a canned `gdb -batch` that produces a single-line summary pointing
 at the first frame outside the crash infrastructure (`raise`, `abort`,
 `__assert_fail`, `__GI_*`, and `_start` are skipped).
 `gdb_core_backtrace` returns the full trace for deeper analysis.
-`gdb_core_frame N` and `gdb_core_locals --frame=N` drill into a
+`gdb_core_frame --frame=N` and `gdb_core_locals --frame=N` drill into a
 specific frame without asking for the whole trace again.
 
 All `gdb_core_*` commands work whether or not a process is currently
