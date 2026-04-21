@@ -11,7 +11,7 @@ cd "$(git rev-parse --show-toplevel)"
 if [ -n "$1" ]; then
     version="$1"
 else
-    version="$(date +%Y.%m.%d)"
+    version="$(date +%y.%m.%d)"
 fi
 
 # Append .N suffix if tag already exists
