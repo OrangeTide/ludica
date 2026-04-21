@@ -23,16 +23,8 @@ jobs:
           staging="ludica-${ver}"
           mkdir -p "${staging}/include" "${staging}/unix" "${staging}/linux" "${staging}/win32"
 
-          # Public headers (ludica's own — not the vendored EGL/GLES/KHR)
-          cp src/ludica/include/ludica.h        "${staging}/include/"
-          cp src/ludica/include/ludica_input.h   "${staging}/include/"
-          cp src/ludica/include/ludica_gfx.h     "${staging}/include/"
-          cp src/ludica/include/ludica_font.h    "${staging}/include/"
-          cp src/ludica/include/gamepad.h        "${staging}/include/"
-          cp src/ludica/include/log.h            "${staging}/include/"
-          cp src/ludica/include/report.h         "${staging}/include/"
-
-          # Vendored GL/EGL headers (consumers may not have them)
+          # Public headers + vendored GL/EGL/KHR headers
+          cp src/ludica/include/*.h "${staging}/include/"
           cp -r src/ludica/include/EGL   "${staging}/include/"
           cp -r src/ludica/include/GLES2 "${staging}/include/"
           cp -r src/ludica/include/GLES3 "${staging}/include/"

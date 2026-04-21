@@ -6,10 +6,6 @@
 
 /config.mk
 
-/src/ludica/include/EGL/
-/src/ludica/include/GLES2/
-/src/ludica/include/GLES3/
-/src/ludica/include/KHR/
 
 /src/ludica/win32libs/chrome.zip
 /src/ludica/win32libs/d3dcompiler_47.dll
