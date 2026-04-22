@@ -397,12 +397,12 @@ lud_slug_begin(float vx, float vy, float vw, float vh)
 }
 
 void
-lud_slug_draw(lud_slug_font_t font, float x, float y,
+lud_slug_draw(lud_slug_font_t font, lud_pen_t *pen,
               float size, float r, float g, float b, float a,
               const char *text)
 {
 	slug_font_slot_t *s = get_font_slot(font);
-	if (!s || !text || !slug_batch.initialized) return;
+	if (!s || !text || !slug_batch.initialized || !pen) return;
 
 	/* em_scale: how many view units per em */
 	float line_height = s->hdr.ascender - s->hdr.descender;
@@ -419,7 +419,8 @@ lud_slug_draw(lud_slug_font_t font, float x, float y,
 		slug_batch.em_per_pixel = em_per_pixel;
 	}
 
-	float cursor_x = x;
+	float cursor_x = pen->x;
+	float y = pen->y;
 	uint32_t prev_cp = 0;
 
 	for (const unsigned char *p = (const unsigned char *)text; *p; ) {
@@ -467,6 +468,8 @@ lud_slug_draw(lud_slug_font_t font, float x, float y,
 		cursor_x += gl->advance * em_scale;
 		prev_cp = cp;
 	}
+
+	pen->x = cursor_x;
 }
 
 float
@@ -509,6 +512,18 @@ lud_slug_text_width(lud_slug_font_t font, float size, const char *text)
 	}
 
 	return width;
+}
+
+int
+lud_slug_metrics(lud_slug_font_t font, float *ascender, float *descender,
+                 float *line_gap)
+{
+	slug_font_slot_t *s = get_font_slot(font);
+	if (!s) return 0;
+	*ascender  = s->hdr.ascender;
+	*descender = s->hdr.descender;
+	*line_gap  = s->hdr.line_gap;
+	return 1;
 }
 
 void

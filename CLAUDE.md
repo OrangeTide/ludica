@@ -101,8 +101,12 @@ Query at runtime: `lud_gles_version()` returns 2 or 3.
 Resolution-independent text with automatic backend selection:
 GLES3 uses Slug (GPU Bezier evaluation), GLES2 uses SDF (distance field atlas).
 
-- Load: `lud_load_vfont("data/fonts/dejavu-sans")` — appends `.slugfont` or `.msdffont`
-- Draw: `lud_vfont_begin()` / `lud_vfont_draw()` / `lud_vfont_end()`
+- Load: `lud_load_vfont("assets/fonts/dejavu-sans")` — appends `.slugfont` or `.msdffont`
+- Draw: `lud_vfont_begin()` / `lud_vfont_draw(font, &pen, size, r,g,b,a, text)` / `lud_vfont_end()`
+- Pen: `lud_pen_t pen = { x, y };` — caller-owned, draw advances pen->x
+- Metrics: `lud_vfont_ascender()`, `lud_vfont_line_height()`, `lud_vfont_newline()`
+- Layout: `lud_vfont_line_break()` — word-wrap at max width
+- Clip: `lud_vfont_set_clip()` / `lud_vfont_clear_clip()` — GL scissor, session state
 - Measure: `lud_vfont_text_width()`
 - Convert: `font2slug input.ttf -o output.slugfont`, `font2msdf input.ttf -o output.msdffont`
 - Override backend: `LUD_VFONT_BACKEND=slug|msdf` environment variable

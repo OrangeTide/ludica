@@ -267,7 +267,8 @@ draw_big_scroller(void)
 		float r, g, b;
 		hsv2rgb(char_hue, 0.8f, 1.0f, &r, &g, &b);
 
-		lud_slug_draw(f, cx, center_y + y_off, size, r, g, b, 1.0f, buf);
+		lud_pen_t pen = { cx, center_y + y_off };
+		lud_slug_draw(f, &pen, size, r, g, b, 1.0f, buf);
 		cx += cw;
 	}
 }
@@ -284,7 +285,8 @@ draw_small_scroller(int idx, float y_center, float bounce_freq,
 	float r, g, b;
 	hsv2rgb(hue, 0.7f, 0.95f, &r, &g, &b);
 
-	lud_slug_draw(f, -scroll_x, y, size, r, g, b, 1.0f, text);
+	lud_pen_t pen = { -scroll_x, y };
+	lud_slug_draw(f, &pen, size, r, g, b, 1.0f, text);
 }
 
 /* ------------------------------------------------------------------ */
@@ -397,12 +399,15 @@ frame(float dt)
 		p = font_names[scroller_font[2]];
 		while (*p) buf[n++] = *p++;
 		buf[n] = '\0';
-		lud_slug_draw(fonts[2], 8.0f, VH - 16.0f, 14.0f,
+		lud_pen_t hud_pen = { 8.0f, VH - 16.0f };
+		lud_slug_draw(fonts[2], &hud_pen, 14.0f,
 		              0.5f, 0.5f, 0.5f, 0.7f, buf);
 	}
-	if (paused)
-		lud_slug_draw(fonts[0], VW * 0.5f - 40.0f, VH * 0.5f - 40.0f, 48.0f,
+	if (paused) {
+		lud_pen_t pause_pen = { VW * 0.5f - 40.0f, VH * 0.5f - 40.0f };
+		lud_slug_draw(fonts[0], &pause_pen, 48.0f,
 		              1.0f, 1.0f, 1.0f, 0.8f, "PAUSED");
+	}
 
 	lud_slug_end();
 }

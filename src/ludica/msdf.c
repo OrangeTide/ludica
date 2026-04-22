@@ -342,12 +342,12 @@ lud_msdf_begin(float vx, float vy, float vw, float vh)
 }
 
 void
-lud_msdf_draw(unsigned id, float x, float y,
+lud_msdf_draw(unsigned id, lud_pen_t *pen,
               float size, float r, float g, float b, float a,
               const char *text)
 {
 	msdf_font_slot_t *s = msdf_get_slot(id);
-	if (!s || !text || !msdf_batch.initialized) return;
+	if (!s || !text || !msdf_batch.initialized || !pen) return;
 
 	float line_height = s->hdr.ascender - s->hdr.descender;
 	float em_scale = size / line_height;
@@ -363,7 +363,8 @@ lud_msdf_draw(unsigned id, float x, float y,
 	float inv_atlas_w = 1.0f / (float)s->hdr.atlas_w;
 	float inv_atlas_h = 1.0f / (float)s->hdr.atlas_h;
 
-	float cursor_x = x;
+	float cursor_x = pen->x;
+	float y = pen->y;
 	uint32_t prev_cp = 0;
 
 	for (const unsigned char *p = (const unsigned char *)text; *p; ) {
@@ -399,6 +400,8 @@ lud_msdf_draw(unsigned id, float x, float y,
 		cursor_x += gl->advance * em_scale;
 		prev_cp = cp;
 	}
+
+	pen->x = cursor_x;
 }
 
 float
@@ -431,6 +434,18 @@ lud_msdf_text_width(unsigned id, float size, const char *text)
 	}
 
 	return width;
+}
+
+int
+lud_msdf_metrics(unsigned id, float *ascender, float *descender,
+                 float *line_gap)
+{
+	msdf_font_slot_t *s = msdf_get_slot(id);
+	if (!s) return 0;
+	*ascender  = s->hdr.ascender;
+	*descender = s->hdr.descender;
+	*line_gap  = s->hdr.line_gap;
+	return 1;
 }
 
 void

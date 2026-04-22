@@ -226,7 +226,8 @@ draw_big_scroller(void)
 			float r, g, b;
 			hsv2rgb(char_hue, 0.8f, 1.0f, &r, &g, &b);
 
-			lud_vfont_draw(font, cx, center_y + y_off, size, r, g, b, 1.0f, buf);
+			lud_pen_t pen = { cx, center_y + y_off };
+			lud_vfont_draw(font, &pen, size, r, g, b, 1.0f, buf);
 			cx += cw;
 		}
 	}
@@ -243,10 +244,12 @@ draw_small_scroller(float y_center, float bounce_freq, float bounce_amp,
 	float r, g, b;
 	hsv2rgb(hue, 0.7f, 0.95f, &r, &g, &b);
 
-	lud_vfont_draw(font, -scroll_x, y, size, r, g, b, 1.0f, text);
-	if (text_width > 0.0f)
-		lud_vfont_draw(font, -scroll_x + text_width, y,
-		               size, r, g, b, 1.0f, text);
+	lud_pen_t pen = { -scroll_x, y };
+	lud_vfont_draw(font, &pen, size, r, g, b, 1.0f, text);
+	if (text_width > 0.0f) {
+		pen = (lud_pen_t){ -scroll_x + text_width, y };
+		lud_vfont_draw(font, &pen, size, r, g, b, 1.0f, text);
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -320,14 +323,17 @@ frame(float dt)
 	draw_small_scroller(VH - 80.0f, 2.3f, 20.0f, bot_text, bot_text_width,
 	                    scroll_x_bot, 240.0f);
 
-	if (paused)
-		lud_vfont_draw(font, VW * 0.5f - 100.0f, VH * 0.5f - 20.0f, 48.0f,
+	if (paused) {
+		lud_pen_t pen = { VW * 0.5f - 100.0f, VH * 0.5f - 20.0f };
+		lud_vfont_draw(font, &pen, 48.0f,
 		               1.0f, 1.0f, 1.0f, 0.8f, "PAUSED");
+	}
 
 	/* Backend indicator */
 	{
 		const char *backend = lud_gles_version() >= 3 ? "Slug (GLES3)" : "SDF (GLES2)";
-		lud_vfont_draw(font, 8.0f, VH - 16.0f, 14.0f,
+		lud_pen_t pen = { 8.0f, VH - 16.0f };
+		lud_vfont_draw(font, &pen, 14.0f,
 		               0.5f, 0.5f, 0.5f, 0.7f, backend);
 	}
 

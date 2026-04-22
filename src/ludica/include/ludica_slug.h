@@ -12,6 +12,8 @@
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
 
+#include "ludica_vfont.h"
+
 typedef struct { unsigned id; } lud_slug_font_t;
 
 /* Load a .slugfont file. Returns zero-handle on failure or GLES2. */
@@ -26,10 +28,11 @@ void lud_destroy_slug_font(lud_slug_font_t font);
 void lud_slug_begin(float vx, float vy, float vw, float vh);
 
 /* Draw a string of text.
- * (x, y) is the baseline-left position in view coordinates.
+ * pen->x, pen->y is the baseline-left position in view coordinates.
+ * On return, pen->x is advanced past the rendered text.
  * size is the font height in view units (e.g. pixels).
  * Color is RGBA 0.0-1.0. */
-void lud_slug_draw(lud_slug_font_t font, float x, float y,
+void lud_slug_draw(lud_slug_font_t font, lud_pen_t *pen,
                    float size, float r, float g, float b, float a,
                    const char *text);
 
