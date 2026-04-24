@@ -11,11 +11,11 @@ cd "$(git rev-parse --show-toplevel)"
 if [ -n "$1" ]; then
     version="$1"
 else
-    version="$(date +%y.%m.%d)"
+    version="$(date +%y.%m.0)"
 fi
 
-# Append .N suffix if tag already exists
-base="$version"
+# Inrement .N suffix if tag already exists
+base="${version%.*}"
 n=1
 while git rev-parse "v$version" >/dev/null 2>&1; do
     version="${base}.${n}"
@@ -23,8 +23,10 @@ while git rev-parse "v$version" >/dev/null 2>&1; do
 done
 
 printf '%s\n' "$version" > VERSION
-
 git add VERSION
+# sed -i "s/^#define LUMI_VERSION.*\$/#define LUDICA_VERSION \"$version\"/" src/version.h
+# git add src/version.h
+
 git commit -m "Release v$version"
 git tag -a "v$version" -m "v$version"
 
