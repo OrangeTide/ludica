@@ -33,5 +33,10 @@ Usage:
   - [ ] host file system driver (appears like a cd-rom driver or networked file system). mounted on boot or perhaps with `NET USE` type utility? there are simple programs that host remote files systems such as [rifs2](https://github.com/virtualxt/rifs2)
 - [ ] network card. pick one of these that is period correct, few HW bugs, and very easy to emulate. 3c503, NE1000, NE2000, AMD LANCE, are places we can start. NE1000 came out in 1987. At that time a 286 AT would have still been a mid-range PC option, with the 286 XT falling behind AT clones due to a similar price with less compatibility and performance.
   - [ ] then we can try out mTCP on our system. https://www.brutman.com/mTCP/mTCP.htm -- we should pick a network card it supports.
+- [ ] ATI Graphics Solution rev3. a CGA+MDA+Hercules+Plantronics superset on one card (CW16800-A, 64KB, UM6845E). see [doc/notes/ati-graphics-solution.md](/doc/notes/ati-graphics-solution.md) for full register map.
+  - [ ] level 1: Plantronics ColorPlus. port 0x3DD bits 4-6, extend VRAM to 32KB, dual-plane 320x200x16 and 640x200x4.
+  - [ ] level 2: ATI 640x200x16 (port 0x3DD bit 7), 132-column text (port 0x3DF), extend VRAM to 64KB with 4-bank interlace.
+  - [ ] level 3: unified CGA/MDA/HGC card with mono-side ports (0x3Bx) and software mode switching.
+  - references: [user manual (local PDF)](/doc/notes/ati-graphics-solution-user-manual.pdf), [Commodore PC20 manual pp.51-64](https://www.manualslib.com/manual/1305868/Commodore-Pc-20.html?page=51), [Seasip Plantronics notes](https://www.seasip.info/VintagePC/plantronics.html)
 
 # DONE
