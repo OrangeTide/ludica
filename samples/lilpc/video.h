@@ -1,4 +1,4 @@
-/* video.h - CGA and Hercules display emulation for lilpc */
+/* video.h - CGA, Hercules, and ATI Graphics Solution display emulation */
 #ifndef VIDEO_H
 #define VIDEO_H
 
@@ -6,6 +6,13 @@
 #include <stdbool.h>
 
 struct lilpc;
+
+/* adapter types */
+typedef enum {
+	VIDEO_CGA,
+	VIDEO_HERCULES,
+	VIDEO_ATI		/* CGA + MDA + Hercules + Plantronics + ATI */
+} video_adapter_t;
 
 /* CGA display dimensions */
 #define CGA_TEXT_COLS	80
@@ -23,8 +30,13 @@ struct lilpc;
 #define HERC_VRAM_BASE	0xB0000
 #define HERC_VRAM_SIZE	0x10000	/* 64KB (2 pages) */
 
-/* render buffer: max resolution is 720x350 (Hercules) */
-#define VIDEO_MAX_W	720
+/* Plantronics / ATI VRAM sizes */
+#define PLANTRONICS_VRAM_SIZE	0x8000	/* 32KB: B8000-BFFFF */
+#define ATI_VRAM_BASE		0xB0000
+#define ATI_VRAM_SIZE		0x10000	/* 64KB: B0000-BFFFF */
+
+/* render buffer: max resolution is 1056x350 (132-col text) */
+#define VIDEO_MAX_W	1056
 #define VIDEO_MAX_H	350
 
 /* MC6845 CRTC registers (shared between CGA and Hercules) */
@@ -35,7 +47,7 @@ typedef struct {
 
 typedef struct video {
 	/* which adapter is active */
-	bool hercules;		/* true = Hercules, false = CGA */
+	video_adapter_t adapter;
 
 	/* MC6845 CRTC */
 	crtc_t crtc;
@@ -49,6 +61,11 @@ typedef struct video {
 	uint8_t herc_mode;	/* port 3B8h */
 	uint8_t herc_config;	/* port 3BFh */
 
+	/* ATI / Plantronics registers */
+	uint8_t plantronics;	/* port 3DDh: bits 4-6 Plantronics, bit 7 ATI */
+	uint8_t ati_ext;	/* port 3DFh / 3BAh(w): ATI extended mode */
+	bool ati_mono_active;	/* true when in MDA/Hercules mode (Level 3) */
+
 	/* retrace timing */
 	int scanline;		/* current scanline for status register */
 	uint64_t last_tick;
@@ -60,7 +77,7 @@ typedef struct video {
 	uint64_t *cpu_cycles_ptr;	/* points to cpu.cycles for timing */
 	uint16_t snow_seed;		/* PRNG state for snow corruption */
 
-	/* pixel render buffer (palette indices for CGA, RGBA for Hercules) */
+	/* pixel render buffer (palette indices) */
 	uint8_t pixels[VIDEO_MAX_W * VIDEO_MAX_H];
 	int render_w, render_h;
 
@@ -68,7 +85,7 @@ typedef struct video {
 	uint8_t border_color;
 } video_t;
 
-void video_init(video_t *vid, struct lilpc *pc, bool hercules);
+void video_init(video_t *vid, struct lilpc *pc, video_adapter_t adapter);
 void video_render(video_t *vid, struct lilpc *pc);
 void video_tick(video_t *vid, struct lilpc *pc, uint64_t cpu_cycles);
 

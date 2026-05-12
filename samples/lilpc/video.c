@@ -318,6 +318,11 @@ static uint8_t cga_read(lilpc_t *pc, uint16_t port)
 	case 0x3D8: return vid->mode_ctrl;
 	case 0x3D9: return vid->color_sel;
 
+	case 0x3DD:
+		if (vid->adapter == VIDEO_ATI)
+			return vid->plantronics;
+		return 0xFF;
+
 	case 0x3DA:
 	{
 		/*
@@ -373,6 +378,26 @@ static void cga_write(lilpc_t *pc, uint16_t port, uint8_t val)
 	case 0x3D9:
 		vid->color_sel = val;
 		break;
+
+	case 0x3DD:
+		if (vid->adapter == VIDEO_ATI)
+			vid->plantronics = val;
+		break;
+
+	case 0x3DF:
+		if (vid->adapter == VIDEO_ATI) {
+			vid->ati_ext = val;
+			if (val & 0x40) {
+				vid->ati_mono_active = true;
+				uint16_t eq = bus_read16(&pc->bus, 0x410);
+				bus_write16(&pc->bus, 0x410, (eq & 0xFFCF) | 0x30);
+			} else if (val & 0x80) {
+				vid->ati_mono_active = false;
+				uint16_t eq = bus_read16(&pc->bus, 0x410);
+				bus_write16(&pc->bus, 0x410, (eq & 0xFFCF) | 0x20);
+			}
+		}
+		break;
 	}
 }
 
@@ -425,6 +450,21 @@ static void herc_write(lilpc_t *pc, uint16_t port, uint8_t val)
 		vid->herc_mode = val;
 		break;
 
+	case 0x3BA:
+		if (vid->adapter == VIDEO_ATI) {
+			vid->ati_ext = val;
+			if (val & 0x40) {
+				vid->ati_mono_active = true;
+				uint16_t eq = bus_read16(&pc->bus, 0x410);
+				bus_write16(&pc->bus, 0x410, (eq & 0xFFCF) | 0x30);
+			} else if (val & 0x80) {
+				vid->ati_mono_active = false;
+				uint16_t eq = bus_read16(&pc->bus, 0x410);
+				bus_write16(&pc->bus, 0x410, (eq & 0xFFCF) | 0x20);
+			}
+		}
+		break;
+
 	case 0x3BF:
 		vid->herc_config = val;
 		break;
@@ -447,8 +487,8 @@ static void cga_snow_hook(void *ctx, uint32_t addr, uint8_t val)
 	(void)val;
 	video_t *vid = ctx;
 
-	/* snow only affects CGA, not Hercules */
-	if (vid->hercules)
+	/* snow only in CGA-compatible modes (CGA or ATI in color mode) */
+	if (vid->adapter == VIDEO_HERCULES)
 		return;
 
 	/* compute current scanline from CPU cycle count */
@@ -476,14 +516,14 @@ static void cga_snow_hook(void *ctx, uint32_t addr, uint8_t val)
 		vid->snow[cell] = 1;
 }
 
-void video_init(video_t *vid, lilpc_t *pc, bool hercules)
+void video_init(video_t *vid, lilpc_t *pc, video_adapter_t adapter)
 {
 	memset(vid, 0, sizeof(*vid));
-	vid->hercules = hercules;
+	vid->adapter = adapter;
 	vid->snow_seed = 12345;
 	vid->cpu_cycles_ptr = &pc->cpu.cycles;
 
-	if (hercules) {
+	if (adapter == VIDEO_HERCULES) {
 		/* MDA/Hercules CRTC defaults (720x350 text) */
 		static const uint8_t mda_crtc[18] = {
 			97, 80, 82, 15, 25, 6, 25, 25,
@@ -505,11 +545,15 @@ void video_init(video_t *vid, lilpc_t *pc, bool hercules)
 		vid->mode_ctrl = 0x29; /* 80-col text, enable display */
 		bus_register_io(&pc->bus, 0x3D0, 16, cga_read, cga_write);
 
+		if (adapter == VIDEO_ATI)
+			bus_register_io(&pc->bus, 0x3B0, 16, herc_read, herc_write);
+
 		/* install snow detection hook on CGA VRAM range */
 		pc->bus.write_hook = cga_snow_hook;
 		pc->bus.write_hook_ctx = vid;
 		pc->bus.write_hook_base = CGA_VRAM_BASE;
-		pc->bus.write_hook_end = CGA_VRAM_BASE + CGA_VRAM_SIZE;
+		pc->bus.write_hook_end = CGA_VRAM_BASE +
+			(adapter == VIDEO_ATI ? PLANTRONICS_VRAM_SIZE : CGA_VRAM_SIZE);
 	}
 }
 
@@ -799,28 +843,249 @@ static void render_herc_gfx(video_t *vid, bus_t *bus)
 	}
 }
 
+/* Plantronics ColorPlus 320x200x16 dual-plane renderer */
+static void render_plantronics_320(video_t *vid, bus_t *bus)
+{
+	vid->render_w = 320;
+	vid->render_h = 200;
+
+	uint32_t p0_base = CGA_VRAM_BASE;          /* B8000 */
+	uint32_t p1_base = CGA_VRAM_BASE + 0x4000; /* BC000 */
+
+	if (vid->plantronics & 0x40) {
+		uint32_t tmp = p0_base;
+		p0_base = p1_base;
+		p1_base = tmp;
+	}
+
+	for (int y = 0; y < 200; y++) {
+		uint32_t bank = (y & 1) ? 0x2000 : 0;
+		uint32_t row = (y >> 1) * 80;
+		uint32_t p0_row = p0_base + bank + row;
+		uint32_t p1_row = p1_base + bank + row;
+
+		for (int x = 0; x < 320; x += 4) {
+			uint8_t b0 = bus_read8(bus, p0_row + (x >> 2));
+			uint8_t b1 = bus_read8(bus, p1_row + (x >> 2));
+
+			for (int px = 0; px < 4; px++) {
+				int shift = 6 - px * 2;
+				uint8_t c01 = (b0 >> shift) & 3;
+				uint8_t c23 = (b1 >> shift) & 3;
+				vid->pixels[y * 320 + x + px] =
+					(c23 << 2) | c01;
+			}
+		}
+	}
+}
+
+/* Plantronics ColorPlus 640x200x4 dual-plane renderer */
+static void render_plantronics_640(video_t *vid, bus_t *bus)
+{
+	vid->render_w = 640;
+	vid->render_h = 200;
+
+	uint32_t p0_base = CGA_VRAM_BASE;
+	uint32_t p1_base = CGA_VRAM_BASE + 0x4000;
+
+	if (vid->plantronics & 0x40) {
+		uint32_t tmp = p0_base;
+		p0_base = p1_base;
+		p1_base = tmp;
+	}
+
+	for (int y = 0; y < 200; y++) {
+		uint32_t bank = (y & 1) ? 0x2000 : 0;
+		uint32_t row = (y >> 1) * 80;
+		uint32_t p0_row = p0_base + bank + row;
+		uint32_t p1_row = p1_base + bank + row;
+
+		for (int x = 0; x < 640; x += 8) {
+			uint8_t b0 = bus_read8(bus, p0_row + (x >> 3));
+			uint8_t b1 = bus_read8(bus, p1_row + (x >> 3));
+
+			for (int px = 0; px < 8; px++) {
+				uint8_t bit0 = (b0 >> (7 - px)) & 1;
+				uint8_t bit1 = (b1 >> (7 - px)) & 1;
+				vid->pixels[y * 640 + x + px] =
+					(bit1 << 1) | bit0;
+			}
+		}
+	}
+}
+
+/*
+ * ATI 640x200x16 dual-plane renderer (4-bank interlace)
+ * Plane 0: B0000-B7FFF, Plane 1: B8000-BFFFF
+ * Each plane: 4 banks of 8KB at +0x0000/+0x2000/+0x4000/+0x6000
+ */
+static void render_ati_640x16(video_t *vid, bus_t *bus)
+{
+    vid->render_w = 640;
+    vid->render_h = 200;
+
+    uint32_t p0_base = ATI_VRAM_BASE;           /* B0000 */
+    uint32_t p1_base = CGA_VRAM_BASE;           /* B8000 */
+
+    for (int y = 0; y < 200; y++) {
+        uint32_t bank = (y & 3) * 0x2000;
+        uint32_t row = (y >> 2) * 80;
+        uint32_t p0_row = p0_base + bank + row;
+        uint32_t p1_row = p1_base + bank + row;
+
+        for (int x = 0; x < 640; x += 4) {
+            uint8_t b0 = bus_read8(bus, p0_row + (x >> 2));
+            uint8_t b1 = bus_read8(bus, p1_row + (x >> 2));
+
+            for (int px = 0; px < 4; px++) {
+                int shift = 6 - px * 2;
+                uint8_t c01 = (b0 >> shift) & 3;
+                uint8_t c23 = (b1 >> shift) & 3;
+                vid->pixels[y * 640 + x + px] =
+                    (c23 << 2) | c01;
+            }
+        }
+    }
+}
+
+/*
+ * ATI 132-column text renderer
+ * Color 132x25: ati_ext bit 4, VRAM at B8000, 8KB
+ * Mono 132x25:  ati_ext bit 3, VRAM at B0000, 8KB
+ * Mono 132x44:  ati_ext bit 3 + CRTC R6 >= 44, VRAM at B0000, 16KB
+ */
+static void render_ati_132col(video_t *vid, bus_t *bus)
+{
+    bool mono = (vid->ati_ext & 0x08) != 0;
+    uint32_t vram_base = mono ? ATI_VRAM_BASE : CGA_VRAM_BASE;
+    int cols = 132;
+    int rows = vid->crtc.reg[6];
+
+    if (rows < 25)
+        rows = 25;
+    if (rows > 44)
+        rows = 44;
+
+    int char_w = 8;
+    int char_h = mono ? 14 : 8;
+
+    vid->render_w = cols * char_w;
+    vid->render_h = rows * char_h;
+
+    uint16_t cursor_pos = ((uint16_t)vid->crtc.reg[14] << 8) | vid->crtc.reg[15];
+    uint8_t cursor_start = vid->crtc.reg[10] & 0x1F;
+    uint8_t cursor_end = vid->crtc.reg[11] & 0x1F;
+    bool cursor_enabled = !(vid->crtc.reg[10] & 0x20);
+    uint16_t start_addr = ((uint16_t)vid->crtc.reg[12] << 8) | vid->crtc.reg[13];
+
+    uint16_t vram_mask = mono ? (rows > 25 ? 0x3FFF : 0x1FFF) : 0x1FFF;
+    uint8_t fg_idx = mono ? 1 : 0;
+    uint8_t bg_idx = 0;
+
+    if (mono)
+        memset(vid->pixels, 0, vid->render_w * vid->render_h);
+
+    for (int row = 0; row < rows; row++) {
+        for (int col = 0; col < cols; col++) {
+            uint16_t offset = ((start_addr + row * cols + col) * 2) & vram_mask;
+            uint32_t addr = vram_base + offset;
+            uint8_t ch = bus_read8(bus, addr);
+            uint8_t attr = bus_read8(bus, addr + 1);
+
+            uint8_t fg, bg;
+            if (mono) {
+                if (attr == 0x00 || attr == 0x08 || attr == 0x80) {
+                    fg = bg_idx;
+                    bg = bg_idx;
+                } else if ((attr & 0x77) == 0x70) {
+                    fg = bg_idx;
+                    bg = fg_idx;
+                } else {
+                    fg = fg_idx;
+                    bg = bg_idx;
+                }
+            } else {
+                fg = attr & 0x0F;
+                bg = (attr >> 4) & 0x0F;
+                if ((vid->mode_ctrl & 0x20) && (attr & 0x80))
+                    bg = (attr >> 4) & 0x07;
+            }
+
+            const uint8_t *glyph = &cga_font_8x8[ch * 8];
+
+            for (int y = 0; y < char_h; y++) {
+                int font_y = mono ? (y * 8 / 14) : y;
+                uint8_t bits = glyph[font_y];
+
+                if (mono && (attr & 0x07) == 0x01 && y == char_h - 1)
+                    bits = 0xFF;
+
+                for (int x = 0; x < char_w; x++) {
+                    uint8_t cidx = (bits & (0x80 >> x)) ? fg : bg;
+                    int px_x = col * char_w + x;
+                    int px_y = row * char_h + y;
+                    if (px_x < VIDEO_MAX_W && px_y < VIDEO_MAX_H)
+                        vid->pixels[px_y * vid->render_w + px_x] = cidx;
+                }
+            }
+
+            if (cursor_enabled &&
+                (start_addr + row * cols + col) == cursor_pos) {
+                for (int y = cursor_start; y <= cursor_end && y < char_h; y++) {
+                    for (int x = 0; x < char_w; x++) {
+                        int px_x = col * char_w + x;
+                        int px_y = row * char_h + y;
+                        if (px_x < VIDEO_MAX_W && px_y < VIDEO_MAX_H)
+                            vid->pixels[px_y * vid->render_w + px_x] = fg;
+                    }
+                }
+            }
+        }
+    }
+}
+
 void video_render(video_t *vid, lilpc_t *pc)
 {
-	if (vid->hercules) {
-		if (vid->herc_mode & 0x02) /* graphics bit */
+	if (vid->adapter == VIDEO_HERCULES) {
+		if (vid->herc_mode & 0x02)
 			render_herc_gfx(vid, &pc->bus);
 		else
 			render_herc_text(vid, &pc->bus);
-	} else {
-		/* CGA mode decoding from mode_ctrl (port 3D8h):
-		 * Bit 0: 80-column text
-		 * Bit 1: graphics mode
-		 * Bit 2: disable color burst (B&W)
-		 * Bit 3: enable video output
-		 * Bit 4: 640x200 graphics
-		 * Bit 5: blink enable
-		 */
+		return;
+	}
+
+	/* ATI modes: mono side, extended, Plantronics */
+	if (vid->adapter == VIDEO_ATI) {
+		if (vid->ati_mono_active) {
+			if (vid->herc_mode & 0x02)
+				render_herc_gfx(vid, &pc->bus);
+			else
+				render_herc_text(vid, &pc->bus);
+			return;
+		}
+		if (vid->ati_ext & 0x18) {
+			render_ati_132col(vid, &pc->bus);
+			return;
+		}
+		if (vid->plantronics & 0x80) {
+			render_ati_640x16(vid, &pc->bus);
+			return;
+		}
+		if (vid->plantronics & 0x10) {
+			render_plantronics_320(vid, &pc->bus);
+			return;
+		}
+		if (vid->plantronics & 0x20) {
+			render_plantronics_640(vid, &pc->bus);
+			return;
+		}
+	}
+
+	/* CGA modes (used by both VIDEO_CGA and VIDEO_ATI fallback) */
+	{
 		vid->border_color = vid->color_sel & 0x0F;
 
-		/* consume snow bitmap — render will use it, then clear */
-
 		if (!(vid->mode_ctrl & 0x08)) {
-			/* display disabled - black screen */
 			vid->render_w = 640;
 			vid->render_h = 200;
 			memset(vid->pixels, 0, 640 * 200);
@@ -828,7 +1093,6 @@ void video_render(video_t *vid, lilpc_t *pc)
 		}
 
 		if (vid->mode_ctrl & 0x02) {
-			/* graphics mode */
 			if (vid->mode_ctrl & 0x10)
 				render_cga_640(vid, &pc->bus);
 			else
@@ -856,7 +1120,7 @@ void video_tick(video_t *vid, lilpc_t *pc __attribute__((unused)), uint64_t cpu_
 
 	int cycles_per_line;
 	int total_lines;
-	if (vid->hercules) {
+	if (vid->adapter == VIDEO_HERCULES) {
 		cycles_per_line = 500;
 		total_lines = 370;
 	} else {

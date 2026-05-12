@@ -233,7 +233,7 @@ static void setup_bda(lilpc_t *pc)
 	 * Bits 6-7: number of floppy drives - 1 (00 = 1 drive)
 	 */
 	uint16_t equip = 0x0041; /* 2 floppies, no 8087 */
-	if (pc->video.hercules)
+	if (pc->video.adapter == VIDEO_HERCULES)
 		equip |= 0x0030; /* 30h = MDA 80-col */
 	else
 		equip |= 0x0020; /* 20h = CGA 80-col */
@@ -258,7 +258,7 @@ static void setup_bda(lilpc_t *pc)
 	bus_write16(bus, 0x482, 0x003E);
 }
 
-int lilpc_init(lilpc_t *lpc, int ram_kb, bool hercules,
+int lilpc_init(lilpc_t *lpc, int ram_kb, video_adapter_t adapter,
 	const char *bios_path, const char *fda_path, const char *fdb_path)
 {
 	memset(lpc, 0, sizeof(*lpc));
@@ -274,7 +274,7 @@ int lilpc_init(lilpc_t *lpc, int ram_kb, bool hercules,
 	pic_init(&lpc->pic, lpc);
 	pit_init(&lpc->pit, lpc);
 	dma_init(&lpc->dma, lpc);
-	video_init(&lpc->video, lpc, hercules);
+	video_init(&lpc->video, lpc, adapter);
 	kbd_init(&lpc->kbd, lpc);
 
 	/*
@@ -295,7 +295,7 @@ int lilpc_init(lilpc_t *lpc, int ram_kb, bool hercules,
 		/* high bank bits 0-1 → equip bits 4-5: video mode */
 		/*   00=reserved, 01=CGA 40-col, 10=CGA 80-col, 11=MDA */
 		/* high bank bits 2-3 → equip bits 6-7: floppy drives - 1 */
-		uint8_t video_sw = hercules ? 0x03 : 0x02; /* MDA or CGA 80-col */
+		uint8_t video_sw = (adapter == VIDEO_HERCULES) ? 0x03 : 0x02;
 		/* floppy count - 1 in DIP switch: always report 2 drives so
 		 * a second floppy can be hot-inserted (e.g. web UI). */
 		uint8_t floppy_sw = 0x01;
@@ -437,7 +437,7 @@ void lilpc_eject_disk(int drive)
 static char bios_path[512];
 static char fda_path[512];
 static char fdb_path[512];
-static bool use_hercules;
+static video_adapter_t adapter_type;
 static uint64_t debug_flags;
 static int debug_port;
 
@@ -452,7 +452,7 @@ static void init(void)
 		return;
 	}
 
-	if (lilpc_init(&pc, ram, use_hercules, bios_path, fda_path, fdb_path) != 0) {
+	if (lilpc_init(&pc, ram, adapter_type, bios_path, fda_path, fdb_path) != 0) {
 		fprintf(stderr, "lilpc: init failed\n");
 		lud_quit();
 		return;
@@ -496,7 +496,8 @@ static void init(void)
 	}
 
 	fprintf(stderr, "lilpc: 286 XT emulator started (%d KB RAM, %s)\n",
-		ram, use_hercules ? "Hercules" : "CGA");
+		ram, adapter_type == VIDEO_ATI ? "ATI" :
+		adapter_type == VIDEO_HERCULES ? "Hercules" : "CGA");
 }
 
 static void frame(float dt)
@@ -521,10 +522,15 @@ static void frame(float dt)
 	int win_w = lud_width();
 	int win_h = lud_height();
 
-	/* fit display to window maintaining 4:3 (CGA) or native (Herc) aspect */
-	float src_aspect = pc.video.hercules
-		? (float)tex_w / (float)tex_h
-		: 4.0f / 3.0f;
+	bool mono = (pc.video.adapter == VIDEO_HERCULES) ||
+		(pc.video.adapter == VIDEO_ATI && pc.video.ati_mono_active);
+
+	/* fit display to window: 4:3 for standard CGA, native for wide/mono */
+	float src_aspect;
+	if (mono || tex_w > 720)
+		src_aspect = (float)tex_w / (float)tex_h;
+	else
+		src_aspect = 4.0f / 3.0f;
 	float dst_aspect = (float)win_w / (float)win_h;
 	int vp_x, vp_y, vp_w, vp_h;
 
@@ -545,8 +551,8 @@ static void frame(float dt)
 	lud_viewport(vp_x, vp_y, vp_w, vp_h);
 
 	/* build palette uniform from RGBA palette table */
-	const uint32_t *pal = pc.video.hercules ? herc_palette : cga_palette;
-	int pal_count = pc.video.hercules ? 2 : 16;
+	const uint32_t *pal = mono ? herc_palette : cga_palette;
+	int pal_count = mono ? 2 : 16;
 	float pal_uniform[16 * 4];
 	memset(pal_uniform, 0, sizeof(pal_uniform));
 	for (int i = 0; i < pal_count; i++) {
@@ -564,9 +570,9 @@ static void frame(float dt)
 	lud_uniform_vec2(crt_shader, "u_tex_size",
 		(float)VIDEO_MAX_W, (float)VIDEO_MAX_H);
 	lud_uniform_int(crt_shader, "u_border_idx",
-		pc.video.hercules ? 0 : pc.video.border_color);
+		mono ? 0 : pc.video.border_color);
 	lud_uniform_float(crt_shader, "u_curvature",
-		pc.video.hercules ? 0.1f : 0.15f);
+		mono ? 0.1f : 0.15f);
 
 	/* upload palette as individual vec4 uniforms */
 	for (int i = 0; i < 16; i++) {
@@ -708,11 +714,12 @@ static void cleanup(void)
 
 static void usage(const char *prog)
 {
-	fprintf(stderr, "Usage: %s --bios=<rom> [--fda=<image>] [--fdb=<image>] [--herc]\n", prog);
+	fprintf(stderr, "Usage: %s --bios=<rom> [--fda=<image>] [--fdb=<image>] [--herc|--ati]\n", prog);
 	fprintf(stderr, "  --bios=<path>       BIOS ROM file (required)\n");
 	fprintf(stderr, "  --fda=<path>        Floppy drive A image\n");
 	fprintf(stderr, "  --fdb=<path>        Floppy drive B image\n");
 	fprintf(stderr, "  --herc              Use Hercules display (default: CGA)\n");
+	fprintf(stderr, "  --ati               Use ATI Graphics Solution (CGA+MDA+HGC+Plantronics)\n");
 	fprintf(stderr, "  --debug=<flags>     Enable debug output (or set LILPC_DEBUG env)\n");
 	fprintf(stderr, "        a=CPU b=FDC c=DMA d=PIC e=PIT f=exit-dump\n");
 	fprintf(stderr, "  --debug-port=<port> TCP debug monitor port\n");
@@ -726,7 +733,7 @@ parse_args(void)
 	bios_path[0] = 0;
 	fda_path[0] = 0;
 	fdb_path[0] = 0;
-	use_hercules = false;
+	adapter_type = VIDEO_CGA;
 	debug_flags = 0;
 	debug_port = 0;
 
@@ -737,7 +744,9 @@ parse_args(void)
 	if ((val = lud_get_config("fdb")))
 		snprintf(fdb_path, sizeof(fdb_path), "%s", val);
 	if (lud_get_config("herc"))
-		use_hercules = true;
+		adapter_type = VIDEO_HERCULES;
+	if (lud_get_config("ati"))
+		adapter_type = VIDEO_ATI;
 	if ((val = lud_get_config("debug")))
 		debug_flags = dbg_parse(val);
 	/* also check LILPC_DEBUG environment variable */

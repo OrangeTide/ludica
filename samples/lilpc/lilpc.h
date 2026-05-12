@@ -47,7 +47,7 @@ typedef struct lilpc {
 	debugmon_t debugmon;	/* TCP debug monitor */
 } lilpc_t;
 
-int lilpc_init(lilpc_t *pc, int ram_kb, bool hercules,
+int lilpc_init(lilpc_t *pc, int ram_kb, video_adapter_t adapter,
 	const char *bios_path, const char *fda_path, const char *fdb_path);
 void lilpc_cleanup(lilpc_t *pc);
 void lilpc_run_frame(lilpc_t *pc);	/* run one frame worth of cycles */
