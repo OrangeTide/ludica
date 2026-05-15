@@ -366,14 +366,11 @@ void pit_tick(pit_t *pit, lilpc_t *pc, uint64_t cpu_cycles)
 	uint64_t elapsed = cpu_cycles - pit->last_tick;
 	pit->last_tick = cpu_cycles;
 
-	/* PIT ticks = elapsed * 1193182 / 6000000
-	 * Use integer math: ticks = elapsed * 1193182 / 6000000
-	 * Simplified: roughly elapsed / 5
-	 */
+	int clock_hz = pc->turbo ? LILPC_CLOCK_HZ : LILPC_CLOCK_HZ_SLOW;
 	static uint64_t pit_accum = 0;
 	pit_accum += elapsed * PIT_CLOCK_HZ;
-	uint64_t ticks = pit_accum / LILPC_CLOCK_HZ;
-	pit_accum %= LILPC_CLOCK_HZ;
+	uint64_t ticks = pit_accum / clock_hz;
+	pit_accum %= clock_hz;
 
 	for (uint64_t t = 0; t < ticks; t++) {
 		/* channel 0: system timer -> IRQ0 */
