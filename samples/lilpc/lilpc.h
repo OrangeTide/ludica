@@ -16,6 +16,8 @@
 
 /* 286 XT clock speed: 6 MHz (some XTs ran 8 MHz turbo) */
 #define LILPC_CLOCK_HZ		6000000
+/* 8088 PC clock speed: 4.77 MHz */
+#define LILPC_CLOCK_HZ_SLOW	4770000
 /* approximate cycles per frame at 60 fps */
 #define LILPC_CYCLES_PER_FRAME	(LILPC_CLOCK_HZ / 60)
 /* PIT input clock: 1.193182 MHz */
@@ -37,6 +39,7 @@ typedef struct lilpc {
 
 	/* configuration */
 	int ram_kb;		/* conventional RAM in KB (default 640) */
+	int turbo;		/* 1 = 286 6 MHz (default), 0 = 8088 4.77 MHz */
 
 	/* BIOS data area pointer (for convenience) */
 	/* 0040:0000 = physical 0x400 */

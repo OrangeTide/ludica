@@ -117,6 +117,28 @@ Module['postRun'].push(function() {
   var selA = makeDriveUI(0, toolbar);
   var selB = makeDriveUI(1, toolbar);
 
+  /* ---- turbo toggle ---- */
+  var turboRow = document.createElement('div');
+  turboRow.style.cssText = 'display:flex;align-items:center;gap:6px;';
+
+  var turboBtn = document.createElement('button');
+  turboBtn.style.cssText = 'background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);' +
+    'color:#ccc;font:13px/1 monospace;padding:4px 10px;border-radius:4px;cursor:pointer;';
+
+  function updateTurboBtn() {
+    var on = Module.ccall('lilpc_get_turbo', 'number', [], []);
+    turboBtn.textContent = on ? 'Turbo: ON (286)' : 'Turbo: OFF (8088)';
+    turboBtn.style.color = on ? '#4f4' : '#ccc';
+  }
+  turboBtn.addEventListener('click', function() {
+    var on = Module.ccall('lilpc_get_turbo', 'number', [], []);
+    Module.ccall('lilpc_set_turbo', null, ['number'], [on ? 0 : 1]);
+    updateTurboBtn();
+  });
+  updateTurboBtn();
+  turboRow.appendChild(turboBtn);
+  toolbar.appendChild(turboRow);
+
   var statusEl = document.createElement('div');
   statusEl.id = 'disk-status';
   statusEl.style.cssText = 'color:#888;font:11px/1 monospace;padding-left:26px;';

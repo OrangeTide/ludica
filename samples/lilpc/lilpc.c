@@ -263,6 +263,7 @@ int lilpc_init(lilpc_t *lpc, int ram_kb, video_adapter_t adapter,
 {
 	memset(lpc, 0, sizeof(*lpc));
 	lpc->ram_kb = ram_kb;
+	lpc->turbo = 1;
 
 	/* init subsystems in dependency order */
 	if (bus_init(&lpc->bus, ram_kb) != 0)
@@ -360,7 +361,8 @@ void lilpc_cleanup(lilpc_t *lpc)
 void lilpc_run_frame(lilpc_t *lpc)
 {
 	debugmon_t *dm = &lpc->debugmon;
-	uint64_t frame_cycles = LILPC_CYCLES_PER_FRAME;
+	int clock_hz = lpc->turbo ? LILPC_CLOCK_HZ : LILPC_CLOCK_HZ_SLOW;
+	uint64_t frame_cycles = clock_hz / 60;
 	uint64_t start = lpc->cpu.cycles;
 
 	while (lpc->cpu.cycles - start < frame_cycles) {
@@ -444,6 +446,18 @@ void lilpc_eject_disk(int drive)
 	pc.fdc.drive[drive].data = NULL;
 	pc.fdc.drive[drive].size = 0;
 	pc.fdc.drive[drive].inserted = false;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void lilpc_set_turbo(int on)
+{
+	pc.turbo = on ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int lilpc_get_turbo(void)
+{
+	return pc.turbo;
 }
 #endif
 
