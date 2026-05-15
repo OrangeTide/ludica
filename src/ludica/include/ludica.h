@@ -34,6 +34,7 @@ typedef struct lud_desc {
 	int fullscreen;         /* non-zero = start fullscreen */
 	int resizable;          /* non-zero = allow resize */
 	int gles_version;       /* 2 or 3; 0 defaults to 2 */
+	int capture_keyboard;   /* non-zero = prevent browser from handling any key */
 
 	/* Command-line arguments (desktop only, ignored on WASM).
 	 * Set argc/argv so lud_run() can populate the config store.

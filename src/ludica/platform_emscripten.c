@@ -199,6 +199,9 @@ try_unlock_audio(void)
 static int
 should_prevent_default(enum lud_keycode kc)
 {
+	if (lud__state.desc.capture_keyboard)
+		return 1;
+
 	switch (kc) {
 	case LUD_KEY_TAB:
 	case LUD_KEY_SPACE:
