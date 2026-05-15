@@ -35,6 +35,28 @@ Module['postRun'].push(function() {
     });
   }
 
+  function loadLocalFile(drive, file) {
+    var label = drive === 0 ? 'A' : 'B';
+    var status = document.getElementById('disk-status');
+    if (status) status.textContent = label + ': loading...';
+    var reader = new FileReader();
+    reader.onload = function() {
+      var data = new Uint8Array(reader.result);
+      var ptr = Module._malloc(data.length);
+      Module.HEAPU8.set(data, ptr);
+      var rc = Module.ccall('lilpc_load_disk', 'number',
+        ['number', 'number', 'number'], [drive, ptr, data.length]);
+      Module._free(ptr);
+      if (rc === 0) {
+        if (status) status.textContent = label + ': ' + file.name +
+          ' (' + data.length + ' bytes)';
+      } else {
+        if (status) status.textContent = label + ': load failed';
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
   function makeDriveUI(drive, parentEl) {
     var label = drive === 0 ? 'A:' : 'B:';
     var row = document.createElement('div');
@@ -54,58 +76,32 @@ Module['postRun'].push(function() {
     sel.appendChild(optNone);
     row.appendChild(sel);
 
-    var urlInput = document.createElement('input');
-    urlInput.type = 'text';
-    urlInput.placeholder = 'URL or drop .img';
-    urlInput.style.cssText = 'background:#222;color:#ccc;border:1px solid rgba(255,255,255,0.2);' +
-      'font:13px/1 monospace;padding:4px 6px;border-radius:4px;width:200px;';
-    row.appendChild(urlInput);
+    var fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.img,.ima,.bin,.dsk,.flp';
+    fileInput.style.cssText = 'display:none;';
+    row.appendChild(fileInput);
 
-    var goBtn = document.createElement('button');
-    goBtn.textContent = 'Load';
-    goBtn.style.cssText = 'background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);' +
+    var fileBtn = document.createElement('button');
+    fileBtn.textContent = 'Browse…';
+    fileBtn.style.cssText = 'background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);' +
       'color:#ccc;font:13px/1 monospace;padding:4px 10px;border-radius:4px;cursor:pointer;';
-    row.appendChild(goBtn);
+    row.appendChild(fileBtn);
 
     sel.addEventListener('change', function() {
       if (sel.value) {
-        urlInput.value = sel.value;
         loadDisk(drive, sel.value);
       } else {
         loadDisk(drive, '');
       }
     });
 
-    goBtn.addEventListener('click', function() {
-      var url = urlInput.value.trim();
-      loadDisk(drive, url);
-    });
-
-    /* drag-and-drop local files */
-    urlInput.addEventListener('dragover', function(e) { e.preventDefault(); });
-    urlInput.addEventListener('drop', function(e) {
-      e.preventDefault();
-      var file = e.dataTransfer.files[0];
-      if (!file) return;
-      urlInput.value = file.name;
-      var reader = new FileReader();
-      reader.onload = function() {
-        var data = new Uint8Array(reader.result);
-        var ptr = Module._malloc(data.length);
-        Module.HEAPU8.set(data, ptr);
-        var rc = Module.ccall('lilpc_load_disk', 'number',
-          ['number', 'number', 'number'], [drive, ptr, data.length]);
-        Module._free(ptr);
-        var status = document.getElementById('disk-status');
-        var l = drive === 0 ? 'A' : 'B';
-        if (rc === 0) {
-          if (status) status.textContent = l + ': ' + file.name +
-            ' (' + data.length + ' bytes)';
-        } else {
-          if (status) status.textContent = l + ': load failed';
-        }
-      };
-      reader.readAsArrayBuffer(file);
+    fileBtn.addEventListener('click', function() { fileInput.click(); });
+    fileInput.addEventListener('change', function() {
+      if (fileInput.files.length > 0) {
+        sel.value = '';
+        loadLocalFile(drive, fileInput.files[0]);
+      }
     });
 
     parentEl.appendChild(row);
