@@ -1,4 +1,5 @@
 [
   {"name": "FreeDOS", "url": "disk/demodisk.img"},
-  {"name": "NC", "url": "disk/disknew.img"}
+  {"name": "NC", "url": "disk/disknew.img"},
+  {"name": "games", "url": "disk/games.img"}
 ]
