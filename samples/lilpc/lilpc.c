@@ -327,6 +327,8 @@ int lilpc_init(lilpc_t *lpc, int ram_kb, video_adapter_t adapter,
 		    b->ram[off] == 0xB0 && b->ram[off+1] == 0xA5 &&
 		    b->ram[off+2] == 0xE6 && b->ram[off+3] == 0x61) {
 			b->ram[off+1] = 0xA1;
+			/* fix ROM checksum: 0xA5→0xA1 is -4, add 4 to last byte */
+			b->ram[b->rom_base + b->rom_size - 1] += 4;
 			fprintf(stderr, "lilpc: patched Turbo XT BIOS port 61h init"
 				" (0xA5 -> 0xA1)\n");
 		}
