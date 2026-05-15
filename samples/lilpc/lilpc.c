@@ -314,6 +314,23 @@ int lilpc_init(lilpc_t *lpc, int ram_kb, video_adapter_t adapter,
 		return -1;
 	}
 
+	/* Turbo XT BIOS bug: TURBO_ENABLED writes 0xA5 to port 61h early
+	 * in POST, setting bit 2 (DIP switch bank select) before the switch
+	 * reading code. Both reads of port 62h then return the high bank,
+	 * corrupting the equipment word (bit 0 = 0 → no floppy). Patch the
+	 * immediate operand from 0xA5 to 0xA1 to keep bit 2 clear. */
+	{
+		bus_t *b = &lpc->bus;
+		uint32_t off = b->rom_base + 0x6E;
+		if (b->rom_size >= 0x72 &&
+		    b->ram[off] == 0xB0 && b->ram[off+1] == 0xA5 &&
+		    b->ram[off+2] == 0xE6 && b->ram[off+3] == 0x61) {
+			b->ram[off+1] = 0xA1;
+			fprintf(stderr, "lilpc: patched Turbo XT BIOS port 61h init"
+				" (0xA5 -> 0xA1)\n");
+		}
+	}
+
 	/* load floppy disk images if provided */
 	if (fda_path && fda_path[0]) {
 		if (fdc_load_image(&lpc->fdc, 0, fda_path) != 0)

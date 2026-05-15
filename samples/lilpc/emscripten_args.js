@@ -143,5 +143,13 @@ Module['postRun'].push(function() {
       selA.appendChild(optA.cloneNode(true));
       selB.appendChild(optA);
     });
+    if (disks.length >= 1) {
+      selA.value = disks[0].url;
+      loadDisk(0, disks[0].url);
+    }
+    if (disks.length >= 2) {
+      selB.value = disks[1].url;
+      loadDisk(1, disks[1].url);
+    }
   }).catch(function() {});
 });
