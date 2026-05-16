@@ -569,14 +569,21 @@ static uint16_t snow_rand(uint16_t *state)
 }
 
 /*
- * Render CGA text mode (40x25 or 80x25)
+ * Render CGA text mode.
+ * Standard modes are 40x25 and 80x25, but programs can reprogram CRTC
+ * registers for non-standard layouts such as the 160x100 "pseudo-graphics"
+ * mode (80 cols, 100 rows, 2 scan lines per row, using half-block chars).
  */
 static void render_cga_text(video_t *vid, bus_t *bus)
 {
 	int cols = (vid->mode_ctrl & 0x01) ? 80 : 40;
 	int char_w = (cols == 80) ? 8 : 16; /* 40-col doubles pixel width */
-	int char_h = 8;
-	int rows = 25;
+	int char_h = (vid->crtc.reg[9] & 0x1F) + 1;
+	int rows = vid->crtc.reg[6];
+
+	/* clamp to pixel buffer limits */
+	if (rows * char_h > VIDEO_MAX_H)
+		rows = VIDEO_MAX_H / char_h;
 
 	vid->render_w = cols * char_w;
 	vid->render_h = rows * char_h;
