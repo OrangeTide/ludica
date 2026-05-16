@@ -1175,6 +1175,7 @@ int cpu286_step(lilpc_t *pc)
 		cpu->flags &= ~(FLAG_CF | FLAG_OF);
 		if (result != (int16_t)result)
 			cpu->flags |= FLAG_CF | FLAG_OF;
+		set_szp16(cpu, (uint16_t)result);
 		cycles += 21;
 		break;
 	}
@@ -1187,6 +1188,7 @@ int cpu286_step(lilpc_t *pc)
 		cpu->flags &= ~(FLAG_CF | FLAG_OF);
 		if (result != (int16_t)result)
 			cpu->flags |= FLAG_CF | FLAG_OF;
+		set_szp16(cpu, (uint16_t)result);
 		cycles += 21;
 		break;
 	}
@@ -2065,17 +2067,23 @@ int cpu286_step(lilpc_t *pc)
 		case 4: { /* MUL r/m8 */
 			uint16_t result = (uint16_t)cpu->al * val;
 			cpu->ax = result;
-			cpu->flags &= ~(FLAG_CF | FLAG_OF);
+			cpu->flags &= ~(FLAG_CF | FLAG_OF | FLAG_SF | FLAG_ZF | FLAG_PF);
 			if (cpu->ah) cpu->flags |= FLAG_CF | FLAG_OF;
+			if (result == 0) cpu->flags |= FLAG_ZF;
+			if (result & 0x8000) cpu->flags |= FLAG_SF;
+			if (parity_table[result & 0xFF]) cpu->flags |= FLAG_PF;
 			cycles += 13;
 			break;
 		}
 		case 5: { /* IMUL r/m8 */
 			int16_t result = (int16_t)(int8_t)cpu->al * (int8_t)val;
 			cpu->ax = (uint16_t)result;
-			cpu->flags &= ~(FLAG_CF | FLAG_OF);
+			cpu->flags &= ~(FLAG_CF | FLAG_OF | FLAG_SF | FLAG_ZF | FLAG_PF);
 			if (result != (int8_t)result)
 				cpu->flags |= FLAG_CF | FLAG_OF;
+			if ((uint16_t)result == 0) cpu->flags |= FLAG_ZF;
+			if ((uint16_t)result & 0x8000) cpu->flags |= FLAG_SF;
+			if (parity_table[result & 0xFF]) cpu->flags |= FLAG_PF;
 			cycles += 13;
 			break;
 		}
@@ -2149,8 +2157,11 @@ int cpu286_step(lilpc_t *pc)
 			uint32_t result = (uint32_t)cpu->ax * val;
 			cpu->ax = (uint16_t)result;
 			cpu->dx = (uint16_t)(result >> 16);
-			cpu->flags &= ~(FLAG_CF | FLAG_OF);
+			cpu->flags &= ~(FLAG_CF | FLAG_OF | FLAG_SF | FLAG_ZF | FLAG_PF);
 			if (cpu->dx) cpu->flags |= FLAG_CF | FLAG_OF;
+			if (result == 0) cpu->flags |= FLAG_ZF;
+			if (result & 0x80000000) cpu->flags |= FLAG_SF;
+			if (parity_table[result & 0xFF]) cpu->flags |= FLAG_PF;
 			cycles += 21;
 			break;
 		}
@@ -2158,9 +2169,12 @@ int cpu286_step(lilpc_t *pc)
 			int32_t result = (int32_t)(int16_t)cpu->ax * (int16_t)val;
 			cpu->ax = (uint16_t)result;
 			cpu->dx = (uint16_t)((uint32_t)result >> 16);
-			cpu->flags &= ~(FLAG_CF | FLAG_OF);
+			cpu->flags &= ~(FLAG_CF | FLAG_OF | FLAG_SF | FLAG_ZF | FLAG_PF);
 			if (result != (int16_t)result)
 				cpu->flags |= FLAG_CF | FLAG_OF;
+			if ((uint32_t)result == 0) cpu->flags |= FLAG_ZF;
+			if ((uint32_t)result & 0x80000000) cpu->flags |= FLAG_SF;
+			if (parity_table[result & 0xFF]) cpu->flags |= FLAG_PF;
 			cycles += 21;
 			break;
 		}
