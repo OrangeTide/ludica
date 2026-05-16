@@ -632,12 +632,12 @@ static void render_cga_text(video_t *vid, bus_t *bus)
 
 					if (cols == 40) {
 						int px = col * 16 + x * 2;
-						int py = row * 8 + y;
+						int py = row * char_h + y;
 						vid->pixels[py * vid->render_w + px] = cidx;
 						vid->pixels[py * vid->render_w + px + 1] = cidx;
 					} else {
 						int px = col * 8 + x;
-						int py = row * 8 + y;
+						int py = row * char_h + y;
 						vid->pixels[py * vid->render_w + px] = cidx;
 					}
 				}
@@ -650,12 +650,12 @@ static void render_cga_text(video_t *vid, bus_t *bus)
 					for (int x = 0; x < 8; x++) {
 						if (cols == 40) {
 							int px = col * 16 + x * 2;
-							int py = row * 8 + y;
+							int py = row * char_h + y;
 							vid->pixels[py * vid->render_w + px] = fg;
 							vid->pixels[py * vid->render_w + px + 1] = fg;
 						} else {
 							int px = col * 8 + x;
-							int py = row * 8 + y;
+							int py = row * char_h + y;
 							vid->pixels[py * vid->render_w + px] = fg;
 						}
 					}
