@@ -409,8 +409,8 @@ void lilpc_run_frame(lilpc_t *lpc)
 			break;
 		}
 
-		/* tick PIT periodically (every ~100 CPU cycles to avoid overhead) */
-		if ((lpc->cpu.cycles & 0x3F) == 0) {
+		/* tick PIT periodically (every ~64 CPU cycles to avoid overhead) */
+		if (lpc->cpu.cycles - lpc->pit.last_tick >= 64) {
 			pit_tick(&lpc->pit, lpc, lpc->cpu.cycles);
 			pic_tick(&lpc->pic, lpc);
 		}
