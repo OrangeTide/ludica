@@ -113,6 +113,24 @@ cd win32libs
 _out/x86_64-linux-gnu/bin/hero
 ```
 
+## AI Automation (ludica-mcp)
+
+Ludica games can be observed and controlled by AI agents via a TCP
+launcher daemon and an MCP bridge. Start the launcher before entering
+Claude Code so the bridge tools load on session init:
+
+```sh
+LUDICA_MCP_ALLOWEXEC=$(echo _out/*/bin/* | tr ' ' ':') \
+  _out/x86_64-linux-gnu/bin/ludica-launcher --port=4000 &
+```
+
+Then start Claude Code normally. The MCP bridge (`ludica-mcp-bridge`,
+configured in `.claude/settings.json`) connects to the launcher on
+startup and exposes spawn, screenshot, action, and log tools.
+
+See `doc/manual/ludica-mcp.md` for the full protocol reference and
+the `/ludica-mcp` skill for workflow recipes.
+
 ## Directory layout
 
 - `src/ludica/` -- Core library (platform, shaders, meshes, textures, sprites, fonts)

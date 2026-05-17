@@ -1,0 +1,126 @@
+CGA Compatibility Testing Session Notes
+========================================
+Date: 2025-05-17
+
+Test Program: CGACompatibilityTester by trixter@oldskool.org
+Source: /home/jon/Source/CGACompatibilityTester
+GitHub: https://github.com/MobyGamer/CGACompatibilityTester
+Docs:   /home/jon/Source/CGACompatibilityTester/CGA_COMP.TXT
+
+Setup
+-----
+- CGA_COMP.EXE (90149 bytes) extracted from CGA_COMP.ZIP
+- Copied onto a test disk image at /tmp/cgacompat/testdisk.img
+  (copy of samples/lilpc/disk/demodisk.img with CGA_COMP.EXE added)
+- lilpc runs with: --bios=samples/lilpc/bios/pcxtbios.bin --fda=/tmp/cgacompat/testdisk.img
+- CGA_COMP requires CGA card, 256KB RAM, DOS 3.1+
+
+Batch Mode
+----------
+CGA_COMP supports command-line batch mode for unattended test plates:
+  CGA_COMP /nXX rbars cbars aspect motion audiosync
+  /nXX = delay XX seconds per plate (default 5)
+
+Interactive Mode
+----------------
+Arrow keys + ENTER to navigate menus.
+Menu structure:
+  - Information
+  - CGA Compatibility        > (submenu)
+  - RGBI Compatibility       > (submenu)
+  - Monitor Calibration Plates > (submenu)
+  - Custom Calibration Plates  > (submenu)
+  - Color CGA Speed Benchmark > (submenu)
+  - About This Program
+
+Test Features (from docs):
+  - Adapter memory speed benchmarks (read/write, interleaved/dedicated)
+  - Color Select / Mode Control register tests (border, background, palettes)
+  - Textmode manipulation (40-col, highcolor background, cursor, snow)
+  - Monitor calibration (brightness, contrast, moire, 16 colors)
+  - MC6845 CRTC programming (hretrace, vretrace, row reprogram 80x100,
+    row/col reprogram 90x30, interlaced, sync position, start address)
+
+Batch Test Results
+------------------
+Ran: CGA_COMP /n10 rbars cbars aspect motion
+
+1. RGBI Color Bars (rbars):
+   PASS - Four vertical bars: Red, Green, Blue, White rendered correctly
+   in 320x200 mode 4. Colors are accurate RGBI.
+
+2. Composite Color Bars (cbars):
+   EXPECTED - Shows grayscale vertical bars with moire patterns on RGB
+   output. This is correct; composite artifact colors only appear on
+   composite monitors, not on the RGB output that lilpc emulates.
+
+3. Aspect Ratio Test (aspect):
+   PASS - Indian head test pattern rendered correctly in 640x200
+   high-res mode. Circle geometry looks correct.
+
+4. Motion Test (motion):
+   PASS - "Welcome to medium-res graphics." displayed with diagonal
+   line pattern (cyan on black, 320x200 mode). Horizontal motion bar
+   visible moving across screen. 8-second timed test ran to completion.
+
+All four batch tests ran to completion and exited cleanly back to DOS.
+
+Interactive Mode Issues
+-----------------------
+xdotool keyboard input was unreliable for menu navigation:
+- 'y' key worked to dismiss the disclaimer dialog
+- Arrow keys, Enter, Escape did NOT work for menu navigation
+- Root cause not determined; possibly related to how xdotool synthetic
+  events interact with X11 event delivery, or timing issues with the
+  emulated keyboard controller
+- The ludica-mcp bridge (with action/key injection) should work better
+  since it injects scancodes directly into the emulated keyboard controller
+
+Not Yet Tested
+--------------
+All interactive-only tests still need to be run:
+- CGA Compatibility submenu (CRTC register tests, snow test, etc.)
+- RGBI Compatibility submenu
+- Monitor Calibration Plates
+- Color CGA Speed Benchmark (memory read/write timing)
+- Textmode manipulation (40-col, cursor, blink disable)
+- MC6845 CRTC: horizontal retrace, vertical retrace, row reprogram
+  (80x100, 90x30), interlaced mode, sync position, start address
+
+These tests are the most interesting for validating lilpc's CGA
+emulation accuracy, especially the CRTC register tests.
+
+ludica-mcp Setup
+----------------
+The TCP daemon is ludica-launcher (NOT ludica-mcp). Start it BEFORE
+entering Claude Code so the MCP bridge tools load on session init:
+
+  LUDICA_MCP_ALLOWEXEC=$(echo _out/*/bin/* | tr ' ' ':') \
+    _out/x86_64-linux-gnu/bin/ludica-launcher --port=4000 &
+
+The MCP bridge (ludica-mcp-bridge) is configured in .claude/settings.json
+and connects to the launcher on TCP 4000. Once loaded, tools appear as
+mcp__ludica__spawn, mcp__ludica__screenshot, mcp__ludica__action, etc.
+
+Known issue: if the launcher is not running when the session starts, the
+bridge fails to connect and Claude Code does not retry. The tools will be
+absent for the entire session. Fix: kill the session and restart with the
+launcher already running.
+
+Workflow for interactive testing:
+  1. Use /ludica-mcp skill
+  2. spawn(alias="lilpc", args=["--bios=samples/lilpc/bios/pcxtbios.bin",
+     "--fda=/tmp/cgacompat/testdisk.img"])
+  3. screenshot() to observe CGA_COMP menus
+  4. action() to inject keys for navigation (arrow keys, Enter, Escape)
+  5. Step through each submenu, screenshot results, record PASS/FAIL
+
+The test disk is at /tmp/cgacompat/testdisk.img (may not survive reboot).
+To recreate:
+  mkdir -p /tmp/cgacompat
+  cp samples/lilpc/disk/demodisk.img /tmp/cgacompat/testdisk.img
+  unzip -o /home/jon/Source/CGACompatibilityTester/CGA_COMP.ZIP CGA_COMP.EXE -d /tmp/cgacompat/
+  mcopy -o -i /tmp/cgacompat/testdisk.img /tmp/cgacompat/CGA_COMP.EXE ::
+  printf "@ECHO OFF\r\nCGA_COMP\r\n" | mcopy -o -i /tmp/cgacompat/testdisk.img - ::AUTOEXEC.BAT
+
+Screenshots from this session saved in /tmp/cgacompat/ss_*.png
