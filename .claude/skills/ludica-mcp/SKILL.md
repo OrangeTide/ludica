@@ -7,23 +7,50 @@ description: Observe, control, and debug ludica games through the ludica-mcp lau
 
 You drive ludica games through `ludica-mcp-bridge`, a stdio MCP server
 wired up in `.claude/settings.json`. The bridge talks over TCP to
-`ludica-mcp` — a long-lived launcher the user starts once at the
+`ludica-mcp`, a long-lived launcher the user starts once at the
 beginning of the work session. The launcher owns the game process,
 captures its stdout/stderr, proxies a control fd for input/frame-step,
 and collects crash cores. The full protocol reference is
 `doc/manual/ludica-mcp.md`; this skill is the how-to-drive version.
 
+## Loading the tools
+
+The ludica MCP tools are deferred. Before calling any tool, run:
+
+```
+ToolSearch(query="mcp__ludica", max_results=40)
+```
+
+This loads the full schemas for tools like `mcp__ludica__spawn`,
+`mcp__ludica__screenshot`, etc. Once loaded, call them by their full
+`mcp__ludica__<name>` name. The short names in this document (`spawn`,
+`screenshot`, ...) omit the prefix for readability.
+
+**If ToolSearch returns no ludica tools**, the bridge failed to start.
+Common causes and fixes:
+
+1. **Bridge binary not built** — run `make` and restart Claude Code.
+2. **Launcher not running** — the bridge connects to the launcher on
+   TCP `127.0.0.1:4000`. Ask the user to run `ludica-mcp &`.
+3. **Protocol version mismatch** — the bridge must echo the client's
+   `protocolVersion` in the `initialize` response. If it sends a
+   version newer than what the client supports, Claude Code rejects
+   the MCP server silently. Rebuild the bridge (`make`) and restart.
+
+If tools load but every call returns "not connected to launcher",
+the launcher is not running. Ask the user to start it.
+
 ## Before you start
 
-- The launcher must already be running. If tool calls fail with
-  something like `not_connected`, ask the user to run `ludica-mcp &`.
-  Don't try to spawn it yourself.
+- The launcher must already be running. Don't try to spawn it yourself.
 - `LUDICA_MCP_ALLOWEXEC` on the launcher gates what binaries you can
   spawn. Only aliases in that list work. Typical setup:
   `LUDICA_MCP_ALLOWEXEC=$(echo _out/*/bin/* | tr ' ' ':')` in `.env`.
 - Every bridge process is its own session. When your connection closes
-  the game is killed — call `session_nokill` early if you need it to
+  the game is killed; call `session_nokill` early if you need it to
   survive a reconnect.
+- Never invoke the bridge binary directly via Bash. Always use the MCP
+  tools.
 
 ## Core flow
 
