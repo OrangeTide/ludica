@@ -1202,14 +1202,19 @@ handle_message(const char *json, int len)
 	params_idx = json_obj_find(json, tokens, ntok, 0, "params");
 
 	if (strcmp(method, "initialize") == 0) {
+		char client_ver[32] = "2024-11-05";
+		if (params_idx >= 0)
+			get_arg_str(json, tokens, ntok, params_idx,
+			            "protocolVersion", client_ver,
+			            sizeof(client_ver));
 		snprintf(resp_buf, RESP_MAX_SZ,
 			"{\"jsonrpc\":\"2.0\",\"id\":%s,"
 			"\"result\":{"
-			"\"protocolVersion\":\"2025-03-26\","
+			"\"protocolVersion\":\"%s\","
 			"\"capabilities\":{\"tools\":{}},"
 			"\"serverInfo\":{\"name\":\"ludica-mcp-bridge\","
 			"\"version\":\"1.0.0\"}}}",
-			id_raw);
+			id_raw, client_ver);
 		send_response(resp_buf);
 	} else if (strcmp(method, "notifications/initialized") == 0) {
 		/* no response */
