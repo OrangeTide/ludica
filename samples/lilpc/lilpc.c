@@ -720,7 +720,6 @@ static int on_event(const lud_event_t *ev)
 {
 	switch (ev->type) {
 	case LUD_EV_KEY_DOWN:
-	{
 		/* F11 = reset */
 		if (ev->key.keycode == LUD_KEY_F11) {
 			lilpc_reset(&pc);
@@ -733,19 +732,9 @@ static int on_event(const lud_event_t *ev)
 				(pc.debug & DBG_CPU) ? "ON" : "OFF");
 			return 1;
 		}
-
-		uint8_t sc = keycode_to_scancode(ev->key.keycode);
-		if (sc)
-			kbd_press(&pc.kbd, &pc, sc);
-		return 1;
-	}
+		return 0;
 	case LUD_EV_KEY_UP:
-	{
-		uint8_t sc = keycode_to_scancode(ev->key.keycode);
-		if (sc)
-			kbd_release(&pc.kbd, &pc, sc);
-		return 1;
-	}
+		return 0;
 	default:
 		break;
 	}
