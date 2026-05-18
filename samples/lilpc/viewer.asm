@@ -37,9 +37,9 @@ start:
     mov dx, 0x3D8
     mov al, 0x1A
     out dx, al
-    ; set border to black (BIOS sets 0x3F, border = bits 3:0)
+    ; keep foreground white, clear upper bits (BIOS sets 0x3F)
     inc dx
-    xor al, al
+    mov al, 0x0F
     out dx, al
 %endif
 
