@@ -98,7 +98,7 @@ entering Claude Code so the MCP bridge tools load on session init:
   LUDICA_MCP_ALLOWEXEC=$(echo _out/*/bin/* | tr ' ' ':') \
     _out/x86_64-linux-gnu/bin/ludica-launcher --port=4000 &
 
-The MCP bridge (ludica-mcp-bridge) is configured in .claude/settings.json
+The MCP bridge (ludica-mcp-bridge) is configured in .mcp.json
 and connects to the launcher on TCP 4000. Once loaded, tools appear as
 mcp__ludica__spawn, mcp__ludica__screenshot, mcp__ludica__action, etc.
 

@@ -482,21 +482,23 @@ Variables must remain valid until shutdown. They are read via the
 
 ## MCP Server
 
-The `ludica-mcp` tool bridges MCP JSON-RPC (stdio) to the TCP protocol:
+The `ludica-mcp-bridge` tool bridges MCP JSON-RPC (stdio) to the
+`ludica-launcher` TCP protocol:
 
 ```sh
-ludica-mcp [--port PORT]
+ludica-mcp-bridge [--port PORT]
 ```
 
-It is built by `make` and output to `_out/<triplet>/bin/ludica-mcp`.
-Configure it in Claude Code via `.claude/settings.json`:
+It is built by `make` and output to `_out/<triplet>/bin/ludica-mcp-bridge`.
+Configure it in `.mcp.json` at the project root:
 
 ```json
 {
   "mcpServers": {
     "ludica": {
-      "command": "_out/x86_64-linux-gnu/bin/ludica-mcp",
-      "args": ["--port", "4000"]
+      "type": "stdio",
+      "command": "_out/x86_64-linux-gnu/bin/ludica-mcp-bridge",
+      "env": { "LUDICA_MCP_PORT": "4000" }
     }
   }
 }

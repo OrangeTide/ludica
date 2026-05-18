@@ -85,7 +85,7 @@ session:
                                 |
                                 v
                     +-----------------------------+
-                    |    ludica-mcp launcher      |
+                    |      ludica-launcher        |
                     |   (single process, libiox)  |
                     |                             |
                     |   session A   session B     |
@@ -102,7 +102,7 @@ session:
 
 ### Responsibilities
 
-**Launcher (`ludica-mcp`)**
+**Launcher (`ludica-launcher`)**
 
 - Accepts many TCP connections on `LUDICA_MCP_PORT`. Each connection is
   one session with independent state.
@@ -635,7 +635,8 @@ The user starts the launcher manually, once, at the start of a work
 session:
 
 ```sh
-ludica-mcp &
+LUDICA_MCP_ALLOWEXEC=$(echo _out/*/bin/* | tr ' ' ':') \
+    _out/x86_64-linux-gnu/bin/ludica-launcher --port=4000 &
 ```
 
 `.env` lives in the project root. The launcher reads it from the
@@ -643,13 +644,19 @@ working directory at startup.
 
 ### Connecting Claude Code
 
-`.claude/settings.json` configures the bridge:
+`.mcp.json` (at the project root) configures the bridge:
 
 ```json
 {
   "mcpServers": {
     "ludica": {
-      "command": "_out/x86_64-linux-gnu/bin/ludica-mcp-bridge"
+      "type": "stdio",
+      "command": "_out/x86_64-linux-gnu/bin/ludica-mcp-bridge",
+      "args": [],
+      "env": {
+        "LUDICA_MCP_PORT": "4000",
+        "LUDICA_MCP_ALLOWEXEC": "_out/*/bin/*"
+      }
     }
   }
 }
@@ -662,7 +669,7 @@ asks the user to start it.
 
 ### A typical session
 
-1. User: `ludica-mcp &`
+1. User: `ludica-launcher --port=4000 &`
 2. User: start Claude Code
 3. Agent: `list_actions` — returns empty (no game running yet)
 4. Agent: `spawn hero --fixed-dt --paused` — `OK pid=12345`
@@ -694,8 +701,8 @@ Or, non-interactively:
 Six phases. Each phase is independently useful and independently
 mergeable.
 
-**Phase 1 — Skeleton.** New `tools/ludica-mcp/` (replaces the existing
-library). Vendor `libiox` or add it as a dependency. TCP listen on
+**Phase 1 — Skeleton.** New `tools/ludica-launcher.c` (replaces the
+existing library). Vendor `libiox` or add it as a dependency. TCP listen on
 `LUDICA_MCP_PORT` with multi-client accept, dotenv loader, session
 table, `help`, `ping`, `version`, `session *`. SIGCHLD handler in
 place (no children yet, but wiring the signal early avoids retrofits).
@@ -774,11 +781,8 @@ agent orchestration, not the launcher's.
 
 ## Relation to the Old System
 
-The old `tools/ludica-mcp.c` (MCP JSON-RPC bridge) and
-`src/ludica/automation.c` (in-process TCP server) will both be
-replaced. A short transition period may keep the old MCP tools present
-but marked deprecated in the skill documentation, so existing agent
-sessions don't break.
+The old `tools/ludica-mcp.c` has been removed. `src/ludica/automation.c`
+(in-process TCP server) is replaced by the control-fd protocol.
 
 `automation.md` describes the legacy protocol and will be removed once
 the new system is in use.

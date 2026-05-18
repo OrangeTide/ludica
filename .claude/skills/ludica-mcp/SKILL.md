@@ -1,13 +1,13 @@
 ---
 name: ludica-mcp
-description: Observe, control, and debug ludica games through the ludica-mcp launcher. Use when the user asks you to play a game, test gameplay, reproduce a bug, inspect a crash, automate a UI, or step through frames.
+description: Observe, control, and debug ludica games through the ludica-launcher daemon and ludica-mcp-bridge. Use when the user asks you to play a game, test gameplay, reproduce a bug, inspect a crash, automate a UI, or step through frames.
 ---
 
 # Ludica MCP — Agent Guide
 
 You drive ludica games through `ludica-mcp-bridge`, a stdio MCP server
-wired up in `.claude/settings.json`. The bridge talks over TCP to
-`ludica-mcp`, a long-lived launcher the user starts once at the
+wired up in `.mcp.json`. The bridge talks over TCP to
+`ludica-launcher`, a long-lived launcher daemon the user starts once at the
 beginning of the work session. The launcher owns the game process,
 captures its stdout/stderr, proxies a control fd for input/frame-step,
 and collects crash cores. The full protocol reference is
@@ -31,7 +31,7 @@ Common causes and fixes:
 
 1. **Bridge binary not built** — run `make` and restart Claude Code.
 2. **Launcher not running** — the bridge connects to the launcher on
-   TCP `127.0.0.1:4000`. Ask the user to run `ludica-mcp &`.
+   TCP `127.0.0.1:4000`. Ask the user to run `ludica-launcher &`.
 3. **Protocol version mismatch** — the bridge must echo the client's
    `protocolVersion` in the `initialize` response. If it sends a
    version newer than what the client supports, Claude Code rejects

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "ludica": {
+      "type": "stdio",
+      "command": "_out/x86_64-linux-gnu/bin/ludica-mcp-bridge",
+      "args": [],
+      "env": {
+        "LUDICA_MCP_PORT": "4000",
+        "LUDICA_MCP_ALLOWEXEC": "_out/*/bin/*"
+      }
+    }
+  }
+}

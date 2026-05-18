@@ -125,7 +125,7 @@ LUDICA_MCP_ALLOWEXEC=$(echo _out/*/bin/* | tr ' ' ':') \
 ```
 
 Then start Claude Code normally. The MCP bridge (`ludica-mcp-bridge`,
-configured in `.claude/settings.json`) connects to the launcher on
+configured in `.mcp.json`) connects to the launcher on
 startup and exposes spawn, screenshot, action, and log tools.
 
 See `doc/manual/ludica-mcp.md` for the full protocol reference and

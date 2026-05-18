@@ -185,16 +185,21 @@ lud_auto_register_str("scene", &scene_name);
 
 ## MCP Server
 
-`ludica-mcp` is a standalone bridge program that reads MCP JSON-RPC on
-stdin and translates tool calls into TCP automation commands. It does not
-link against ludica -- it connects over TCP.
+> **Note:** The old `ludica-mcp` bridge has been removed. The current
+> system uses `ludica-launcher` (TCP daemon) and `ludica-mcp-bridge`
+> (stdio MCP JSON-RPC translator). See `ludica-mcp.md` for the current
+> architecture.
+
+`ludica-mcp-bridge` reads MCP JSON-RPC on stdin and translates tool
+calls into TCP commands for `ludica-launcher`. It does not link against
+ludica.
 
 ```
-ludica-mcp [--port PORT]
+ludica-mcp-bridge [--port PORT]
 ```
 
-Default port is 4000. The server implements MCP protocol version
-`2025-03-26` with stdio transport (newline-delimited JSON).
+Default port is 4000 (or set `LUDICA_MCP_PORT`). Configure it in
+`.mcp.json` at the project root.
 
 ### MCP Tools
 

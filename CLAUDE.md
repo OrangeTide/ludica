@@ -144,18 +144,24 @@ Polled: `lud_key_down()`, `lud_mouse_pos()`, `lud_mouse_button_down()`,
 
 ## Automation & MCP
 
+**Never bypass the MCP tool layer.** Do not connect to the launcher
+directly via `nc`, `netcat`, or piping into the bridge binary. Only
+use `mcp__ludica__*` tools. If the tools aren't loading, tell the
+user and stop. Do not attempt workarounds.
+
 Ludica games can be observed and controlled by AI agents via a
-long-lived launcher daemon (`ludica-mcp`) and an MCP stdio bridge
+long-lived launcher daemon (`ludica-launcher`) and an MCP stdio bridge
 (`ludica-mcp-bridge`). Start the launcher once per session:
 
 ```sh
-LUDICA_MCP_ALLOWEXEC=$(echo _out/*/bin/* | tr ' ' ':') ludica-mcp &
+LUDICA_MCP_ALLOWEXEC=$(echo _out/*/bin/* | tr ' ' ':') \
+    _out/x86_64-linux-gnu/bin/ludica-launcher --port=4000 &
 ```
 
 The launcher owns spawned game processes, captures stdout/stderr,
 proxies each game's control fd, and collects crash cores.
 `ludica-mcp-bridge` adapts the launcher's line protocol to MCP
-JSON-RPC on stdio and is pre-configured in `.claude/settings.json`.
+JSON-RPC on stdio and is configured in `.mcp.json`.
 Use the `/ludica-mcp` skill for tool usage and workflow recipes.
 See `doc/manual/ludica-mcp.md` for the full protocol reference.
 
