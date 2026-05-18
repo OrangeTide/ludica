@@ -1271,6 +1271,7 @@ ctl_init_from_argv(void)
 	for (i = 1; i < lud__state.desc.argc; i++) {
 		if (strncmp(lud__state.desc.argv[i], "---controlfd=", 13) == 0) {
 			int fd = atoi(lud__state.desc.argv[i] + 13);
+			lud__args_mark_read(i);
 			if (fd > 0) {
 				int fl = fcntl(fd, F_GETFL);
 				if (fl >= 0)

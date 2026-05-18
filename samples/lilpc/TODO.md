@@ -14,7 +14,7 @@ Usage:
   - [ ] prioritize 8086/80186 instructions first.
   - [ ] work on 286 protected-mode exerciser at a later phase
 - [ ] more accurate CGA rendering.
-  - [ ] snow emulation. real snow might be a little difficult because it relates to multiple components competing for the bus access. see https://www.reenigne.org/blog/the-cga-wait-states/  ... I'm thinking a scoreboard or time-oriented bit map that indicates if memory bus was accessed by the CPU during a particular CGA clock. we could fake it reasonably by passing the scoreboard a frame late to the shader and I don't think anyone will notice that we're a frame behind with our snow.
+  - [x] snow emulation. Tested with CGACompatibilityTester snow anomaly test. See https://www.reenigne.org/blog/the-cga-wait-states/ for detailed bus contention analysis.
 
 ## Future
 

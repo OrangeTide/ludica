@@ -17,7 +17,7 @@
 
 /* ---- Limits ---- */
 
-#define MAX_ACTIONS       64
+#define MAX_ACTIONS       128
 #define MAX_NAME          32
 #define MAX_KEY_BINDINGS  4
 #define MAX_BTN_BINDINGS  4

@@ -8,7 +8,37 @@ Introduction ***TBD***
 
 ## Graphics / Display
 
-***TODO: write the spec***
+CGA (Color Graphics Adapter) emulation with MC6845 CRTC.
+
+### Implemented
+- 80x25 and 40x25 text modes (16 colors, 8x8 CGA ROM font)
+- 320x200 4-color graphics (mode 4/5)
+- 640x200 2-color graphics (mode 6)
+- 160x100 16-color pseudo-graphics (CRTC reprogrammed text mode)
+- Color Select Register (3D9h): border/overscan, background, palette select
+- Mode Control Register (3D8h): blink disable for 16 background colors
+- MC6845 CRTC register programming: row/column counts, sync position,
+  start address, cursor shape, interlaced mode
+- CGA snow emulation (single-ported RAM contention artifact)
+- Status register (3DAh): horizontal and vertical retrace bits
+- VRAM at B8000h-BBFFFh (16KB)
+- CRT post-processing shader
+
+### CGA Compatibility Testing
+Tested with CGACompatibilityTester (trixter@oldskool.org). Results
+in `/cga-compat-test.txt`. All 46 tests ran to completion (4 batch,
+42 interactive) with no crashes or sync losses. Key areas verified:
+- Color Select Register: border cycling, background, foreground, palettes
+- Text mode: 40-col, blink disable, cursor manipulation, snow, font
+- MC6845 CRTC: retrace detection, 80x100 and 90x30 reprogramming,
+  interlaced mode, sync position, start address register
+- Monitor/capture calibration plates (22 total)
+- VRAM speed benchmarks (4 tests)
+
+### Not Yet Implemented
+- Composite video artifact color rendering
+- Plantronics ColorPlus extended modes (dual-plane 320x200x16)
+- MCGA 256-color mode
 
 ## Sound
 

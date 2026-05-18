@@ -18,6 +18,77 @@ static lud_shader_t crt_shader;
 static lud_mesh_t crt_quad;
 static int tex_w, tex_h;
 
+static void dump_textbuf(void);
+
+/* MCP automation key table */
+static struct auto_key {
+	const char *name;
+	enum lud_keycode key;
+	lud_action_t action;
+} auto_keys[] = {
+	{ "escape",    LUD_KEY_ESCAPE },
+	{ "1",         LUD_KEY_1 },     { "2",         LUD_KEY_2 },
+	{ "3",         LUD_KEY_3 },     { "4",         LUD_KEY_4 },
+	{ "5",         LUD_KEY_5 },     { "6",         LUD_KEY_6 },
+	{ "7",         LUD_KEY_7 },     { "8",         LUD_KEY_8 },
+	{ "9",         LUD_KEY_9 },     { "0",         LUD_KEY_0 },
+	{ "minus",     LUD_KEY_MINUS },
+	{ "equal",     LUD_KEY_EQUAL },
+	{ "backspace", LUD_KEY_BACKSPACE },
+	{ "tab",       LUD_KEY_TAB },
+	{ "q", LUD_KEY_Q }, { "w", LUD_KEY_W }, { "e", LUD_KEY_E },
+	{ "r", LUD_KEY_R }, { "t", LUD_KEY_T }, { "y", LUD_KEY_Y },
+	{ "u", LUD_KEY_U }, { "i", LUD_KEY_I }, { "o", LUD_KEY_O },
+	{ "p", LUD_KEY_P },
+	{ "lbracket",  LUD_KEY_LEFT_BRACKET },
+	{ "rbracket",  LUD_KEY_RIGHT_BRACKET },
+	{ "enter",     LUD_KEY_ENTER },
+	{ "lctrl",     LUD_KEY_LEFT_CONTROL },
+	{ "rctrl",     LUD_KEY_RIGHT_CONTROL },
+	{ "a", LUD_KEY_A }, { "s", LUD_KEY_S }, { "d", LUD_KEY_D },
+	{ "f", LUD_KEY_F }, { "g", LUD_KEY_G }, { "h", LUD_KEY_H },
+	{ "j", LUD_KEY_J }, { "k", LUD_KEY_K }, { "l", LUD_KEY_L },
+	{ "semicolon", LUD_KEY_SEMICOLON },
+	{ "apostrophe", LUD_KEY_APOSTROPHE },
+	{ "grave",     LUD_KEY_GRAVE_ACCENT },
+	{ "lshift",    LUD_KEY_LEFT_SHIFT },
+	{ "backslash", LUD_KEY_BACKSLASH },
+	{ "z", LUD_KEY_Z }, { "x", LUD_KEY_X }, { "c", LUD_KEY_C },
+	{ "v", LUD_KEY_V }, { "b", LUD_KEY_B }, { "n", LUD_KEY_N },
+	{ "m", LUD_KEY_M },
+	{ "comma",     LUD_KEY_COMMA },
+	{ "period",    LUD_KEY_PERIOD },
+	{ "slash",     LUD_KEY_SLASH },
+	{ "rshift",    LUD_KEY_RIGHT_SHIFT },
+	{ "kp_mul",    LUD_KEY_KP_MULTIPLY },
+	{ "lalt",      LUD_KEY_LEFT_ALT },
+	{ "ralt",      LUD_KEY_RIGHT_ALT },
+	{ "space",     LUD_KEY_SPACE },
+	{ "capslock",  LUD_KEY_CAPS_LOCK },
+	{ "f1",  LUD_KEY_F1 },  { "f2",  LUD_KEY_F2 },
+	{ "f3",  LUD_KEY_F3 },  { "f4",  LUD_KEY_F4 },
+	{ "f5",  LUD_KEY_F5 },  { "f6",  LUD_KEY_F6 },
+	{ "f7",  LUD_KEY_F7 },  { "f8",  LUD_KEY_F8 },
+	{ "f9",  LUD_KEY_F9 },  { "f10", LUD_KEY_F10 },
+	{ "numlock",   LUD_KEY_NUM_LOCK },
+	{ "scrolllock", LUD_KEY_SCROLL_LOCK },
+	{ "home",      LUD_KEY_HOME },
+	{ "up",        LUD_KEY_UP },
+	{ "pageup",    LUD_KEY_PAGE_UP },
+	{ "kp_sub",    LUD_KEY_KP_SUBTRACT },
+	{ "left",      LUD_KEY_LEFT },
+	{ "kp_5",      LUD_KEY_KP_5 },
+	{ "right",     LUD_KEY_RIGHT },
+	{ "kp_add",    LUD_KEY_KP_ADD },
+	{ "end",       LUD_KEY_END },
+	{ "down",      LUD_KEY_DOWN },
+	{ "pagedown",  LUD_KEY_PAGE_DOWN },
+	{ "insert",    LUD_KEY_INSERT },
+	{ "delete",    LUD_KEY_DELETE },
+};
+#define NUM_AUTO_KEYS ((int)(sizeof(auto_keys) / sizeof(auto_keys[0])))
+static lud_action_t act_dump_text;
+
 /* ======================================================================== */
 /* CRT display shader (GLES3)                                               */
 /* ======================================================================== */
@@ -528,6 +599,13 @@ static void init(void)
 		}
 	}
 
+	/* register keyboard actions for MCP automation */
+	for (int i = 0; i < NUM_AUTO_KEYS; i++) {
+		auto_keys[i].action = lud_make_action(auto_keys[i].name);
+		lud_bind_key(auto_keys[i].key, auto_keys[i].action);
+	}
+	act_dump_text = lud_make_action("dump_text");
+
 	fprintf(stderr, "lilpc: 286 XT emulator started (%d KB RAM, %s)\n",
 		ram, adapter_type == VIDEO_ATI ? "ATI" :
 		adapter_type == VIDEO_HERCULES ? "Hercules" : "CGA");
@@ -536,6 +614,19 @@ static void init(void)
 static void frame(float dt)
 {
 	(void)dt;
+
+	/* poll MCP actions and inject scancodes into the emulated keyboard */
+	for (int i = 0; i < NUM_AUTO_KEYS; i++) {
+		uint8_t sc = keycode_to_scancode(auto_keys[i].key);
+		if (!sc)
+			continue;
+		if (lud_action_pressed(auto_keys[i].action))
+			kbd_press(&pc.kbd, &pc, sc);
+		if (lud_action_released(auto_keys[i].action))
+			kbd_release(&pc.kbd, &pc, sc);
+	}
+	if (lud_action_pressed(act_dump_text))
+		dump_textbuf();
 
 	/* poll debug monitor for commands */
 	bool should_run = debugmon_poll(&pc.debugmon, &pc);
