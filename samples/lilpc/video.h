@@ -83,6 +83,9 @@ typedef struct video {
 
 	/* border color (CGA only): palette index from color_sel bits 3:0 */
 	uint8_t border_color;
+
+	/* composite CGA mode (GPU shader NTSC decode) */
+	int composite;
 } video_t;
 
 void video_init(video_t *vid, struct lilpc *pc, video_adapter_t adapter);

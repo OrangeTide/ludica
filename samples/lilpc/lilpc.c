@@ -18,6 +18,8 @@ static lud_shader_t crt_shader;
 static lud_mesh_t crt_quad;
 static int tex_w, tex_h;
 
+static int composite_mode;
+
 static void dump_textbuf(void);
 
 /* MCP automation key table */
@@ -110,12 +112,20 @@ static const char crt_frag_src[] =
 	"\n"
 	"uniform sampler2D u_screen;\n"
 	"uniform vec4 u_palette[16];\n"
-	"uniform vec2 u_src_size;\n"    /* source texture size (e.g. 640, 200) */
-	"uniform vec2 u_tex_size;\n"    /* allocated texture size (720, 350) */
-	"uniform int u_border_idx;\n"   /* border palette index */
-	"uniform float u_curvature;\n"  /* barrel distortion strength */
+	"uniform vec2 u_src_size;\n"
+	"uniform vec2 u_tex_size;\n"
+	"uniform int u_border_idx;\n"
+	"uniform float u_curvature;\n"
 	"\n"
-	"const float OVERSCAN = 0.92;\n"  /* visible area fraction */
+	/* composite NTSC decode uniforms */
+	"uniform int u_composite;\n"
+	"uniform float u_hue;\n"
+	"uniform float u_saturation;\n"
+	"uniform int u_colorburst;\n"
+	"uniform vec3 u_yiq[16];\n"
+	"\n"
+	"const float OVERSCAN = 0.92;\n"
+	"const float PI = 3.14159265;\n"
 	"\n"
 	"vec2 barrel(vec2 uv, float k) {\n"
 	"    vec2 c = uv - 0.5;\n"
@@ -123,59 +133,105 @@ static const char crt_frag_src[] =
 	"    return uv + c * r2 * k;\n"
 	"}\n"
 	"\n"
-	"vec4 fetch(vec2 uv) {\n"
-	"    /* map from display UV to texture UV (handle sub-allocation) */\n"
+	"float fetch_idx(vec2 uv) {\n"
 	"    vec2 tex_uv = uv * u_src_size / u_tex_size;\n"
-	"    float idx = texture(u_screen, tex_uv).r * 255.0 + 0.5;\n"
+	"    return texture(u_screen, tex_uv).r * 255.0 + 0.5;\n"
+	"}\n"
+	"\n"
+	"vec4 fetch(vec2 uv) {\n"
+	"    float idx = fetch_idx(uv);\n"
 	"    return u_palette[int(idx) & 15];\n"
 	"}\n"
 	"\n"
+	/* NTSC composite decode: generate composite signal from neighboring
+	 * texels, then demodulate Y/I/Q with bandwidth-matched filters.
+	 * Y uses 1 NTSC cycle (4 taps hires, 2 taps lores) so chroma cancels
+	 * but luma stays sharp.  I/Q use the full 8-tap window. */
+	"vec3 composite_decode(vec2 uv) {\n"
+	"    float texel_w = 1.0 / u_src_size.x;\n"
+	"    bool hires = u_src_size.x > 400.0;\n"
+	"    float phase_step = hires ? PI * 0.5 : PI;\n"
+	"    float x_pixel = uv.x * u_src_size.x;\n"
+	"    float base_phase = x_pixel * phase_step + u_hue;\n"
+	"\n"
+	"    float y_acc = 0.0;\n"
+	"    float i_acc = 0.0;\n"
+	"    float q_acc = 0.0;\n"
+	"    for (int i = -3; i <= 4; i++) {\n"
+	"        vec2 tap_uv = vec2(uv.x + float(i) * texel_w, uv.y);\n"
+	"        tap_uv.x = clamp(tap_uv.x, 0.0, 1.0);\n"
+	"        int idx = int(fetch_idx(tap_uv)) & 15;\n"
+	"        vec3 yiq = u_yiq[idx];\n"
+	"        float phase = base_phase + float(i) * phase_step;\n"
+	"        float signal = yiq.x;\n"
+	"        if (u_colorburst != 0)\n"
+	"            signal += yiq.y * cos(phase) + yiq.z * sin(phase);\n"
+	"        if ((hires && i >= -1 && i <= 2) ||\n"
+	"            (!hires && i >= 0 && i <= 1))\n"
+	"            y_acc += signal;\n"
+	"        i_acc += signal * cos(phase);\n"
+	"        q_acc += signal * sin(phase);\n"
+	"    }\n"
+	"    y_acc /= hires ? 4.0 : 2.0;\n"
+	"    i_acc /= 4.0;\n"
+	"    q_acc /= 4.0;\n"
+	"\n"
+	"    if (u_colorburst == 0) {\n"
+	"        i_acc = 0.0;\n"
+	"        q_acc = 0.0;\n"
+	"    }\n"
+	"    i_acc *= u_saturation;\n"
+	"    q_acc *= u_saturation;\n"
+	"\n"
+	"    float r = y_acc + 0.956 * i_acc + 0.621 * q_acc;\n"
+	"    float g = y_acc - 0.272 * i_acc - 0.647 * q_acc;\n"
+	"    float b = y_acc - 1.106 * i_acc + 1.703 * q_acc;\n"
+	"    return clamp(vec3(r, g, b), 0.0, 1.0);\n"
+	"}\n"
+	"\n"
 	"void main() {\n"
-	"    /* barrel distortion */\n"
 	"    vec2 uv = barrel(v_uv, u_curvature);\n"
 	"\n"
-	"    /* outside the curved screen = black (monitor housing) */\n"
 	"    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {\n"
 	"        frag_color = vec4(0.0, 0.0, 0.0, 1.0);\n"
 	"        return;\n"
 	"    }\n"
 	"\n"
-	"    /* overscan: map the visible area to the center portion */\n"
 	"    vec2 os = (uv - 0.5) / OVERSCAN + 0.5;\n"
 	"\n"
-	"    /* outside active area = border color */\n"
 	"    if (os.x < 0.0 || os.x > 1.0 || os.y < 0.0 || os.y > 1.0) {\n"
 	"        frag_color = u_palette[u_border_idx];\n"
-	"        /* apply vignette to border too */\n"
 	"        vec2 vig = uv * (1.0 - uv);\n"
 	"        frag_color.rgb *= clamp(pow(vig.x * vig.y * 15.0, 0.25), 0.0, 1.0);\n"
 	"        frag_color.a = 1.0;\n"
 	"        return;\n"
 	"    }\n"
 	"\n"
-	"    /* scanline phosphor glow.\n"
-	"     * Each source texel maps to ~2 output pixels vertically (200->400).\n"
-	"     * At the center of a source scanline: sharp, no blur.\n"
-	"     * Between scanlines: blend from neighbors with exponential falloff\n"
-	"     * so the glow tapers quickly — phosphor light, not vaseline. */\n"
 	"    float src_y = os.y * u_src_size.y;\n"
 	"    float texel_h = 1.0 / u_src_size.y;\n"
-	"    float frac_y = fract(src_y);  /* 0=scanline center, 0.5=gap */\n"
-	"    float dist = abs(frac_y - 0.5) * 2.0; /* 1=center, 0=gap */\n"
+	"    float frac_y = fract(src_y);\n"
+	"    float dist = abs(frac_y - 0.5) * 2.0;\n"
 	"\n"
-	"    vec4 center = fetch(os);\n"
-	"    /* only blend when away from scanline center */\n"
-	"    float blur_amt = 1.0 - dist * dist; /* quadratic: sharp center */\n"
-	"    vec4 above = fetch(vec2(os.x, clamp(os.y - texel_h, 0.0, 1.0)));\n"
-	"    vec4 below = fetch(vec2(os.x, clamp(os.y + texel_h, 0.0, 1.0)));\n"
-	"    vec4 glow = (above + below) * 0.5;\n"
-	"    vec4 color = mix(center, glow, blur_amt * 0.5);\n"
+	"    vec4 color;\n"
+	"    if (u_composite != 0) {\n"
+	"        vec3 center = composite_decode(os);\n"
+	"        vec3 above = composite_decode(vec2(os.x, clamp(os.y - texel_h, 0.0, 1.0)));\n"
+	"        vec3 below = composite_decode(vec2(os.x, clamp(os.y + texel_h, 0.0, 1.0)));\n"
+	"        float blur_amt = 1.0 - dist * dist;\n"
+	"        vec3 glow = (above + below) * 0.5;\n"
+	"        color = vec4(mix(center, glow, blur_amt * 0.5), 1.0);\n"
+	"    } else {\n"
+	"        vec4 center = fetch(os);\n"
+	"        float blur_amt = 1.0 - dist * dist;\n"
+	"        vec4 above = fetch(vec2(os.x, clamp(os.y - texel_h, 0.0, 1.0)));\n"
+	"        vec4 below = fetch(vec2(os.x, clamp(os.y + texel_h, 0.0, 1.0)));\n"
+	"        vec4 glow = (above + below) * 0.5;\n"
+	"        color = mix(center, glow, blur_amt * 0.5);\n"
+	"    }\n"
 	"\n"
-	"    /* scanline darkening: exponential falloff from center */\n"
 	"    float scanline = 0.42 + 0.58 * dist * dist;\n"
 	"    color.rgb *= scanline;\n"
 	"\n"
-	"    /* vignette */\n"
 	"    vec2 vig = uv * (1.0 - uv);\n"
 	"    float v = clamp(pow(vig.x * vig.y * 15.0, 0.25), 0.0, 1.0);\n"
 	"    color.rgb *= v;\n"
@@ -532,6 +588,19 @@ int lilpc_get_turbo(void)
 {
 	return pc.turbo;
 }
+
+EMSCRIPTEN_KEEPALIVE
+void lilpc_set_composite(int on)
+{
+	composite_mode = on ? 1 : 0;
+	pc.video.composite = composite_mode;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int lilpc_get_composite(void)
+{
+	return composite_mode;
+}
 #endif
 
 /* ======================================================================== */
@@ -605,6 +674,9 @@ static void init(void)
 		lud_bind_key(auto_keys[i].key, auto_keys[i].action);
 	}
 	act_dump_text = lud_make_action("dump_text");
+	lud_auto_register_int("composite", &composite_mode);
+
+	pc.video.composite = composite_mode;
 
 	fprintf(stderr, "lilpc: 286 XT emulator started (%d KB RAM, %s)\n",
 		ram, adapter_type == VIDEO_ATI ? "ATI" :
@@ -707,6 +779,34 @@ static void frame(float dt)
 			pal_uniform[i*4+2], pal_uniform[i*4+3]);
 	}
 
+	/* composite NTSC decode uniforms */
+	lud_uniform_int(crt_shader, "u_composite", composite_mode && !mono);
+	lud_uniform_float(crt_shader, "u_hue", 0.0f);
+	lud_uniform_float(crt_shader, "u_saturation", 1.0f);
+	int colorburst = !(pc.video.mode_ctrl & 0x04);
+	lud_uniform_int(crt_shader, "u_colorburst", colorburst);
+
+	/* precompute YIQ values for all 16 RGBI palette entries.
+	 * RGBI analog levels: normal channel = 2/3, intensity adds 1/3.
+	 * Brown special case: color 6 has G at 1/3 instead of 2/3. */
+	if (composite_mode && !mono) {
+		float yiq[16 * 3];
+		for (int i = 0; i < 16; i++) {
+			float r = pal_uniform[i * 4 + 0];
+			float g = pal_uniform[i * 4 + 1];
+			float b = pal_uniform[i * 4 + 2];
+			yiq[i * 3 + 0] = 0.299f * r + 0.587f * g + 0.114f * b;
+			yiq[i * 3 + 1] = 0.596f * r - 0.275f * g - 0.321f * b;
+			yiq[i * 3 + 2] = 0.212f * r - 0.523f * g + 0.311f * b;
+		}
+		for (int i = 0; i < 16; i++) {
+			char name[16];
+			snprintf(name, sizeof(name), "u_yiq[%d]", i);
+			lud_uniform_vec3(crt_shader, name,
+				yiq[i * 3 + 0], yiq[i * 3 + 1], yiq[i * 3 + 2]);
+		}
+	}
+
 	lud_draw(crt_quad);
 
 	/* drain serial output to stderr (debug console) */
@@ -720,6 +820,14 @@ static int on_event(const lud_event_t *ev)
 {
 	switch (ev->type) {
 	case LUD_EV_KEY_DOWN:
+		/* F10 = toggle composite mode */
+		if (ev->key.keycode == LUD_KEY_F10) {
+			composite_mode = !composite_mode;
+			pc.video.composite = composite_mode;
+			fprintf(stderr, "lilpc: composite %s\n",
+				composite_mode ? "ON" : "OFF");
+			return 1;
+		}
 		/* F11 = reset */
 		if (ev->key.keycode == LUD_KEY_F11) {
 			lilpc_reset(&pc);
@@ -833,6 +941,7 @@ static void usage(const char *prog)
 	fprintf(stderr, "  --fdb=<path>        Floppy drive B image\n");
 	fprintf(stderr, "  --herc              Use Hercules display (default: CGA)\n");
 	fprintf(stderr, "  --ati               Use ATI Graphics Solution (CGA+MDA+HGC+Plantronics)\n");
+	fprintf(stderr, "  --composite         Start with composite CGA display (F10 to toggle)\n");
 	fprintf(stderr, "  --debug=<flags>     Enable debug output (or set LILPC_DEBUG env)\n");
 	fprintf(stderr, "        a=CPU b=FDC c=DMA d=PIC e=PIT f=exit-dump\n");
 	fprintf(stderr, "  --debug-port=<port> TCP debug monitor port\n");
@@ -868,6 +977,8 @@ parse_args(void)
 		if (env)
 			debug_flags = dbg_parse(env);
 	}
+	if (lud_get_config("composite"))
+		composite_mode = 1;
 	if ((val = lud_get_config("debug-port")))
 		debug_port = atoi(val);
 	if (lud_get_config("help")) {
