@@ -1034,8 +1034,8 @@ int main(int argc, char **argv)
 
 	return lud_run(&(lud_desc_t){
 		.app_name = "lilpc",
-		.width = 800,
-		.height = 600,
+		.width = 1280,
+		.height = 960,
 		.gles_version = 3,
 		.capture_keyboard = 1,
 		.resizable = 1,
