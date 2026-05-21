@@ -318,7 +318,7 @@ static void cmd_patch(debugmon_t *dm, lilpc_t *pc, const char *args)
 	}
 
 	if (nibble >= 0) {
-		/* trailing single nibble — treat as 0x_0 */
+		/* trailing single nibble - treat as 0x_0 */
 		bus_write8(&pc->bus, base + count, (uint8_t)(nibble << 4));
 		count++;
 	}
@@ -521,7 +521,7 @@ bool debugmon_poll(debugmon_t *dm, lilpc_t *pc)
 		if (n < 0) {
 			if (errno == EAGAIN || errno == EWOULDBLOCK)
 				break;
-			/* error — disconnect */
+			/* error - disconnect */
 			fprintf(stderr, "debugmon: client disconnected\n");
 			close(dm->client_fd);
 			dm->client_fd = -1;

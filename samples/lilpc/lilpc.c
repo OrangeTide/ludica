@@ -436,6 +436,10 @@ int lilpc_init(lilpc_t *lpc, int ram_kb, video_adapter_t adapter,
 	lpt_init(&lpc->lpt1, lpc, 0x0378, 7);
 	speaker_init(&lpc->speaker);
 
+#ifndef __EMSCRIPTEN__
+	hostfs_init(&lpc->hostfs, lpc);
+#endif
+
 	/* load BIOS ROM */
 	if (bus_load_rom(&lpc->bus, bios_path) != 0) {
 		bus_cleanup(&lpc->bus);
@@ -482,6 +486,9 @@ int lilpc_init(lilpc_t *lpc, int ram_kb, video_adapter_t adapter,
 
 void lilpc_cleanup(lilpc_t *lpc)
 {
+#ifndef __EMSCRIPTEN__
+	hostfs_cleanup(&lpc->hostfs);
+#endif
 	for (int i = 0; i < FDC_MAX_DRIVES; i++)
 		free(lpc->fdc.drive[i].data);
 	bus_cleanup(&lpc->bus);
@@ -610,6 +617,9 @@ int lilpc_get_composite(void)
 static char bios_path[512];
 static char fda_path[512];
 static char fdb_path[512];
+#ifndef __EMSCRIPTEN__
+static char hostdir_path[HOSTFS_MAX_ENDPOINTS][512];
+#endif
 static video_adapter_t adapter_type;
 static uint64_t debug_flags;
 static int debug_port;
@@ -630,6 +640,13 @@ static void init(void)
 		lud_quit();
 		return;
 	}
+
+#ifndef __EMSCRIPTEN__
+	for (int i = 0; i < HOSTFS_MAX_ENDPOINTS; i++) {
+		if (hostdir_path[i][0])
+			hostfs_mount(&pc.hostfs, i, hostdir_path[i]);
+	}
+#endif
 
 	/* create display texture (single-channel palette indices) */
 	video_get_size(&pc.video, &tex_w, &tex_h);
@@ -943,8 +960,12 @@ static void usage(const char *prog)
 	fprintf(stderr, "  --ati               Use ATI Graphics Solution (CGA+MDA+HGC+Plantronics)\n");
 	fprintf(stderr, "  --composite         Start with composite CGA display (F10 to toggle)\n");
 	fprintf(stderr, "  --debug=<flags>     Enable debug output (or set LILPC_DEBUG env)\n");
-	fprintf(stderr, "        a=CPU b=FDC c=DMA d=PIC e=PIT f=exit-dump\n");
+	fprintf(stderr, "        a=CPU b=FDC c=DMA d=PIC e=PIT f=exit-dump g=hostfs\n");
 	fprintf(stderr, "  --debug-port=<port> TCP debug monitor port\n");
+#ifndef __EMSCRIPTEN__
+	fprintf(stderr, "  --hostdir0=<path>   Mount host directory as drive (endpoint 0)\n");
+	fprintf(stderr, "     ... --hostdir15   (up to 16 endpoints)\n");
+#endif
 }
 
 static int
@@ -981,6 +1002,17 @@ parse_args(void)
 		composite_mode = 1;
 	if ((val = lud_get_config("debug-port")))
 		debug_port = atoi(val);
+#ifndef __EMSCRIPTEN__
+	{
+		char key[16];
+		for (int i = 0; i < HOSTFS_MAX_ENDPOINTS; i++) {
+			snprintf(key, sizeof(key), "hostdir%d", i);
+			if ((val = lud_get_config(key)))
+				snprintf(hostdir_path[i], sizeof(hostdir_path[i]),
+					"%s", val);
+		}
+	}
+#endif
 	if (lud_get_config("help")) {
 		usage(lud_get_config("_program"));
 		return -1;

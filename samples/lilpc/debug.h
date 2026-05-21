@@ -18,6 +18,7 @@
 #define DBG_PIC		((uint64_t)1 << 3)	/* 'd' - PIC interrupts */
 #define DBG_PIT		((uint64_t)1 << 4)	/* 'e' - PIT timer */
 #define DBG_EXIT	((uint64_t)1 << 5)	/* 'f' - dump state on exit */
+#define DBG_HOSTFS	((uint64_t)1 << 6)	/* 'g' - host filesystem */
 
 /* convert character to bit position, -1 if invalid */
 static inline int dbg_char_to_bit(char c)

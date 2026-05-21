@@ -835,7 +835,7 @@ static int handle_0f(lilpc_t *pc)
 		return 2;
 	case 0x18: case 0x19: case 0x1A: case 0x1B:
 	case 0x1C: case 0x1D: case 0x1E: case 0x1F:
-		/* PREFETCH/NOP — hint instructions, consume ModR/M and ignore */
+		/* PREFETCH/NOP - hint instructions, consume ModR/M and ignore */
 		decode_modrm(pc);
 		return 3;
 	default: {
@@ -891,6 +891,7 @@ int cpu286_step(lilpc_t *pc)
 			cpu->sp, cpu->bp, cpu->si, cpu->di,
 			cpu->flags);
 	}
+
 
 	/* consume prefixes */
 	cpu->seg_override = SEG_NONE;
@@ -1195,35 +1196,81 @@ int cpu286_step(lilpc_t *pc)
 
 	/* -------- 286: INS/OUTS -------- */
 	case 0x6C: { /* INSB */
-		int seg = eff_seg(cpu, SEG_ES);
-		uint8_t val = bus_io_read8(pc, cpu->dx);
-		write_mem8(pc, seg, cpu->di, val);
-		cpu->di += (cpu->flags & FLAG_DF) ? -1 : 1;
-		cycles += 5;
+		int dir = (cpu->flags & FLAG_DF) ? -1 : 1;
+		if (cpu->rep_mode) {
+			cycles += 5;
+			while (cpu->cx) {
+				uint8_t val = bus_io_read8(pc, cpu->dx);
+				write_mem8(pc, SEG_ES, cpu->di, val);
+				cpu->di += dir;
+				cpu->cx--;
+				cycles += 4;
+			}
+		} else {
+			uint8_t val = bus_io_read8(pc, cpu->dx);
+			write_mem8(pc, SEG_ES, cpu->di, val);
+			cpu->di += dir;
+			cycles += 5;
+		}
 		break;
 	}
 	case 0x6D: { /* INSW */
-		int seg = eff_seg(cpu, SEG_ES);
-		uint16_t val = bus_io_read16(pc, cpu->dx);
-		write_mem16(pc, seg, cpu->di, val);
-		cpu->di += (cpu->flags & FLAG_DF) ? -2 : 2;
-		cycles += 5;
+		int dir = (cpu->flags & FLAG_DF) ? -2 : 2;
+		if (cpu->rep_mode) {
+			cycles += 5;
+			while (cpu->cx) {
+				uint16_t val = bus_io_read16(pc, cpu->dx);
+				write_mem16(pc, SEG_ES, cpu->di, val);
+				cpu->di += dir;
+				cpu->cx--;
+				cycles += 4;
+			}
+		} else {
+			uint16_t val = bus_io_read16(pc, cpu->dx);
+			write_mem16(pc, SEG_ES, cpu->di, val);
+			cpu->di += dir;
+			cycles += 5;
+		}
 		break;
 	}
 	case 0x6E: { /* OUTSB */
-		int seg = eff_seg(cpu, SEG_DS);
-		uint8_t val = read_mem8(pc, seg, cpu->si);
-		bus_io_write8(pc, cpu->dx, val);
-		cpu->si += (cpu->flags & FLAG_DF) ? -1 : 1;
-		cycles += 5;
+		int sseg = eff_seg(cpu, SEG_DS);
+		int dir = (cpu->flags & FLAG_DF) ? -1 : 1;
+		if (cpu->rep_mode) {
+			cycles += 5;
+			while (cpu->cx) {
+				uint8_t val = read_mem8(pc, sseg, cpu->si);
+				bus_io_write8(pc, cpu->dx, val);
+				cpu->si += dir;
+				cpu->cx--;
+				cycles += 4;
+			}
+		} else {
+			uint8_t val = read_mem8(pc, sseg, cpu->si);
+			bus_io_write8(pc, cpu->dx, val);
+			cpu->si += dir;
+			cycles += 5;
+		}
 		break;
 	}
 	case 0x6F: { /* OUTSW */
-		int seg = eff_seg(cpu, SEG_DS);
-		uint16_t val = read_mem16(pc, seg, cpu->si);
-		bus_io_write16(pc, cpu->dx, val);
-		cpu->si += (cpu->flags & FLAG_DF) ? -2 : 2;
-		cycles += 5;
+		int sseg = eff_seg(cpu, SEG_DS);
+		int dir = (cpu->flags & FLAG_DF) ? -2 : 2;
+		if (cpu->rep_mode) {
+			cycles += 5;
+			while (cpu->cx) {
+				uint16_t val = read_mem16(pc, sseg, cpu->si);
+				bus_io_write16(pc, cpu->dx, val);
+				cpu->si += dir;
+				cpu->cx--;
+				cycles += 4;
+			}
+		} else {
+			uint16_t val = read_mem16(pc, sseg, cpu->si);
+			bus_io_write16(pc, cpu->dx, val);
+			cpu->si += dir;
+			cycles += 5;
+		}
 		break;
 	}
 
@@ -1806,12 +1853,10 @@ int cpu286_step(lilpc_t *pc)
 		cpu286_interrupt(pc, 3);
 		cycles += 23;
 		break;
-	case 0xCD: { /* INT imm8 */
-		uint8_t num = fetch_u8(pc);
-		cpu286_interrupt(pc, num);
+	case 0xCD: /* INT imm8 */
+		cpu286_interrupt(pc, fetch_u8(pc));
 		cycles += 23;
 		break;
-	}
 	case 0xCE: /* INTO */
 		if (cpu->flags & FLAG_OF) {
 			cpu286_interrupt(pc, 4);

@@ -476,7 +476,7 @@ static void herc_write(lilpc_t *pc, uint16_t port, uint8_t val)
  * the CPU and the MC6845 CRTC.  When the CPU accesses VRAM during active
  * display (not during retrace), the CRTC's address lines are momentarily
  * corrupted, causing it to fetch the wrong character/attribute pair for
- * one cell.  The result is a brief flash of garbage — "snow."
+ * one cell.  The result is a brief flash of garbage - "snow."
  *
  * We detect these conflicting accesses via the bus write hook and mark
  * which character cell was hit.  During rendering, snowed cells read

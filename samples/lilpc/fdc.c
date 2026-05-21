@@ -332,7 +332,6 @@ static void fdc_start_command(fdc_t *fdc, lilpc_t *pc)
 			xfer = dma_transfer(&pc->dma, pc, 2, fdc->dma_buf,
 				fdc->dma_len, true);
 		}
-
 		/* compute ending sector from actual bytes transferred */
 		end_sector = sector +
 			(xfer + FDC_SECTOR_SIZE - 1) / FDC_SECTOR_SIZE;
