@@ -13,9 +13,7 @@
 #include "speaker.h"
 #include "debugmon.h"
 #include "debug.h"
-#ifndef __EMSCRIPTEN__
 #include "hostfs.h"
-#endif
 
 /* 286 XT clock speed: 6 MHz (some XTs ran 8 MHz turbo) */
 #define LILPC_CLOCK_HZ		6000000
@@ -40,9 +38,7 @@ typedef struct lilpc {
 	lpt_t lpt1;
 	speaker_t speaker;
 
-#ifndef __EMSCRIPTEN__
 	hostfs_t hostfs;
-#endif
 
 	/* configuration */
 	int ram_kb;		/* conventional RAM in KB (default 640) */

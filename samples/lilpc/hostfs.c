@@ -1,6 +1,5 @@
 /* hostfs.c - host filesystem virtual ISA device for lilpc */
 /* Made by a machine. PUBLIC DOMAIN (CC0-1.0) */
-#ifndef __EMSCRIPTEN__
 
 #include "hostfs.h"
 #include "lilpc.h"
@@ -10,7 +9,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#ifndef __EMSCRIPTEN__
 #include <sys/statvfs.h>
+#endif
 #include <errno.h>
 #include <ctype.h>
 #include <time.h>
@@ -1019,17 +1020,25 @@ static void cmd_diskfree(hostfs_t *hfs, lilpc_t *pc)
 		return;
 	}
 
+#ifdef __EMSCRIPTEN__
+	/* MEMFS has no real capacity; report 32 MB with 16 MB free */
+	uint64_t free_bytes = 16ULL * 1024 * 1024;
+	uint64_t total = 32ULL * 1024 * 1024;
+#else
 	struct statvfs sv;
 	if (statvfs(hfs->ep[ep].path, &sv) < 0) {
 		hfs->status = HOSTFS_ERR_DENIED;
 		return;
 	}
 
+	uint64_t free_bytes = (uint64_t)sv.f_bavail * sv.f_bsize;
+	uint64_t total = (uint64_t)sv.f_blocks * sv.f_bsize;
+#endif
+
 	/* report in DOS format:
 	 * pos = free bytes (clamped to 32-bit)
 	 * param low = sectors per cluster
 	 * param high = bytes per sector */
-	uint64_t free_bytes = (uint64_t)sv.f_bavail * sv.f_bsize;
 	if (free_bytes > 0xFFFFFFFFULL)
 		free_bytes = 0xFFFFFFFFULL;
 	hfs->pos = (uint32_t)free_bytes;
@@ -1039,7 +1048,6 @@ static void cmd_diskfree(hostfs_t *hfs, lilpc_t *pc)
 	hfs->param = 64 | ((512 / 16) << 8);
 
 	/* total clusters in len register, free clusters in xfer */
-	uint64_t total = (uint64_t)sv.f_blocks * sv.f_bsize;
 	if (total > 0xFFFFFFFFULL)
 		total = 0xFFFFFFFFULL;
 	uint32_t total_clust = (uint32_t)(total / (64 * 512));
@@ -1331,4 +1339,3 @@ void hostfs_mount(hostfs_t *hfs, int ep, const char *path)
 	fprintf(stderr, "hostfs: endpoint %d -> %s\n", ep, hfs->ep[ep].path);
 }
 
-#endif /* !__EMSCRIPTEN__ */
