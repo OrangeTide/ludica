@@ -686,15 +686,17 @@ static void render_cga_320(video_t *vid, bus_t *bus)
 			pal[i] += 8;
 	}
 
+	/* CRTC start address (word units); display scrolls/page-flips with it */
+	uint16_t start_addr = ((uint16_t)vid->crtc.reg[12] << 8) | vid->crtc.reg[13];
+
 	for (int y = 0; y < 200; y++) {
-		/* CGA interleaves even/odd scanlines at different offsets */
-		uint32_t row_addr = CGA_VRAM_BASE;
-		if (y & 1)
-			row_addr += 0x2000;
-		row_addr += (y >> 1) * 80;
+		/* CGA interleaves even/odd scanlines at different banks */
+		uint32_t bank = (y & 1) ? 0x2000 : 0;
+		uint32_t line = (uint32_t)start_addr * 2 + (y >> 1) * 80;
 
 		for (int x = 0; x < 320; x += 4) {
-			uint8_t byte = bus_read8(bus, row_addr + (x >> 2));
+			uint32_t off = (line + (x >> 2)) & 0x1FFF;
+			uint8_t byte = bus_read8(bus, CGA_VRAM_BASE + bank + off);
 			for (int px = 0; px < 4; px++) {
 				int cidx = (byte >> (6 - px * 2)) & 3;
 				vid->pixels[y * 320 + x + px] = pal[cidx];
@@ -714,14 +716,16 @@ static void render_cga_640(video_t *vid, bus_t *bus)
 	uint8_t fg = vid->color_sel & 0x0F;
 	uint8_t bg = 0;
 
+	/* CRTC start address (word units); display scrolls/page-flips with it */
+	uint16_t start_addr = ((uint16_t)vid->crtc.reg[12] << 8) | vid->crtc.reg[13];
+
 	for (int y = 0; y < 200; y++) {
-		uint32_t row_addr = CGA_VRAM_BASE;
-		if (y & 1)
-			row_addr += 0x2000;
-		row_addr += (y >> 1) * 80;
+		uint32_t bank = (y & 1) ? 0x2000 : 0;
+		uint32_t line = (uint32_t)start_addr * 2 + (y >> 1) * 80;
 
 		for (int x = 0; x < 640; x += 8) {
-			uint8_t byte = bus_read8(bus, row_addr + (x >> 3));
+			uint32_t off = (line + (x >> 3)) & 0x1FFF;
+			uint8_t byte = bus_read8(bus, CGA_VRAM_BASE + bank + off);
 			for (int px = 0; px < 8; px++) {
 				vid->pixels[y * 640 + x + px] =
 					(byte & (0x80 >> px)) ? fg : bg;
