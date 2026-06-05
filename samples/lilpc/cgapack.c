@@ -25,65 +25,39 @@ static const int pal4[4][3] = {
     {255, 255, 255},
 };
 
-/* NTSC YIQ matrix for composite artifact color computation */
-static void rgb_to_yiq(double r, double g, double b, double *y, double *i, double *q)
+/* NTSC composite decode of mode 6 monochrome bits, matching the display
+ * shader (lilpc.c composite_decode): on-pixel = white (signal 1), off = black.
+ * Luma is averaged over a 4-tap window so it stays sharp; I/Q over the full
+ * 8-tap window so chroma is recovered. Phase advances PI/2 per hires pixel,
+ * so cos/sin only ever take the values {1,0,-1,0} / {0,1,0,-1} by (pixel & 3).
+ * Result is linear RGB in 0..1 (may fall slightly outside; caller clamps).
+ *
+ * Phase here is integer pixel phase. The display shader samples at texel
+ * centres, so its decoded hues sit ~45 degrees rotated from this; that tint
+ * is left as-is (shader u_hue == 0). Align both phases before touching it. */
+static void decode_pixel(const uint8_t *bits, int n, int p,
+                         double *r, double *g, double *b)
 {
-    *y = 0.299 * r + 0.587 * g + 0.114 * b;
-    *i = 0.5957 * r - 0.2745 * g - 0.3213 * b;
-    *q = 0.2115 * r - 0.5226 * g + 0.3112 * b;
-}
+    static const double CO[4] = { 1.0, 0.0, -1.0, 0.0 };
+    static const double SI[4] = { 0.0, 1.0, 0.0, -1.0 };
+    double y = 0.0, i = 0.0, q = 0.0;
 
-static void yiq_to_rgb(double y, double i, double q, int *r, int *g, int *b)
-{
-    double rr = y + 0.9563 * i + 0.6210 * q;
-    double gg = y - 0.2721 * i - 0.6474 * q;
-    double bb = y - 1.1070 * i + 1.7046 * q;
-    *r = (int)(fmin(fmax(rr, 0.0), 255.0) + 0.5);
-    *g = (int)(fmin(fmax(gg, 0.0), 255.0) + 0.5);
-    *b = (int)(fmin(fmax(bb, 0.0), 255.0) + 0.5);
-}
-
-/* CGA RGBI palette for generating composite signal */
-static const int cga_rgbi[16][3] = {
-    {  0,   0,   0}, {  0,   0, 170}, {  0, 170,   0}, {  0, 170, 170},
-    {170,   0,   0}, {170,   0, 170}, {170,  85,   0}, {170, 170, 170},
-    { 85,  85,  85}, { 85,  85, 255}, { 85, 255,  85}, { 85, 255, 255},
-    {255,  85,  85}, {255,  85, 255}, {255, 255,  85}, {255, 255, 255},
-};
-
-static int artifact_colors[16][3];
-
-static void compute_artifact_colors(void)
-{
-    /* In mode 6 (640x200 1bpp), the CGA generates a monochrome signal
-     * using RGBI color 15 (white) for on-pixels and 0 (black) for off.
-     * Each group of 4 pixels at the colorburst frequency produces a
-     * composite color. The 4-bit pattern indexes into 16 artifact colors. */
-    double pi = 3.14159265358979323846;
-
-    for (int pat = 0; pat < 16; pat++) {
-        double y_acc = 0, i_acc = 0, q_acc = 0;
-        /* simulate 4 pixels of the pattern, repeated over an 8-pixel window */
-        for (int tap = -3; tap <= 4; tap++) {
-            int bit = (pat >> (3 - (tap & 3))) & 1;
-            double luma = bit ? 255.0 : 0.0;
-            double phase = tap * pi * 0.5;
-            double signal = luma;
-            /* Y: narrow filter (1 NTSC cycle = 4 pixels at hires) */
-            if (tap >= -1 && tap <= 2)
-                y_acc += signal;
-            /* I/Q: full 8-tap window */
-            i_acc += signal * cos(phase);
-            q_acc += signal * sin(phase);
-        }
-        y_acc /= 4.0;
-        i_acc /= 4.0;
-        q_acc /= 4.0;
-        yiq_to_rgb(y_acc, i_acc, q_acc,
-                    &artifact_colors[pat][0],
-                    &artifact_colors[pat][1],
-                    &artifact_colors[pat][2]);
+    for (int t = -3; t <= 4; t++) {
+        int idx = p + t;
+        int s = (idx >= 0 && idx < n) ? bits[idx] : 0;
+        int m = idx & 3;
+        if (t >= -1 && t <= 2)
+            y += s;
+        i += s * CO[m];
+        q += s * SI[m];
     }
+    y /= 4.0;
+    i /= 4.0;
+    q /= 4.0;
+
+    *r = y + 0.956 * i + 0.621 * q;
+    *g = y - 0.272 * i - 0.647 * q;
+    *b = y - 1.106 * i + 1.703 * q;
 }
 
 static int nearest_pal4(int r, int g, int b)
@@ -94,23 +68,6 @@ static int nearest_pal4(int r, int g, int b)
         int dr = r - pal4[i][0];
         int dg = g - pal4[i][1];
         int db = b - pal4[i][2];
-        int d = dr * dr + dg * dg + db * db;
-        if (d < best_dist) {
-            best_dist = d;
-            best = i;
-        }
-    }
-    return best;
-}
-
-static int nearest_artifact(int r, int g, int b)
-{
-    int best = 0;
-    int best_dist = INT_MAX;
-    for (int i = 0; i < 16; i++) {
-        int dr = r - artifact_colors[i][0];
-        int dg = g - artifact_colors[i][1];
-        int db = b - artifact_colors[i][2];
         int d = dr * dr + dg * dg + db * db;
         if (d < best_dist) {
             best_dist = d;
@@ -192,57 +149,104 @@ static void convert_mode4(const uint8_t *img, int w, int h, uint8_t *vram)
 
 static void convert_mode6(const uint8_t *img, int w, int h, uint8_t *vram)
 {
-    /* Floyd-Steinberg dithering to 16 artifact colors.
-     * Source is 320 wide; each source pixel becomes a 4-bit pattern
-     * in the 640-wide framebuffer. */
-    float *err = calloc((size_t)w * h * 3, sizeof(float));
+    /* Mode 6 is 640x200, 1 bit per pixel. On a composite monitor each run of
+     * pixels at the colorburst frequency blends into one of 16 artifact
+     * colors: ~160 color cells horizontally, but full 640-wide luma detail.
+     *
+     * Rather than stamp fixed 4-bit patterns (which ignores how neighbouring
+     * bits bleed together in the decoder, and biases the picture toward white),
+     * choose the 640 on/off bits per scanline so that the same NTSC decode the
+     * display performs reproduces the target color. Each bit is picked to
+     * minimise the decoded error over the pixels its 8-tap window touches, and
+     * the residual is error-diffused so average brightness and hue track the
+     * source instead of washing out. */
+    const int W = 640;
+
+    float *rowerr = calloc((size_t)W * 3, sizeof(float));   /* error from above */
+    float *nexterr = calloc((size_t)W * 3, sizeof(float));  /* error to below */
+    uint8_t *bits = calloc((size_t)W, 1);
+    double *tr = malloc(sizeof(double) * W);
+    double *tg = malloc(sizeof(double) * W);
+    double *tb = malloc(sizeof(double) * W);
 
     for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-            int idx = (y * w + x) * 3;
-            float r = img[idx + 0] + err[idx + 0];
-            float g = img[idx + 1] + err[idx + 1];
-            float b = img[idx + 2] + err[idx + 2];
-            int cr = (int)(fminf(fmaxf(r, 0), 255) + 0.5f);
-            int cg = (int)(fminf(fmaxf(g, 0), 255) + 0.5f);
-            int cb = (int)(fminf(fmaxf(b, 0), 255) + 0.5f);
+        /* target row in 0..1, source upsampled 320->640, plus diffused error */
+        for (int p = 0; p < W; p++) {
+            int sx = p * w / W;
+            int idx = (y * w + sx) * 3;
+            tr[p] = img[idx + 0] / 255.0 + rowerr[p * 3 + 0];
+            tg[p] = img[idx + 1] / 255.0 + rowerr[p * 3 + 1];
+            tb[p] = img[idx + 2] / 255.0 + rowerr[p * 3 + 2];
+        }
 
-            int ci = nearest_artifact(cr, cg, cb);
-
-            /* write 4 bits of the pattern into the 640-wide framebuffer */
-            for (int bit = 0; bit < 4; bit++) {
-                int pixel_val = (ci >> (3 - bit)) & 1;
-                vram_put(vram, x * 4 + bit, y, 1, pixel_val);
-            }
-
-            float er = r - artifact_colors[ci][0];
-            float eg = g - artifact_colors[ci][1];
-            float eb = b - artifact_colors[ci][2];
-
-            if (x + 1 < w) {
-                err[idx + 3] += er * 7.0f / 16.0f;
-                err[idx + 4] += eg * 7.0f / 16.0f;
-                err[idx + 5] += eb * 7.0f / 16.0f;
-            }
-            if (y + 1 < h) {
-                int below = ((y + 1) * w + x) * 3;
-                if (x > 0) {
-                    err[below - 3] += er * 3.0f / 16.0f;
-                    err[below - 2] += eg * 3.0f / 16.0f;
-                    err[below - 1] += eb * 3.0f / 16.0f;
+        /* seed from a luma threshold so the symmetric decode sees plausible
+         * neighbours, then refine each bit against the real decode */
+        for (int p = 0; p < W; p++) {
+            double luma = 0.299 * tr[p] + 0.587 * tg[p] + 0.114 * tb[p];
+            bits[p] = luma > 0.5 ? 1 : 0;
+        }
+        for (int pass = 0; pass < 2; pass++) {
+            for (int p = 0; p < W; p++) {
+                double best = 1e30;
+                int bestv = 0;
+                for (int v = 0; v <= 1; v++) {
+                    bits[p] = (uint8_t)v;
+                    double e = 0.0;
+                    /* pixels whose 8-tap window includes p: p-4 .. p+3 */
+                    for (int k = p - 4; k <= p + 3; k++) {
+                        if (k < 0 || k >= W)
+                            continue;
+                        double r, g, b;
+                        decode_pixel(bits, W, k, &r, &g, &b);
+                        double dr = r - tr[k], dg = g - tg[k], db = b - tb[k];
+                        e += dr * dr + dg * dg + db * db;
+                    }
+                    if (e < best) {
+                        best = e;
+                        bestv = v;
+                    }
                 }
-                err[below + 0] += er * 5.0f / 16.0f;
-                err[below + 1] += eg * 5.0f / 16.0f;
-                err[below + 2] += eb * 5.0f / 16.0f;
-                if (x + 1 < w) {
-                    err[below + 3] += er * 1.0f / 16.0f;
-                    err[below + 4] += eg * 1.0f / 16.0f;
-                    err[below + 5] += eb * 1.0f / 16.0f;
-                }
+                bits[p] = (uint8_t)bestv;
             }
         }
+
+        /* commit to interleaved VRAM and diffuse the residual downward */
+        memset(nexterr, 0, (size_t)W * 3 * sizeof(float));
+        for (int p = 0; p < W; p++) {
+            vram_put(vram, p, y, 1, bits[p]);
+
+            double r, g, b;
+            decode_pixel(bits, W, p, &r, &g, &b);
+            float er = (float)(tr[p] - r);
+            float eg = (float)(tg[p] - g);
+            float eb = (float)(tb[p] - b);
+
+            if (p > 0) {
+                nexterr[(p - 1) * 3 + 0] += er * 3.0f / 16.0f;
+                nexterr[(p - 1) * 3 + 1] += eg * 3.0f / 16.0f;
+                nexterr[(p - 1) * 3 + 2] += eb * 3.0f / 16.0f;
+            }
+            nexterr[p * 3 + 0] += er * 5.0f / 16.0f;
+            nexterr[p * 3 + 1] += eg * 5.0f / 16.0f;
+            nexterr[p * 3 + 2] += eb * 5.0f / 16.0f;
+            if (p + 1 < W) {
+                nexterr[(p + 1) * 3 + 0] += er * 1.0f / 16.0f;
+                nexterr[(p + 1) * 3 + 1] += eg * 1.0f / 16.0f;
+                nexterr[(p + 1) * 3 + 2] += eb * 1.0f / 16.0f;
+            }
+        }
+
+        float *tmp = rowerr;
+        rowerr = nexterr;
+        nexterr = tmp;
     }
-    free(err);
+
+    free(rowerr);
+    free(nexterr);
+    free(bits);
+    free(tr);
+    free(tg);
+    free(tb);
 }
 
 int main(int argc, char **argv)
@@ -276,7 +280,6 @@ int main(int argc, char **argv)
     memset(vram, 0, sizeof(vram));
 
     if (mode6) {
-        compute_artifact_colors();
         convert_mode6(img, w, h, vram);
     } else {
         convert_mode4(img, w, h, vram);

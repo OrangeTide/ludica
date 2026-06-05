@@ -788,7 +788,12 @@ static void frame(float dt)
 			pal_uniform[i*4+2], pal_uniform[i*4+3]);
 	}
 
-	/* composite NTSC decode uniforms */
+	/* composite NTSC decode uniforms.
+	 * u_hue stays 0: the shader samples at texel centres (phase carries a
+	 * half-pixel offset) while cgapack encodes against integer pixel phase,
+	 * so decoded hues sit ~45 degrees rotated from the encoder's intent.
+	 * The current tint reads fine, so we leave it; bump u_hue if a future
+	 * encoder aligns to texel centres and the rotation needs cancelling. */
 	lud_uniform_int(crt_shader, "u_composite", composite_mode && !mono);
 	lud_uniform_float(crt_shader, "u_hue", 0.0f);
 	lud_uniform_float(crt_shader, "u_saturation", 1.0f);
