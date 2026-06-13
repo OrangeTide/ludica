@@ -163,13 +163,16 @@ a non-indexed mesh to indexed.
 ### 2c. Instanced Drawing (GLES3)
 
 **Priority: MEDIUM** -- useful for Phase 3 kit decorations.
+**DONE** -- `lud_draw_instanced`; GLES2 logs once and no-ops.
 
 ```c
 void lud_draw_instanced(lud_mesh_t mesh, int instance_count);
 ```
 
-Same mesh drawn many times with per-instance transforms (decoration
-kit pieces).
+Same mesh drawn many times; the shader varies each copy via
+`gl_InstanceID` (e.g. indexing a uniform array of transforms for
+decoration kit pieces). A per-instance attribute stream (via
+`glVertexAttribDivisor`) can be layered on later if needed.
 
 ### 2d. Deferred Resource Destruction
 
@@ -244,7 +247,7 @@ These are game-specific or engine-specific and don't belong in ludica:
 | Texture arrays       | HIGH     | Gen2 Phase 1     | ~150L | DONE   |
 | Arena allocator      | HIGH     | Jobs, procgen    | ~100L | DONE   |
 | Mesh update          | MEDIUM   | Gen2 Phase 4     | ~50L  | DONE   |
-| Instanced drawing    | MEDIUM   | Gen2 Phase 3     | ~50L  | next   |
+| Instanced drawing    | MEDIUM   | Gen2 Phase 3     | ~50L  | DONE   |
 | Deferred destruction | MEDIUM   | Safe streaming   | ~80L  | next   |
 | Frustum utilities    | MEDIUM   | Gen2 Phase 2     | ~80L  | todo   |
 | Job system           | HIGH     | Streaming, async | ~500L | later  |

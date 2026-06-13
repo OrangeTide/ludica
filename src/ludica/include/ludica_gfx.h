@@ -201,6 +201,12 @@ void lud_update_texture(lud_texture_t tex, int x, int y, int w, int h,
 void lud_draw(lud_mesh_t mesh);
 void lud_draw_range(lud_mesh_t mesh, int first, int count);
 
+/* Draw the whole mesh `instance_count` times in one call (GLES3 only).
+ * The vertex shader varies each instance via gl_InstanceID (e.g. indexing
+ * a uniform array of transforms). On a GLES2 context this logs once and
+ * does nothing. */
+void lud_draw_instanced(lud_mesh_t mesh, int instance_count);
+
 /* --- Texture queries --- */
 
 int lud_texture_width(lud_texture_t tex);

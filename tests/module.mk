@@ -30,3 +30,14 @@ define arena_test_TESTCMD
 $(arena_test_EXEC)
 endef
 TEST_TARGETS += arena_test
+
+EXECUTABLES += instanced_test
+instanced_test_DIR  := $(dir $(lastword $(MAKEFILE_LIST)))
+instanced_test_SRCS  = instanced_test.c
+instanced_test_LIBS  = ludica
+
+# Needs an X11 display; run under xvfb-run on a headless box.
+define instanced_test_TESTCMD
+$(instanced_test_EXEC)
+endef
+TEST_TARGETS += instanced_test

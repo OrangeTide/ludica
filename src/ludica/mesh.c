@@ -3,6 +3,17 @@
 #include <GLES2/gl2.h>
 #include <string.h>
 
+/* Instanced-draw entry points are GLES3 core; declare them here so this
+ * GLES2-default unit can call them when a GLES3 context is active. */
+#ifndef glDrawArraysInstanced
+extern void glDrawArraysInstanced(GLenum mode, GLint first, GLsizei count,
+                                  GLsizei instancecount);
+#endif
+#ifndef glDrawElementsInstanced
+extern void glDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
+                                    const void *indices, GLsizei instancecount);
+#endif
+
 #define MAX_MESHES 64
 
 typedef struct {
@@ -194,8 +205,10 @@ lud_update_mesh_indices(lud_mesh_t mesh, int first_index, int index_count,
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 }
 
+/* Draw the mesh once (instances == 0) or instances>0 times via the GLES3
+ * instanced entry points. The shader varies instances by gl_InstanceID. */
 static void
-bind_and_draw(mesh_slot_t *s, int first, int count)
+bind_and_draw(mesh_slot_t *s, int first, int count, int instances)
 {
 	int i;
 
@@ -210,13 +223,20 @@ bind_and_draw(mesh_slot_t *s, int first, int count)
 
 	if (s->index_count > 0 && s->ibo) {
 		int n = count > 0 ? count : s->index_count;
+		const void *ofs = (const void *)(long)(first * (int)sizeof(unsigned short));
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s->ibo);
-		glDrawElements(s->primitive, n, GL_UNSIGNED_SHORT,
-		               (const void *)(long)(first * (int)sizeof(unsigned short)));
+		if (instances > 0)
+			glDrawElementsInstanced(s->primitive, n, GL_UNSIGNED_SHORT,
+			                        ofs, instances);
+		else
+			glDrawElements(s->primitive, n, GL_UNSIGNED_SHORT, ofs);
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 	} else {
 		int n = count > 0 ? count : s->vertex_count;
-		glDrawArrays(s->primitive, first, n);
+		if (instances > 0)
+			glDrawArraysInstanced(s->primitive, first, n, instances);
+		else
+			glDrawArrays(s->primitive, first, n);
 	}
 
 	for (i = 0; i < s->num_attrs; i++)
@@ -230,7 +250,7 @@ lud_draw(lud_mesh_t mesh)
 {
 	mesh_slot_t *s = get_slot(mesh);
 	if (!s) return;
-	bind_and_draw(s, 0, 0);
+	bind_and_draw(s, 0, 0, 0);
 }
 
 void
@@ -238,5 +258,23 @@ lud_draw_range(lud_mesh_t mesh, int first, int count)
 {
 	mesh_slot_t *s = get_slot(mesh);
 	if (!s) return;
-	bind_and_draw(s, first, count);
+	bind_and_draw(s, first, count, 0);
+}
+
+void
+lud_draw_instanced(lud_mesh_t mesh, int instance_count)
+{
+	static int warned;
+	mesh_slot_t *s = get_slot(mesh);
+
+	if (!s || instance_count <= 0)
+		return;
+	if (lud__state.gles_version < 3) {
+		if (!warned) {
+			lud_err("lud_draw_instanced requires GLES3; ignored");
+			warned = 1;
+		}
+		return;
+	}
+	bind_and_draw(s, 0, 0, instance_count);
 }

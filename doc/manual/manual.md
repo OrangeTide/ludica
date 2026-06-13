@@ -153,6 +153,18 @@ count grows to cover the highest element written but never shrinks, so
 use `lud_draw_range` to draw fewer. `lud_update_mesh_indices` can also
 promote a non-indexed mesh to indexed.
 
+On a GLES3 context a mesh can be drawn many times in a single call:
+
+```c
+lud_draw_instanced(mesh, instance_count);  /* GLES3 only */
+```
+
+The vertex shader distinguishes instances with the built-in
+`gl_InstanceID` (for example, indexing a uniform array of transforms),
+which is how decoration kits and other repeated geometry avoid one draw
+call per copy. On a GLES2 context this logs a warning once and draws
+nothing.
+
 ### Render State
 
 For 3D drawing, control depth testing and face culling through ludica
