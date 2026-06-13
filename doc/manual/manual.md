@@ -138,6 +138,21 @@ lud_draw(mesh);
 lud_draw_range(mesh, first, count);
 ```
 
+A mesh created with `LUD_USAGE_DYNAMIC` or `LUD_USAGE_STREAM` can be
+rewritten in place rather than destroyed and recreated each frame:
+
+```c
+lud_update_mesh(mesh, 0, n, verts);            /* replace vertex data */
+lud_update_mesh_indices(mesh, 0, n, indices);  /* replace uint16 indices */
+```
+
+Updates that fit the current allocation patch it directly; an update
+extending past the end grows the buffer (a growing update replaces the
+whole buffer, so data before `first_*` becomes undefined). The draw
+count grows to cover the highest element written but never shrinks, so
+use `lud_draw_range` to draw fewer. `lud_update_mesh_indices` can also
+promote a non-indexed mesh to indexed.
+
 ### Render State
 
 For 3D drawing, control depth testing and face culling through ludica

@@ -8,3 +8,14 @@ define renderstate_test_TESTCMD
 $(renderstate_test_EXEC)
 endef
 TEST_TARGETS += renderstate_test
+
+EXECUTABLES += meshupdate_test
+meshupdate_test_DIR  := $(dir $(lastword $(MAKEFILE_LIST)))
+meshupdate_test_SRCS  = meshupdate_test.c
+meshupdate_test_LIBS  = ludica
+
+# Needs an X11 display; run under xvfb-run on a headless box.
+define meshupdate_test_TESTCMD
+$(meshupdate_test_EXEC)
+endef
+TEST_TARGETS += meshupdate_test

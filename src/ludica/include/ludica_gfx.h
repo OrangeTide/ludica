@@ -122,6 +122,19 @@ void             lud_destroy_shader(lud_shader_t shd);
 lud_mesh_t    lud_make_mesh(const lud_mesh_desc_t *desc);
 void             lud_destroy_mesh(lud_mesh_t mesh);
 
+/* Update mesh data in place; the mesh should be created with
+ * LUD_USAGE_DYNAMIC or LUD_USAGE_STREAM. Writes `*_count` elements starting
+ * at `first_*` into the existing buffer. If the write extends past the
+ * current allocation the buffer grows (reallocates): a growing update
+ * replaces the whole buffer, so data before `first_*` becomes undefined.
+ * lud_draw's element count grows to cover the highest index written but
+ * never shrinks; use lud_draw_range to draw fewer. lud_update_mesh_indices
+ * can also promote a non-indexed mesh to indexed. Indices are uint16. */
+void lud_update_mesh(lud_mesh_t mesh, int first_vertex, int vertex_count,
+                     const void *vertices);
+void lud_update_mesh_indices(lud_mesh_t mesh, int first_index, int index_count,
+                             const void *indices);
+
 lud_texture_t lud_make_texture(const lud_texture_desc_t *desc);
 void             lud_destroy_texture(lud_texture_t tex);
 
