@@ -198,6 +198,41 @@ lud_read_pixels(mx, my, 1, 1, id);   /* color id of object under cursor */
 GLES can read back only the color buffer, not depth, so picking is
 color-id based rather than depth-unproject based.
 
+### Render Targets (render-to-texture)
+
+A render target is an off-screen framebuffer backed by a color texture
+you can sample or read back: post-processing, reflections, dynamic
+textures, or color-id picking that stays off the visible screen. Set
+`depth` when the pass needs the depth test (rendering 3D geometry).
+
+```c
+lud_target_t rt = lud_make_render_target(&(lud_target_desc_t){
+    .width = 512, .height = 512,
+    .format = LUD_PIXFMT_RGBA8,
+    .min_filter = LUD_FILTER_LINEAR,
+    .mag_filter = LUD_FILTER_LINEAR,
+    .depth = 1,                       /* attach a depth buffer */
+});
+
+lud_bind_render_target(rt);           /* viewport set to 512x512 */
+lud_clear(0, 0, 0, 1);
+/* ... draw the scene ... */
+lud_bind_render_target((lud_target_t){0});  /* back to the window */
+
+/* sample the result */
+lud_texture_t tex = lud_render_target_texture(rt);
+lud_bind_texture(tex, 0);
+/* ... draw a fullscreen quad with a post-process shader ... */
+
+lud_destroy_render_target(rt);        /* also frees the color texture */
+```
+
+`lud_bind_render_target` sets the viewport to the bound surface, and
+`lud_read_pixels` accounts for the bound target's height, so reading
+back from a target works the same as from the window. The color
+attachment is an ordinary `lud_texture_t`; it is owned by the target
+and freed when the target is destroyed.
+
 ### Textures
 
 ```c

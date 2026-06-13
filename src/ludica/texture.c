@@ -207,6 +207,13 @@ lud_destroy_texture(lud_texture_t tex)
 	memset(s, 0, sizeof(*s));
 }
 
+unsigned
+lud__texture_glname(lud_texture_t tex)
+{
+	texture_slot_t *s = get_slot(tex);
+	return s ? (unsigned)s->tex : 0;
+}
+
 void
 lud_bind_texture(lud_texture_t tex, int unit)
 {

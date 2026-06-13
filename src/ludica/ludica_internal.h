@@ -2,6 +2,7 @@
 #define LUDICA_INTERNAL_H_
 
 #include "ludica.h"
+#include "ludica_gfx.h"
 
 /* Limits */
 #define LUD_GAMEPAD_MAX 4
@@ -66,6 +67,13 @@ const char *lud__key_name(enum lud_keycode code);
 /* timing.c */
 unsigned long long lud__clock_now(void);
 double lud__clock_diff(unsigned long long t1, unsigned long long t0);
+
+/* texture.c */
+unsigned lud__texture_glname(lud_texture_t tex); /* underlying GL name, 0 if invalid */
+
+/* rendertarget.c */
+int lud__draw_height(void); /* height of the current draw surface in pixels:
+                             * the bound render target, else the window */
 
 /* automation.c */
 void lud__auto_init(void);

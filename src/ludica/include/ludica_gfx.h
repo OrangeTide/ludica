@@ -129,6 +129,38 @@ void             lud_destroy_texture(lud_texture_t tex);
 lud_texture_t lud_make_texture_array(const lud_texture_array_desc_t *desc);
 void lud_texture_array_set_layer(lud_texture_t arr, int layer, const void *data);
 
+/* --- Render targets (offscreen render-to-texture) ---
+ *
+ * A render target is an off-screen framebuffer backed by a color
+ * texture you can later sample (post-processing, reflections, dynamic
+ * textures) or read back (color-id mouse picking). Set `depth` when the
+ * pass needs the depth test, e.g. rendering 3D geometry into the target.
+ *
+ * Bind the target, draw, then bind the zero-handle to return to the
+ * window. lud_bind_render_target sets the viewport to match the bound
+ * surface. */
+
+typedef struct { unsigned id; } lud_target_t;
+
+typedef struct {
+	int width, height;
+	enum lud_pixel_format format;   /* color format (LUD_PIXFMT_RGBA8 typical) */
+	enum lud_filter min_filter;
+	enum lud_filter mag_filter;
+	int depth;                       /* non-zero = attach a depth buffer */
+} lud_target_desc_t;
+
+lud_target_t lud_make_render_target(const lud_target_desc_t *desc);
+void         lud_destroy_render_target(lud_target_t target);
+
+/* The target's color texture, for binding/sampling. Valid until the
+ * target is destroyed (which also destroys this texture). */
+lud_texture_t lud_render_target_texture(lud_target_t target);
+
+/* Direct drawing to `target`; pass the zero-handle to restore the
+ * window's framebuffer. Sets the viewport to the bound surface size. */
+void lud_bind_render_target(lud_target_t target);
+
 /* --- Shader operations --- */
 
 void lud_apply_shader(lud_shader_t shd);

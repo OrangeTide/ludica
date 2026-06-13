@@ -6,7 +6,7 @@
  *
  * Made by a machine. PUBLIC DOMAIN (CC0-1.0)
  */
-#include "ludica.h"
+#include "ludica_internal.h"
 #include "ludica_gfx.h"
 #include <GLES2/gl2.h>
 #include <stdlib.h>
@@ -90,8 +90,9 @@ lud_read_pixels(int x, int y, int w, int h, void *rgba)
 		return;
 
 	stride = w * 4;
-	/* Flip the top-left origin to GL's bottom-left for the read. */
-	gl_y = lud_height() - y - h;
+	/* Flip the top-left origin to GL's bottom-left for the read. Use the
+	 * bound surface height so reads from a render target work too. */
+	gl_y = lud__draw_height() - y - h;
 	glReadPixels(x, gl_y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, buf);
 
 	/* glReadPixels returns rows bottom-first; flip to top-first so the

@@ -130,6 +130,36 @@ init(void)
 		expect_int("read_pixels A", px[3], 255);
 	}
 
+	/* render target: create one a different size than the window, draw
+	 * into it, and read it back (exercises the target-height flip path) */
+	{
+		unsigned char px[4] = {0, 0, 0, 0};
+		lud_target_t rt = lud_make_render_target(&(lud_target_desc_t){
+			.width = 32, .height = 16,
+			.format = LUD_PIXFMT_RGBA8,
+			.min_filter = LUD_FILTER_NEAREST,
+			.mag_filter = LUD_FILTER_NEAREST,
+			.depth = 1,
+		});
+		lud_texture_t ct = lud_render_target_texture(rt);
+		expect_int("render target created", rt.id != 0, 1);
+		expect_int("rt color texture valid", ct.id != 0, 1);
+		expect_int("rt texture width", lud_texture_width(ct), 32);
+		expect_int("rt texture height", lud_texture_height(ct), 16);
+
+		lud_bind_render_target(rt);
+		lud_clear(0.0f, 1.0f, 0.0f, 1.0f);  /* opaque green into target */
+		lud_read_pixels(0, 0, 1, 1, px);
+		expect_int("rt read R", px[0], 0);
+		expect_int("rt read G", px[1], 255);
+		expect_int("rt read B", px[2], 0);
+		expect_int("rt read A", px[3], 255);
+
+		lud_bind_render_target((lud_target_t){0});  /* back to window */
+		lud_destroy_render_target(rt);
+		expect_int("rt texture freed on destroy", lud_texture_width(ct), 0);
+	}
+
 	/* flush is fire-and-forget; just confirm it does not error */
 	lud_flush();
 	expect_int("flush -> glGetError", (GLint)glGetError(), GL_NO_ERROR);
