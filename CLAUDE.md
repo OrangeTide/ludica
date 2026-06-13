@@ -61,7 +61,7 @@ receives input events (key, mouse, gamepad, resize, focus).
 
 - Shaders: `lud_make_shader()`, `lud_apply_shader()`, `lud_uniform_*()`, `lud_destroy_shader()`
 - Meshes: `lud_make_mesh()`, `lud_draw()`, `lud_draw_range()`, `lud_destroy_mesh()`
-- Render state: `lud_depth_test()`, `lud_depth_func()`, `lud_cull()`, `lud_flush()` — for 3D drawing; keeps apps off raw `<GLES2/gl2.h>`
+- Render state: `lud_depth_test()`, `lud_depth_func()`, `lud_depth_mask()`, `lud_cull()`, `lud_front_face()`, `lud_blend()`, `lud_scissor()`/`lud_scissor_off()`, `lud_read_pixels()` (RGBA, for color-id picking), `lud_flush()` — for 3D drawing; keeps apps off raw `<GLES2/gl2.h>`
 - Textures: `lud_make_texture()`, `lud_load_texture()`, `lud_bind_texture()`, `lud_update_texture()`, `lud_destroy_texture()`
 - Sprites: `lud_sprite_begin()`, `lud_sprite_draw()`, `lud_sprite_end()`
 - Fonts: `lud_make_default_font()`, `lud_draw_text()`

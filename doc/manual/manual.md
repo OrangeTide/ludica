@@ -149,17 +149,54 @@ differences inside the framework, so application code never includes
 lud_depth_test(1);                /* enable the depth test */
 lud_depth_func(LUD_DEPTH_LESS);   /* LESS (default), LEQUAL, or ALWAYS */
 lud_cull(LUD_CULL_BACK);          /* NONE, BACK, or FRONT */
+lud_front_face(LUD_WINDING_CCW);  /* CCW (default) or CW front faces */
 
-/* ... draw 3D meshes ... */
+/* ... draw opaque 3D meshes ... */
 
+lud_depth_mask(0);                /* stop the translucent pass writing depth */
+lud_blend(LUD_BLEND_ADD);         /* NONE, ALPHA, or ADD (additive) */
+
+/* ... draw translucent/additive meshes ... */
+
+lud_depth_mask(1);                /* restore depth writes */
 lud_depth_test(0);                /* restore for a 2D/HUD overlay */
 lud_cull(LUD_CULL_NONE);
+lud_blend(LUD_BLEND_NONE);
 
 lud_flush();                      /* flush queued commands (no buffer swap) */
 ```
 
-The sprite batch manages its own blend state, so there is no separate
-blend wrapper to call.
+`lud_blend` is for custom mesh draws. The sprite batch sets its own
+alpha blend on `lud_sprite_begin` and clears it on `lud_sprite_end`,
+so 2D sprite drawing needs no blend call.
+
+For a translucent pass, keep the depth test on but turn depth writes
+off with `lud_depth_mask(0)` so transparent surfaces are still occluded
+by solid geometry without hiding each other; restore with
+`lud_depth_mask(1)` before the next opaque pass.
+
+### Scissor and Pixel Readback
+
+`lud_scissor(x, y, w, h)` clips drawing to a rectangle (window pixels,
+origin bottom-left, like `lud_viewport`); `lud_scissor_off()` removes
+the clip. Use it for split-screen, sub-viewports, or UI panels.
+
+`lud_read_pixels(x, y, w, h, rgba)` reads back the color buffer as
+RGBA8. `(x, y)` is the top-left of the region in window pixels with a
+top-left origin (the same convention as `lud_mouse_pos`), and rows come
+back top-first. This is the basis for 3D mouse picking: render each
+pickable object in a unique color, then read the pixel under the cursor
+and map the color back to an object id.
+
+```c
+unsigned char id[4];
+int mx, my;
+lud_mouse_pos(&mx, &my);
+lud_read_pixels(mx, my, 1, 1, id);   /* color id of object under cursor */
+```
+
+GLES can read back only the color buffer, not depth, so picking is
+color-id based rather than depth-unproject based.
 
 ### Textures
 
