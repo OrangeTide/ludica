@@ -545,6 +545,31 @@ Each call paints a frame to the screen, so the user sees the bar
 advance between heavy operations.  No threads, no callbacks — the
 application decides what work runs at each step.
 
+### Arena Allocator
+
+A linear bump allocator for fast, bulk-freeable scratch memory: job
+scratch data, per-frame temporaries, procedural-generation buffers, and
+anything else discarded all at once. Allocation is a pointer bump, so
+there is no per-allocation free; reset or free the whole arena instead.
+
+```c
+#include <ludica_arena.h>  /* also pulled in by ludica.h */
+
+lud_arena_t a;
+lud_arena_init(&a, 1 << 20);          /* 1 MiB backing buffer */
+
+float *verts = lud_arena_alloc(&a, n * sizeof *verts);
+if (!verts) { /* arena full -- it does not grow */ }
+
+lud_arena_reset(&a);                  /* reclaim everything, keep the buffer */
+lud_arena_free(&a);                   /* release the buffer */
+```
+
+Each handout is aligned for any standard type. `lud_arena_alloc` returns
+NULL when the arena is full (it does not grow) or when asked for zero
+bytes. The struct is public: `a.off` is bytes used, `a.cap - a.off` is
+bytes free.
+
 # Automation
 
 Ludica includes a TCP automation server and an MCP bridge for AI agent

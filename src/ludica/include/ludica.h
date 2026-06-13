@@ -5,6 +5,7 @@
 #include "ludica_anim.h"
 #include "ludica_audio.h"
 #include "ludica_auto.h"
+#include "ludica_arena.h"
 
 #ifndef LUD_VERSION
 #define LUD_VERSION "unknown"

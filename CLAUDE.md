@@ -81,6 +81,14 @@ receives input events (key, mouse, gamepad, resize, focus).
 - `lud_anim_init()`, `lud_anim_play()`, `lud_anim_update()`
 - `lud_anim_frame()`, `lud_anim_finished()`
 
+### Arena Allocator (`ludica_arena.h`)
+
+Linear bump allocator over one fixed buffer; no per-allocation free,
+reset or free the whole thing at once. For job scratch, per-frame
+temporaries, and procgen buffers. Aggregated into `ludica.h`.
+
+- `lud_arena_init(&a, size)`, `lud_arena_alloc(&a, size)` (aligned, NULL when full), `lud_arena_reset(&a)`, `lud_arena_free(&a)`
+
 ### GLES Version Architecture
 
 Ludica supports both GLES2 and GLES3 in the same codebase. Each program

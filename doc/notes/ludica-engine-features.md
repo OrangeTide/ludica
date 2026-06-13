@@ -110,10 +110,14 @@ the job.
 
 Ludica should provide a simple arena allocator:
 
+**DONE** -- shipped as `ludica_arena.h` (aggregated into `ludica.h`).
+Final API uses `size_t` and aligns each handout for any standard type
+(not just 4 bytes); `lud_arena_init` returns `LUD_OK`/`LUD_ERR`:
+
 ```c
-typedef struct { char *buf; int off, cap; } lud_arena_t;
-void  lud_arena_init(lud_arena_t *a, int size);
-void *lud_arena_alloc(lud_arena_t *a, int size); /* 4-byte aligned */
+typedef struct { unsigned char *buf; size_t off, cap; } lud_arena_t;
+int   lud_arena_init(lud_arena_t *a, size_t size);
+void *lud_arena_alloc(lud_arena_t *a, size_t size); /* max_align_t aligned */
 void  lud_arena_reset(lud_arena_t *a);
 void  lud_arena_free(lud_arena_t *a);
 ```
@@ -129,6 +133,7 @@ appropriate.
 ### 2a. Texture Arrays (GLES3)
 
 **Priority: HIGH** -- required for Gen2 Phase 1 draw call batching.
+**DONE** -- `lud_make_texture_array` / `lud_texture_array_set_layer`.
 
 ```c
 lud_texture_t lud_make_texture_array(const lud_texture_array_desc_t *desc);
@@ -142,13 +147,18 @@ per-draw-group texture switching.
 ### 2b. Mesh Update (Streaming VBO)
 
 **Priority: MEDIUM** -- needed for Phase 4 cell streaming.
+**DONE** -- shipped with an index-buffer variant and a growth path:
 
 ```c
-void lud_update_mesh(lud_mesh_t mesh, int first_vertex, int count,
-                     const void *data);
+void lud_update_mesh(lud_mesh_t mesh, int first_vertex, int vertex_count,
+                     const void *vertices);
+void lud_update_mesh_indices(lud_mesh_t mesh, int first_index, int index_count,
+                             const void *indices);
 ```
 
-Partial VBO updates for streaming world geometry.
+Partial VBO updates for streaming world geometry. Updates beyond the
+current allocation grow the buffer; `lud_update_mesh_indices` can promote
+a non-indexed mesh to indexed.
 
 ### 2c. Instanced Drawing (GLES3)
 
@@ -229,13 +239,13 @@ These are game-specific or engine-specific and don't belong in ludica:
 
 ## Priority Summary
 
-| Feature              | Priority | Unblocks         | Size  |
-|----------------------|----------|------------------|-------|
-| Job system           | HIGH     | Streaming, async | ~500L |
-| Texture arrays       | HIGH     | Gen2 Phase 1     | ~150L |
-| Arena allocator      | HIGH     | Jobs, procgen    | ~100L |
-| Mesh update          | MEDIUM   | Gen2 Phase 4     | ~50L  |
-| Frustum utilities    | MEDIUM   | Gen2 Phase 2     | ~80L  |
-| Instanced drawing    | MEDIUM   | Gen2 Phase 3     | ~50L  |
-| Deferred destruction | MEDIUM   | Safe streaming   | ~80L  |
-| Collision primitives | LOW      | Gen2 Phase 5     | ~300L |
+| Feature              | Priority | Unblocks         | Size  | Status |
+|----------------------|----------|------------------|-------|--------|
+| Texture arrays       | HIGH     | Gen2 Phase 1     | ~150L | DONE   |
+| Arena allocator      | HIGH     | Jobs, procgen    | ~100L | DONE   |
+| Mesh update          | MEDIUM   | Gen2 Phase 4     | ~50L  | DONE   |
+| Instanced drawing    | MEDIUM   | Gen2 Phase 3     | ~50L  | next   |
+| Deferred destruction | MEDIUM   | Safe streaming   | ~80L  | next   |
+| Frustum utilities    | MEDIUM   | Gen2 Phase 2     | ~80L  | todo   |
+| Job system           | HIGH     | Streaming, async | ~500L | later  |
+| Collision primitives | LOW      | Gen2 Phase 5     | ~300L | later  |

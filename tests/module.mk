@@ -19,3 +19,14 @@ define meshupdate_test_TESTCMD
 $(meshupdate_test_EXEC)
 endef
 TEST_TARGETS += meshupdate_test
+
+# Pure CPU test; no display needed.
+EXECUTABLES += arena_test
+arena_test_DIR  := $(dir $(lastword $(MAKEFILE_LIST)))
+arena_test_SRCS  = arena_test.c
+arena_test_LIBS  = ludica
+
+define arena_test_TESTCMD
+$(arena_test_EXEC)
+endef
+TEST_TARGETS += arena_test
