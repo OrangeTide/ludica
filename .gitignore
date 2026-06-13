@@ -22,3 +22,9 @@ compile_commands.json
 _build/
 _out/
 _site/
+
+# lilpc generated/scratch artifacts
+/drive_h/
+/samples/lilpc/JUNK/
+/samples/lilpc/cga-out/
+/samples/lilpc/hostfs_init
