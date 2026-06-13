@@ -14,7 +14,6 @@
 #include "ludica.h"
 #include "ludica_gfx.h"
 #include "ludica_font.h"
-#include <GLES2/gl2.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -821,10 +820,9 @@ frame(float dt)
 	lud_clear(0.0f, 0.0f, 0.0f, 1.0f);
 
 	/* enable depth test and backface culling */
-	glEnable(GL_DEPTH_TEST);
-	glDepthFunc(GL_LESS);
-	glEnable(GL_CULL_FACE);
-	glCullFace(GL_BACK);
+	lud_depth_test(1);
+	lud_depth_func(LUD_DEPTH_LESS);
+	lud_cull(LUD_CULL_BACK);
 
 	/* build MVP */
 	hmm_mat4 proj = build_projection_matrix();
@@ -876,8 +874,8 @@ frame(float dt)
 	draw_sector_recursive(state.player_sector, PORTAL_DEPTH, active_shader);
 
 	/* restore state for 2D overlay */
-	glDisable(GL_DEPTH_TEST);
-	glDisable(GL_CULL_FACE);
+	lud_depth_test(0);
+	lud_cull(LUD_CULL_NONE);
 
 	/* HUD text */
 	float vw = 640.0f, vh = 360.0f;

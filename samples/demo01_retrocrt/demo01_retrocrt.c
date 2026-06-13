@@ -7,7 +7,6 @@
 
 #include "ludica.h"
 #include "ludica_gfx.h"
-#include <GLES2/gl2.h>
 #include <stdio.h>
 
 
@@ -144,7 +143,7 @@ frame(float dt)
 	lud_clear(0.0f, 0.0f, 0.0f, 1.0f);
 	lud_framebuffer_blit(fb);
 
-	glFlush();
+	lud_flush();
 }
 
 static void

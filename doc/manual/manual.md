@@ -138,6 +138,29 @@ lud_draw(mesh);
 lud_draw_range(mesh, first, count);
 ```
 
+### Render State
+
+For 3D drawing, control depth testing and face culling through ludica
+rather than raw GL. These wrappers keep the GLES2/GLES3/WebGL backend
+differences inside the framework, so application code never includes
+`<GLES2/gl2.h>`. State is global and persists until changed.
+
+```c
+lud_depth_test(1);                /* enable the depth test */
+lud_depth_func(LUD_DEPTH_LESS);   /* LESS (default), LEQUAL, or ALWAYS */
+lud_cull(LUD_CULL_BACK);          /* NONE, BACK, or FRONT */
+
+/* ... draw 3D meshes ... */
+
+lud_depth_test(0);                /* restore for a 2D/HUD overlay */
+lud_cull(LUD_CULL_NONE);
+
+lud_flush();                      /* flush queued commands (no buffer swap) */
+```
+
+The sprite batch manages its own blend state, so there is no separate
+blend wrapper to call.
+
 ### Textures
 
 ```c

@@ -35,6 +35,20 @@ enum lud_primitive {
 	LUD_PRIM_LINES,
 };
 
+/* Depth comparison function */
+enum lud_depth_func {
+	LUD_DEPTH_LESS,    /* pass if incoming depth < stored (default) */
+	LUD_DEPTH_LEQUAL,  /* pass if incoming depth <= stored */
+	LUD_DEPTH_ALWAYS,  /* always pass (depth test effectively off) */
+};
+
+/* Face culling mode */
+enum lud_cull {
+	LUD_CULL_NONE,   /* draw all faces */
+	LUD_CULL_BACK,   /* cull back faces (CCW front, the default winding) */
+	LUD_CULL_FRONT,  /* cull front faces */
+};
+
 /* Opaque resource handles (id == 0 means invalid/null) */
 typedef struct { unsigned id; } lud_shader_t;
 typedef struct { unsigned id; } lud_mesh_t;
@@ -193,6 +207,25 @@ void lud_sprite_end(void);
 
 void lud_clear(float r, float g, float b, float a);
 void lud_viewport(int x, int y, int w, int h);
+
+/* --- Render state ---
+ *
+ * Thin wrappers over the GL render state apps need for 3D drawing.
+ * These keep programs off raw <GLES2/gl2.h> so the GLES2/GLES3/WebGL
+ * differences stay inside ludica. State is global GL session state and
+ * persists until changed; the sprite batch manages its own blend state. */
+
+/* Enable or disable the depth test. */
+void lud_depth_test(int enable);
+
+/* Set the depth comparison function (only meaningful while depth test on). */
+void lud_depth_func(enum lud_depth_func fn);
+
+/* Set face culling mode (LUD_CULL_NONE disables culling). */
+void lud_cull(enum lud_cull mode);
+
+/* Flush queued GL commands to the driver (does not swap buffers). */
+void lud_flush(void);
 
 /* --- Loading progress --- */
 
