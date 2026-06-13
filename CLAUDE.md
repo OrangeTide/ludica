@@ -32,6 +32,7 @@ Each `module.mk` declares targets via `EXECUTABLES`, `LIBRARIES`, and
 - `samples/demo02_multiscroll/` — Parallax scrolling + sprite batching
 - `samples/demo03_text_dialogs/` — Font rendering + dialog box UI
 - `samples/demo04_sprites/` — Sprite rendering demo
+- `samples/demo08_picking/` — 3D color-id picking via offscreen render target (automatable; `--selftest`)
 - `samples/demo05_audio/` — Multi-channel audio mixer demo
 - `samples/lilpc/` — 286 XT PC emulator with CGA display
 - `samples/tridrop/` — Triangle drop demo
