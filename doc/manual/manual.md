@@ -268,6 +268,24 @@ ludica_texture_t tex = lud_load_texture("image.png",
 lud_bind_texture(tex, 0);
 ```
 
+### Deferred Destruction
+
+`lud_destroy_mesh` and `lud_destroy_texture` delete the GPU resource right
+away. When streaming, a resource is sometimes retired in the same frame a
+draw earlier in that frame still references it; freeing the handle
+immediately would invalidate it underneath that draw. The deferred
+variants queue the delete until the end of the frame instead:
+
+```c
+lud_destroy_mesh_deferred(cell->mesh);
+lud_destroy_texture_deferred(cell->lightmap);
+```
+
+ludica runs the queued deletions automatically after the frame callback
+returns, once all of the frame's draws have been issued, and flushes any
+remainder at shutdown. Use the deferred form when unloading content during
+a live frame; the immediate form is fine during init or teardown.
+
 ### Sprite Batching
 
 For 2D rendering, ludica provides an immediate-mode sprite batch:

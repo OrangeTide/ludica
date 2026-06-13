@@ -177,6 +177,7 @@ decoration kit pieces). A per-instance attribute stream (via
 ### 2d. Deferred Resource Destruction
 
 **Priority: MEDIUM** -- needed for safe streaming.
+**DONE** -- queue flushed automatically after the frame callback.
 
 ```c
 void lud_destroy_mesh_deferred(lud_mesh_t mesh);
@@ -185,6 +186,8 @@ void lud_destroy_texture_deferred(lud_texture_t tex);
 
 Queues GL delete to end of frame, preventing use-after-free when a cell
 is unloaded while its mesh is still referenced by an in-flight draw.
+ludica calls the flush each frame (after the frame callback, before swap)
+and once more at shutdown.
 
 ---
 
@@ -248,7 +251,7 @@ These are game-specific or engine-specific and don't belong in ludica:
 | Arena allocator      | HIGH     | Jobs, procgen    | ~100L | DONE   |
 | Mesh update          | MEDIUM   | Gen2 Phase 4     | ~50L  | DONE   |
 | Instanced drawing    | MEDIUM   | Gen2 Phase 3     | ~50L  | DONE   |
-| Deferred destruction | MEDIUM   | Safe streaming   | ~80L  | next   |
+| Deferred destruction | MEDIUM   | Safe streaming   | ~80L  | DONE   |
 | Frustum utilities    | MEDIUM   | Gen2 Phase 2     | ~80L  | todo   |
 | Job system           | HIGH     | Streaming, async | ~500L | later  |
 | Collision primitives | LOW      | Gen2 Phase 5     | ~300L | later  |

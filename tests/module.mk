@@ -41,3 +41,14 @@ define instanced_test_TESTCMD
 $(instanced_test_EXEC)
 endef
 TEST_TARGETS += instanced_test
+
+EXECUTABLES += deferred_test
+deferred_test_DIR  := $(dir $(lastword $(MAKEFILE_LIST)))
+deferred_test_SRCS  = deferred_test.c
+deferred_test_LIBS  = ludica
+
+# Needs an X11 display; run under xvfb-run on a headless box.
+define deferred_test_TESTCMD
+$(deferred_test_EXEC)
+endef
+TEST_TARGETS += deferred_test

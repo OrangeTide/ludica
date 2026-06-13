@@ -71,6 +71,10 @@ double lud__clock_diff(unsigned long long t1, unsigned long long t0);
 /* texture.c */
 unsigned lud__texture_glname(lud_texture_t tex); /* underlying GL name, 0 if invalid */
 
+/* deferred.c */
+void lud__deferred_flush(void);   /* run queued deletes; call each frame */
+void lud__deferred_cleanup(void); /* flush and release the queue; call on shutdown */
+
 /* rendertarget.c */
 int lud__draw_height(void); /* height of the current draw surface in pixels:
                              * the bound render target, else the window */

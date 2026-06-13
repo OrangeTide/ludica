@@ -60,6 +60,10 @@ frame_tick(void)
 		lud__state.desc.frame(lud__state.frame_dt);
 	}
 
+	/* All of this frame's draws have been issued; safe to delete any
+	 * resources the app retired mid-frame. */
+	lud__deferred_flush();
+
 	lud__platform_swap();
 	lud__state.frame_count++;
 }
@@ -73,6 +77,7 @@ em_frame(void)
 		emscripten_cancel_main_loop();
 		if (lud__state.desc.cleanup)
 			lud__state.desc.cleanup();
+		lud__deferred_cleanup();
 		lud__args_warn_unused();
 		lud__platform_shutdown();
 		lud__config_cleanup();
@@ -140,6 +145,7 @@ lud_run(const lud_desc_t *desc)
 	if (lud__state.desc.cleanup) {
 		lud__state.desc.cleanup();
 	}
+	lud__deferred_cleanup();
 	lud__auto_shutdown();
 	lud__args_warn_unused();
 	lud__action_reset();

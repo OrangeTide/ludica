@@ -122,6 +122,14 @@ void             lud_destroy_shader(lud_shader_t shd);
 lud_mesh_t    lud_make_mesh(const lud_mesh_desc_t *desc);
 void             lud_destroy_mesh(lud_mesh_t mesh);
 
+/* Queue a resource for deletion at the end of the current frame instead of
+ * immediately. Use when unloading something (a streamed cell's mesh, a
+ * freed texture) that a draw earlier in this same frame may still
+ * reference; the handle stays valid until the frame's draws are issued.
+ * ludica runs the queued deletes automatically each frame. */
+void lud_destroy_mesh_deferred(lud_mesh_t mesh);
+void lud_destroy_texture_deferred(lud_texture_t tex);
+
 /* Update mesh data in place; the mesh should be created with
  * LUD_USAGE_DYNAMIC or LUD_USAGE_STREAM. Writes `*_count` elements starting
  * at `first_*` into the existing buffer. If the write extends past the
