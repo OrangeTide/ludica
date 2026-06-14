@@ -207,7 +207,8 @@ gamepad_wait(int msec)
 }
 
 // TODO: calibration - do something with JSIOCGCORR
-// TODO: implement a dead zone
+// Dead zone is applied centrally in lud_gamepad_axis (input.c), so it
+// covers every backend; raw normalized values are stored here unchanged.
 
 /* Mappings:
 

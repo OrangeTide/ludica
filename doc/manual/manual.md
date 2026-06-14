@@ -328,6 +328,16 @@ lud_mouse_pos(&mx, &my);
 float axis = lud_gamepad_axis(0, 0);
 ```
 
+Analog stick axes pass through a dead zone (default 0.15 of full
+deflection) so a stick at rest reads exactly zero. Values past the
+threshold are rescaled so the stick still reaches 1.0, leaving no jump at
+the edge. Tune it globally:
+
+```c
+lud_gamepad_set_deadzone(0.20f);   /* clamped to [0, 0.95] */
+float dz = lud_gamepad_deadzone();
+```
+
 ### Action Bindings
 
 Actions decouple game logic from physical keys. Instead of checking

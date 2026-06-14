@@ -1,10 +1,16 @@
 #include "ludica_internal.h"
 #include <string.h>
 #include <strings.h> /* strcasecmp */
+#include <math.h>
 
 #ifdef _WIN32
 #define strcasecmp _stricmp
 #endif
+
+/* Default analog stick dead zone (fraction of full deflection). Stick
+ * values within this radius of center read as zero; values past it are
+ * rescaled so output still reaches 1.0, avoiding a jump at the edge. */
+#define LUD_DEADZONE_DEFAULT 0.15f
 
 /* Polled input state */
 static unsigned char key_state[LUD_KEY__COUNT];
@@ -12,6 +18,7 @@ static int mouse_x, mouse_y;
 static unsigned char mouse_buttons[3];
 static int gamepad_exists[LUD_GAMEPAD_MAX];
 static float gamepad_axes[LUD_GAMEPAD_MAX][LUD_GAMEPAD_AXIS_MAX];
+static float gamepad_deadzone = LUD_DEADZONE_DEFAULT;
 static unsigned char gamepad_buttons_state[LUD_GAMEPAD_MAX][LUD_GAMEPAD_BUTTON_MAX];
 
 void
@@ -22,6 +29,7 @@ lud__input_init(void)
 	memset(gamepad_exists, 0, sizeof(gamepad_exists));
 	memset(gamepad_axes, 0, sizeof(gamepad_axes));
 	memset(gamepad_buttons_state, 0, sizeof(gamepad_buttons_state));
+	gamepad_deadzone = LUD_DEADZONE_DEFAULT;
 	mouse_x = 0;
 	mouse_y = 0;
 }
@@ -110,11 +118,40 @@ lud_mouse_button_down(enum lud_mouse_button button)
 float
 lud_gamepad_axis(int id, int axis)
 {
+	float v, a;
+
 	if (id < 0 || id >= LUD_GAMEPAD_MAX)
 		return 0.0f;
 	if (axis < 0 || axis >= LUD_GAMEPAD_AXIS_MAX)
 		return 0.0f;
-	return gamepad_axes[id][axis];
+
+	v = gamepad_axes[id][axis];
+	a = fabsf(v);
+	if (a <= gamepad_deadzone)
+		return 0.0f;
+
+	/* Rescale (deadzone, 1] onto (0, 1] so the response is continuous at
+	 * the dead-zone edge and still reaches full magnitude. */
+	a = (a - gamepad_deadzone) / (1.0f - gamepad_deadzone);
+	if (a > 1.0f)
+		a = 1.0f;
+	return v < 0.0f ? -a : a;
+}
+
+void
+lud_gamepad_set_deadzone(float dz)
+{
+	if (dz < 0.0f)
+		dz = 0.0f;
+	if (dz > 0.95f)
+		dz = 0.95f;
+	gamepad_deadzone = dz;
+}
+
+float
+lud_gamepad_deadzone(void)
+{
+	return gamepad_deadzone;
 }
 
 int

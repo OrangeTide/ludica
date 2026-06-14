@@ -52,3 +52,14 @@ define deferred_test_TESTCMD
 $(deferred_test_EXEC)
 endef
 TEST_TARGETS += deferred_test
+
+# Pure CPU test; no display needed.
+EXECUTABLES += deadzone_test
+deadzone_test_DIR  := $(dir $(lastword $(MAKEFILE_LIST)))
+deadzone_test_SRCS  = deadzone_test.c
+deadzone_test_LIBS  = ludica
+
+define deadzone_test_TESTCMD
+$(deadzone_test_EXEC)
+endef
+TEST_TARGETS += deadzone_test

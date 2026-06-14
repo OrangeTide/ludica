@@ -160,6 +160,12 @@ float lud_gamepad_axis(int id, int axis);
 int lud_gamepad_button_down(int id, int button);
 int lud_gamepad_connected(int id);
 
+/* Analog stick dead zone, as a fraction of full deflection (default 0.15).
+ * Axis values within this radius read as 0; values past it are rescaled so
+ * output still reaches 1.0. Clamped to [0, 0.95]. Applies to every pad. */
+void  lud_gamepad_set_deadzone(float dz);
+float lud_gamepad_deadzone(void);
+
 /* Named key lookup (returns LUD_KEY_UNKNOWN on failure) */
 enum lud_keycode lud_key_from_name(const char *name);
 

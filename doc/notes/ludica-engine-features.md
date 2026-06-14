@@ -229,6 +229,19 @@ first/third-person 3D game.
 
 ---
 
+## 4b. Input Polish
+
+Not part of the original 3D analysis, but tracked here alongside the
+other framework work.
+
+- **Gamepad dead zone** -- **DONE**. Applied centrally in
+  `lud_gamepad_axis` (input.c) so every backend benefits; default 0.15,
+  rescaled, tunable via `lud_gamepad_set_deadzone`.
+- **WASM/HTML5 gamepad** -- **LATER**. `gamepad.c` is still stubbed; wire
+  up the HTML5 Gamepad API so pads work in the browser build.
+
+---
+
 ## 5. What Ludica Should NOT Provide
 
 These are game-specific or engine-specific and don't belong in ludica:
@@ -252,6 +265,8 @@ These are game-specific or engine-specific and don't belong in ludica:
 | Mesh update          | MEDIUM   | Gen2 Phase 4     | ~50L  | DONE   |
 | Instanced drawing    | MEDIUM   | Gen2 Phase 3     | ~50L  | DONE   |
 | Deferred destruction | MEDIUM   | Safe streaming   | ~80L  | DONE   |
+| Gamepad dead zone    | --       | Input polish     | ~30L  | DONE   |
 | Frustum utilities    | MEDIUM   | Gen2 Phase 2     | ~80L  | todo   |
 | Job system           | HIGH     | Streaming, async | ~500L | later  |
+| WASM/HTML5 gamepad   | --       | Browser input    | ~120L | later  |
 | Collision primitives | LOW      | Gen2 Phase 5     | ~300L | later  |

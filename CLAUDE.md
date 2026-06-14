@@ -142,6 +142,9 @@ Key constants: `LUD_KEY_A`..`LUD_KEY_Z`, `LUD_KEY_ESCAPE`,
 Polled: `lud_key_down()`, `lud_mouse_pos()`, `lud_mouse_button_down()`,
 `lud_gamepad_axis()`, `lud_gamepad_button_down()`.
 
+Gamepad axes have a rescaled dead zone (default 0.15), tunable via
+`lud_gamepad_set_deadzone()` / `lud_gamepad_deadzone()`.
+
 ## Adding a New Sample Program
 
 1. Create `samples/myapp/` with source files
