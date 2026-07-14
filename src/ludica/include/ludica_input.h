@@ -103,6 +103,7 @@ enum lud_event_type {
 	LUD_EV_RESIZED,
 	LUD_EV_FOCUS,
 	LUD_EV_UNFOCUS,
+	LUD_EV_DROP,     /* files or data dropped onto the window (drag-and-drop) */
 };
 
 /* Modifier key bitmask */
@@ -151,6 +152,12 @@ typedef struct lud_event {
 		struct {
 			int width, height;
 		} resize;
+		struct {
+			const char *format; /* MIME target, e.g. LUD_CLIPBOARD_URI_LIST */
+			const void *data;   /* raw bytes, owned by ludica */
+			size_t      len;
+			int         x, y;   /* drop location in window pixels */
+		} drop;
 	};
 } lud_event_t;
 
@@ -261,5 +268,22 @@ void *lud_clipboard_get_data(const char *format, size_t *len_out);
  * NULL when the clipboard holds no file list. */
 int    lud_clipboard_set_files(const char *const *paths, int count);
 char **lud_clipboard_get_files(void);
+
+/* Parse a text/uri-list buffer (as delivered by a file drop or read from the
+ * clipboard) into a NULL-terminated array of malloc'd absolute paths.  The
+ * caller must free() each string and then the array.  Returns NULL when the
+ * buffer holds no file paths.  Useful from a LUD_EV_DROP handler:
+ *
+ *   if (ev->type == LUD_EV_DROP && !strcmp(ev->drop.format, LUD_CLIPBOARD_URI_LIST)) {
+ *       char **files = lud_parse_uri_list(ev->drop.data, ev->drop.len);
+ *       ...
+ *   }
+ *
+ * A LUD_EV_DROP event carries data dropped onto the window from another
+ * application.  ev->drop.format names the target (LUD_CLIPBOARD_URI_LIST for
+ * files, LUD_CLIPBOARD_PNG for an image, LUD_CLIPBOARD_TEXT for text), and
+ * ev->drop.data / .len hold the bytes, owned by ludica and valid only during
+ * the callback.  ev->drop.x / .y give the drop location in window pixels. */
+char **lud_parse_uri_list(const void *data, size_t len);
 
 #endif /* LUDICA_INPUT_H_ */

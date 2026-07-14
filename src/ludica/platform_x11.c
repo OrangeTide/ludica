@@ -161,6 +161,8 @@ static Atom utf8_atom;        /* UTF8_STRING target */
 static Atom targets_atom;     /* TARGETS meta-target */
 static Atom incr_atom;        /* INCR (incremental transfer) type */
 static Atom clip_prop;        /* our destination property for reads */
+static Atom uri_list_atom;    /* text/uri-list target (files) */
+static Atom png_atom;         /* image/png target */
 
 /* Selection data we serve while we own CLIPBOARD.  Stored as
  * (target, bytes, len) rather than a bare string so non-text targets
@@ -178,11 +180,13 @@ static struct {
 } clip_req;
 
 /* Incremental receive: the selection owner advertised INCR, so the payload
- * arrives in chunks via PropertyNotify.  is_async delivers through
- * clip_req.cb on completion; the synchronous path drains it inline. */
+ * arrives in chunks via PropertyNotify.  The mode selects how the completed
+ * buffer is delivered: SYNC is drained inline by clip_in_sync, ASYNC goes to
+ * clip_req.cb, DROP becomes a LUD_EV_DROP event. */
+enum { CLIP_IN_SYNC, CLIP_IN_ASYNC, CLIP_IN_DROP };
 static struct {
 	int             active;
-	int             is_async;
+	int             mode;
 	unsigned char  *buf;
 	size_t          len;
 	size_t          cap;
@@ -200,6 +204,35 @@ static struct {
 	size_t          len;
 	size_t          sent;
 } clip_out;
+
+/* ---- Drag and drop (XDND drop target) ---- */
+
+static Atom xdnd_aware;         /* XdndAware property advertising support */
+static Atom xdnd_enter;         /* drag entered our window */
+static Atom xdnd_position;      /* pointer moved during a drag */
+static Atom xdnd_status;        /* our reply: accept/refuse this position */
+static Atom xdnd_leave;         /* drag left without dropping */
+static Atom xdnd_drop;          /* user released: fetch the data */
+static Atom xdnd_finished;      /* our reply: transfer done */
+static Atom xdnd_selection;     /* selection the data is offered on */
+static Atom xdnd_type_list;     /* source's full type list (property) */
+static Atom xdnd_action_copy;   /* the copy action */
+
+#define XDND_VERSION 5
+
+/* In-progress drop negotiation.  source==0 means no drag is over us. */
+static struct {
+	Window source;
+	int    version;   /* min(ours, source's) */
+	Atom   type;      /* the target we chose to request; None if unsupported */
+	int    x, y;      /* last pointer position, window pixels */
+} xdnd;
+
+/* Data delivered to the app for one frame via LUD_EV_DROP, owned here and
+ * freed at the top of the next poll. */
+static unsigned char *drop_data;
+static size_t         drop_len;
+static const char    *drop_format;
 
 /* Track key-repeat: X11 generates KeyRelease+KeyPress pairs for held keys */
 static int auto_repeat_detected;
@@ -319,6 +352,19 @@ lud__platform_init(const lud_desc_t *desc)
 	targets_atom = XInternAtom(xdisplay, "TARGETS", False);
 	incr_atom = XInternAtom(xdisplay, "INCR", False);
 	clip_prop = XInternAtom(xdisplay, "LUD_CLIPBOARD", False);
+	uri_list_atom = XInternAtom(xdisplay, LUD_CLIPBOARD_URI_LIST, False);
+	png_atom = XInternAtom(xdisplay, LUD_CLIPBOARD_PNG, False);
+
+	xdnd_aware = XInternAtom(xdisplay, "XdndAware", False);
+	xdnd_enter = XInternAtom(xdisplay, "XdndEnter", False);
+	xdnd_position = XInternAtom(xdisplay, "XdndPosition", False);
+	xdnd_status = XInternAtom(xdisplay, "XdndStatus", False);
+	xdnd_leave = XInternAtom(xdisplay, "XdndLeave", False);
+	xdnd_drop = XInternAtom(xdisplay, "XdndDrop", False);
+	xdnd_finished = XInternAtom(xdisplay, "XdndFinished", False);
+	xdnd_selection = XInternAtom(xdisplay, "XdndSelection", False);
+	xdnd_type_list = XInternAtom(xdisplay, "XdndTypeList", False);
+	xdnd_action_copy = XInternAtom(xdisplay, "XdndActionCopy", False);
 
 	/* Configure EGL for requested GLES version */
 	gles_ctx_attribs[1] = desc->gles_version;
@@ -365,6 +411,13 @@ lud__platform_init(const lud_desc_t *desc)
 
 	/* Create X11 window */
 	xwindow = create_window(desc);
+
+	/* Advertise drag-and-drop support (XDND drop target). */
+	{
+		Atom version = XDND_VERSION;
+		XChangeProperty(xdisplay, xwindow, xdnd_aware, XA_ATOM, 32,
+				PropModeReplace, (unsigned char *)&version, 1);
+	}
 
 	/* Create EGL surface + context */
 	egl_surface = eglCreateWindowSurface(egl_display, egl_config,
@@ -413,6 +466,11 @@ lud__platform_shutdown(void)
 	memset(&clip_in, 0, sizeof(clip_in));
 	free(clip_out.data);
 	memset(&clip_out, 0, sizeof(clip_out));
+
+	free(drop_data);
+	drop_data = NULL;
+	drop_len = 0;
+	drop_format = NULL;
 }
 
 /* ---- Clipboard ---- */
@@ -527,14 +585,14 @@ clip_read_prop(size_t *len_out)
  * the INCR property tells the owner to start appending data chunks, each of
  * which arrives as a PropertyNotify(PropertyNewValue). */
 static void
-clip_in_begin(int is_async)
+clip_in_begin(int mode)
 {
 	free(clip_in.buf);
 	clip_in.buf = NULL;
 	clip_in.len = 0;
 	clip_in.cap = 0;
 	clip_in.active = 1;
-	clip_in.is_async = is_async;
+	clip_in.mode = mode;
 	XDeleteProperty(xdisplay, xwindow, clip_prop);
 	XFlush(xdisplay);
 }
@@ -591,7 +649,7 @@ clip_in_sync(size_t *len_out)
 {
 	int fd = ConnectionNumber(xdisplay);
 
-	clip_in_begin(0);
+	clip_in_begin(CLIP_IN_SYNC);
 	for (;;) {
 		XEvent xev;
 		int progressed = 0;
@@ -849,15 +907,6 @@ lud_clipboard_get_data(const char *format, size_t *len_out)
 static const char uri_keep[] =
 	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/";
 
-static int
-hex_val(int c)
-{
-	if (c >= '0' && c <= '9') return c - '0';
-	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-	return -1;
-}
-
 int
 lud_clipboard_set_files(const char *const *paths, int count)
 {
@@ -907,46 +956,6 @@ lud_clipboard_set_files(const char *const *paths, int count)
 	return rc;
 }
 
-/* Decode one uri-list line into a malloc'd path, or NULL to skip it.  Accepts
- * file: URIs (with an optional //authority) and bare absolute paths. */
-static char *
-uri_line_to_path(const char *line, size_t n)
-{
-	const char *p = line;
-	const char *end = line + n;
-
-	if (n >= 5 && !strncmp(p, "file:", 5)) {
-		p += 5;
-		if (end - p >= 2 && p[0] == '/' && p[1] == '/') {
-			/* Skip the authority component up to the path's slash. */
-			p += 2;
-			const char *slash = memchr(p, '/', (size_t)(end - p));
-			if (!slash)
-				return NULL;
-			p = slash;
-		}
-	} else if (p >= end || *p != '/') {
-		return NULL; /* not a file URI or absolute path */
-	}
-
-	char *out = malloc((size_t)(end - p) + 1);
-	if (!out)
-		return NULL;
-	size_t o = 0;
-	while (p < end) {
-		int hi, lo;
-		if (*p == '%' && end - p >= 3 &&
-		    (hi = hex_val(p[1])) >= 0 && (lo = hex_val(p[2])) >= 0) {
-			out[o++] = (char)((hi << 4) | lo);
-			p += 3;
-		} else {
-			out[o++] = *p++;
-		}
-	}
-	out[o] = 0;
-	return out;
-}
-
 char **
 lud_clipboard_get_files(void)
 {
@@ -955,43 +964,8 @@ lud_clipboard_get_files(void)
 				      &len);
 	if (!raw)
 		return NULL;
-
-	char **list = NULL;
-	int n = 0, cap = 0;
-	char *s = (char *)raw;
-	char *end = s + len;
-
-	while (s < end) {
-		char *nl = memchr(s, '\n', (size_t)(end - s));
-		char *line_end = nl ? nl : end;
-		char *line = s;
-		s = nl ? nl + 1 : end;
-
-		if (line_end > line && line_end[-1] == '\r')
-			line_end--;
-		if (line_end == line || *line == '#')
-			continue; /* blank or comment */
-
-		char *path = uri_line_to_path(line, (size_t)(line_end - line));
-		if (!path)
-			continue;
-
-		if (n + 2 > cap) {
-			cap = cap ? cap * 2 : 4;
-			char **grow = realloc(list, (size_t)cap * sizeof(*list));
-			if (!grow) {
-				free(path);
-				break;
-			}
-			list = grow;
-		}
-		list[n++] = path;
-	}
+	char **list = lud_parse_uri_list(raw, len);
 	free(raw);
-
-	if (!list)
-		return NULL;
-	list[n] = NULL;
 	return list;
 }
 
@@ -1038,7 +1012,7 @@ clip_deliver(const XSelectionEvent *sel)
 	size_t len = 0;
 
 	if (sel->property != None && clip_probe_type() == incr_atom) {
-		clip_in_begin(1);
+		clip_in_begin(CLIP_IN_ASYNC);
 		return; /* completion happens in the PropertyNotify handler */
 	}
 
@@ -1064,11 +1038,205 @@ clip_in_finish_async(void)
 	clip_req_reset();
 }
 
+/* ---- Drag and drop (XDND drop target) ---- */
+
+static void
+xdnd_reset(void)
+{
+	xdnd.source = 0;
+	xdnd.version = 0;
+	xdnd.type = None;
+}
+
+/* Map a droppable target atom to a stable public format string, or NULL if we
+ * do not accept it. */
+static const char *
+xdnd_format_for(Atom target)
+{
+	if (target == uri_list_atom)
+		return LUD_CLIPBOARD_URI_LIST;
+	if (target == png_atom)
+		return LUD_CLIPBOARD_PNG;
+	if (target == utf8_atom)
+		return LUD_CLIPBOARD_TEXT;
+	return NULL;
+}
+
+/* Choose the target we prefer from a candidate list, most useful first. */
+static Atom
+xdnd_pick(const Atom *cands, int n)
+{
+	static const Atom *const order[] = { &uri_list_atom, &png_atom, &utf8_atom };
+	for (size_t i = 0; i < sizeof(order) / sizeof(order[0]); i++)
+		for (int j = 0; j < n; j++)
+			if (cands[j] == *order[i])
+				return *order[i];
+	return None;
+}
+
+/* Send an XDND ClientMessage of `type` with five long data words. */
+static void
+xdnd_send(Window to, Atom type, long d0, long d1, long d2, long d3, long d4)
+{
+	XClientMessageEvent m;
+	memset(&m, 0, sizeof(m));
+	m.type = ClientMessage;
+	m.display = xdisplay;
+	m.window = to;
+	m.message_type = type;
+	m.format = 32;
+	m.data.l[0] = (long)xwindow;
+	m.data.l[1] = d1;
+	m.data.l[2] = d2;
+	m.data.l[3] = d3;
+	m.data.l[4] = d4;
+	(void)d0; /* l[0] is always our window per the protocol */
+	XSendEvent(xdisplay, to, False, NoEventMask, (XEvent *)&m);
+	XFlush(xdisplay);
+}
+
+static void
+xdnd_handle_enter(const XClientMessageEvent *m)
+{
+	xdnd_reset();
+	xdnd.source = (Window)m->data.l[0];
+	xdnd.version = (int)((unsigned long)m->data.l[1] >> 24);
+
+	Atom cands[16];
+	int n = 0;
+	if (m->data.l[1] & 1) {
+		/* More than three types: read the source's XdndTypeList. */
+		Atom type;
+		int fmt;
+		unsigned long nitems, after;
+		unsigned char *data = NULL;
+		if (XGetWindowProperty(xdisplay, xdnd.source, xdnd_type_list, 0, 16,
+				       False, XA_ATOM, &type, &fmt, &nitems,
+				       &after, &data) == Success && data) {
+			Atom *a = (Atom *)data;
+			for (unsigned long i = 0; i < nitems && n < 16; i++)
+				cands[n++] = a[i];
+			XFree(data);
+		}
+	} else {
+		for (int i = 2; i <= 4; i++)
+			if (m->data.l[i])
+				cands[n++] = (Atom)m->data.l[i];
+	}
+	xdnd.type = xdnd_pick(cands, n);
+}
+
+static void
+xdnd_handle_position(const XClientMessageEvent *m)
+{
+	Window src = (Window)m->data.l[0];
+	if (src != xdnd.source)
+		return;
+
+	/* Root coordinates packed in the high/low halves of data.l[2]. */
+	int rx = (int)((unsigned long)m->data.l[2] >> 16);
+	int ry = (int)(m->data.l[2] & 0xffff);
+	Window child;
+	XTranslateCoordinates(xdisplay, DefaultRootWindow(xdisplay), xwindow,
+			      rx, ry, &xdnd.x, &xdnd.y, &child);
+
+	int accept = xdnd.type != None;
+	/* XdndStatus: l[1] bit0 = accept; empty rect (l[2]=l[3]=0) asks the
+	 * source to keep sending XdndPosition; l[4] = action we will perform. */
+	xdnd_send(xdnd.source, xdnd_status, 0, accept ? 1 : 0, 0, 0,
+		  accept ? (long)xdnd_action_copy : (long)None);
+}
+
+/* Deliver the dropped bytes (ownership transferred here) to the app and tell
+ * the source the transfer finished. */
+static void
+xdnd_deliver(unsigned char *data, size_t len)
+{
+	const char *fmt = xdnd_format_for(xdnd.type);
+
+	free(drop_data);
+	drop_data = data;
+	drop_len = len;
+	drop_format = fmt;
+
+	if (fmt && data) {
+		lud_event_t ev;
+		memset(&ev, 0, sizeof(ev));
+		ev.type = LUD_EV_DROP;
+		ev.drop.format = fmt;
+		ev.drop.data = drop_data;
+		ev.drop.len = drop_len;
+		ev.drop.x = xdnd.x;
+		ev.drop.y = xdnd.y;
+		lud__event_push(&ev);
+	}
+
+	if (xdnd.source)
+		xdnd_send(xdnd.source, xdnd_finished, 0,
+			  (fmt && data) ? 1 : 0, (long)xdnd_action_copy, 0, 0);
+	xdnd_reset();
+}
+
+static void
+xdnd_handle_drop(const XClientMessageEvent *m)
+{
+	Window src = (Window)m->data.l[0];
+	if (src != xdnd.source || xdnd.type == None) {
+		/* Nothing we can take: acknowledge with failure. */
+		if (src)
+			xdnd_send(src, xdnd_finished, 0, 0, 0, 0, 0);
+		xdnd_reset();
+		return;
+	}
+	Time t = (Time)m->data.l[2];
+	XConvertSelection(xdisplay, xdnd_selection, xdnd.type, clip_prop,
+			  xwindow, t);
+	XFlush(xdisplay);
+	/* Data arrives via SelectionNotify on xdnd_selection. */
+}
+
+/* SelectionNotify whose selection is XdndSelection: the post-drop data. */
+static void
+xdnd_handle_selection(const XSelectionEvent *sel)
+{
+	if (sel->property == None) {
+		xdnd_deliver(NULL, 0); /* refused: finish with failure */
+		return;
+	}
+	if (clip_probe_type() == incr_atom) {
+		clip_in_begin(CLIP_IN_DROP);
+		return; /* completion in the PropertyNotify handler */
+	}
+	size_t len = 0;
+	unsigned char *data = clip_read_prop(&len);
+	xdnd_deliver(data, len);
+}
+
+/* Finish a drop whose data came over INCR. */
+static void
+xdnd_finish_drop(void)
+{
+	unsigned char *data = clip_in.buf;
+	size_t len = clip_in.len;
+	clip_in.buf = NULL;
+	clip_in.active = 0;
+	xdnd_deliver(data, len);
+}
+
 void
 lud__platform_poll_events(void)
 {
 	XEvent xev;
 	lud_event_t ev;
+
+	/* Release last frame's drop payload; the app consumed it during the
+	 * previous dispatch. */
+	if (drop_data) {
+		free(drop_data);
+		drop_data = NULL;
+		drop_len = 0;
+		drop_format = NULL;
+	}
 
 	while (XPending(xdisplay)) {
 		XNextEvent(xdisplay, &xev);
@@ -1241,6 +1409,14 @@ lud__platform_poll_events(void)
 			if (xev.xclient.message_type == wm_protocols &&
 			    (Atom)xev.xclient.data.l[0] == wm_delete_window) {
 				lud_quit();
+			} else if (xev.xclient.message_type == xdnd_enter) {
+				xdnd_handle_enter(&xev.xclient);
+			} else if (xev.xclient.message_type == xdnd_position) {
+				xdnd_handle_position(&xev.xclient);
+			} else if (xev.xclient.message_type == xdnd_leave) {
+				xdnd_reset();
+			} else if (xev.xclient.message_type == xdnd_drop) {
+				xdnd_handle_drop(&xev.xclient);
 			}
 			break;
 
@@ -1249,8 +1425,10 @@ lud__platform_poll_events(void)
 			break;
 
 		case SelectionNotify:
-			if (clip_req.active &&
-			    xev.xselection.selection == clipboard_atom)
+			if (xev.xselection.selection == xdnd_selection)
+				xdnd_handle_selection(&xev.xselection);
+			else if (clip_req.active &&
+				 xev.xselection.selection == clipboard_atom)
 				clip_deliver(&xev.xselection);
 			break;
 
@@ -1265,12 +1443,17 @@ lud__platform_poll_events(void)
 			break;
 
 		case PropertyNotify:
-			/* Incoming INCR chunk on our window. */
-			if (clip_in.active && clip_in.is_async &&
+			/* Incoming INCR chunk on our window (clipboard or drop). */
+			if (clip_in.active && clip_in.mode != CLIP_IN_SYNC &&
 			    xev.xproperty.atom == clip_prop &&
 			    xev.xproperty.state == PropertyNewValue) {
-				if (clip_in_step())
-					clip_in_finish_async();
+				int mode = clip_in.mode;
+				if (clip_in_step()) {
+					if (mode == CLIP_IN_DROP)
+						xdnd_finish_drop();
+					else
+						clip_in_finish_async();
+				}
 			}
 			/* Requestor consumed a chunk of our outgoing INCR send. */
 			else if (clip_out.active &&

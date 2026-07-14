@@ -1,4 +1,5 @@
 #include "ludica_internal.h"
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h> /* strcasecmp */
 #include <math.h>
@@ -294,4 +295,99 @@ lud__key_name(enum lud_keycode code)
 			return e->name;
 	}
 	return NULL;
+}
+
+/* ---- text/uri-list parsing (shared by clipboard files and file drops) ---- */
+
+static int
+uri_hex_val(int c)
+{
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+/* Decode one uri-list line into a malloc'd path, or NULL to skip it.  Accepts
+ * file: URIs (with an optional //authority) and bare absolute paths. */
+static char *
+uri_line_to_path(const char *line, size_t n)
+{
+	const char *p = line;
+	const char *end = line + n;
+
+	if (n >= 5 && !strncmp(p, "file:", 5)) {
+		p += 5;
+		if (end - p >= 2 && p[0] == '/' && p[1] == '/') {
+			/* Skip the authority component up to the path's slash. */
+			p += 2;
+			const char *slash = memchr(p, '/', (size_t)(end - p));
+			if (!slash)
+				return NULL;
+			p = slash;
+		}
+	} else if (p >= end || *p != '/') {
+		return NULL; /* not a file URI or absolute path */
+	}
+
+	char *out = malloc((size_t)(end - p) + 1);
+	if (!out)
+		return NULL;
+	size_t o = 0;
+	while (p < end) {
+		int hi, lo;
+		if (*p == '%' && end - p >= 3 &&
+		    (hi = uri_hex_val(p[1])) >= 0 && (lo = uri_hex_val(p[2])) >= 0) {
+			out[o++] = (char)((hi << 4) | lo);
+			p += 3;
+		} else {
+			out[o++] = *p++;
+		}
+	}
+	out[o] = 0;
+	return out;
+}
+
+char **
+lud_parse_uri_list(const void *data, size_t len)
+{
+	if (!data || len == 0)
+		return NULL;
+
+	char **list = NULL;
+	int n = 0, cap = 0;
+	const char *s = data;
+	const char *end = s + len;
+
+	while (s < end) {
+		const char *nl = memchr(s, '\n', (size_t)(end - s));
+		const char *line_end = nl ? nl : end;
+		const char *line = s;
+		s = nl ? nl + 1 : end;
+
+		if (line_end > line && line_end[-1] == '\r')
+			line_end--;
+		if (line_end == line || *line == '#')
+			continue; /* blank or comment */
+
+		char *path = uri_line_to_path(line, (size_t)(line_end - line));
+		if (!path)
+			continue;
+
+		if (n + 2 > cap) {
+			cap = cap ? cap * 2 : 4;
+			char **grow = realloc(list, (size_t)cap * sizeof(*list));
+			if (!grow) {
+				free(path);
+				break;
+			}
+			list = grow;
+		}
+		list[n++] = path;
+	}
+
+	if (!list)
+		return NULL;
+	list[n] = NULL;
+	return list;
 }
