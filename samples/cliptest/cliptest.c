@@ -253,10 +253,14 @@ selftest_step(void)
 			check("copy", got, COPY_TEXT);
 			free(got);
 
-			/* Paste direction: B owns, ludica reads it async. */
+			/* Paste direction: B owns, ludica reads it async.
+			 * XSync (not XFlush) so the server has committed the
+			 * ownership change before ludica queries the owner;
+			 * otherwise its async-get shortcut may still see itself
+			 * as owner and return the copy text. */
 			b_owned = PASTE_TEXT;
 			XSetSelectionOwner(dpy_b, clip_b, win_b, CurrentTime);
-			XFlush(dpy_b);
+			XSync(dpy_b, False);
 			paste_done = 0;
 			lud_clipboard_get_async(LUD_CLIPBOARD_TEXT,
 						on_paste_async, NULL);
