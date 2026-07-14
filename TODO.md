@@ -18,6 +18,7 @@ Usage:
   - [ ] some agents have trouble with the format or status of the SCREENSHOT command. what could be wrong?
   - [ ] add some reporting message to the commands so that success or failure are obvious to the agent. this might help with the screenshot, to know where the screenshot is saved?
   - [ ] update the MCP skill for all of the above. basically we need to make the agents use the MCP and use it effectively.
+- [ ] experiment with some of the sdf/msdf fonts and effects at https://tommyettinger.github.io/fontwriter/
 
 ## Future
 
