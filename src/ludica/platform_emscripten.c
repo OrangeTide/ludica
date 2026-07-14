@@ -539,6 +539,35 @@ lud_clipboard_get_async(const char *format, lud_clipboard_cb cb, void *user)
 		cb(format, NULL, 0, user);
 }
 
+int
+lud_clipboard_set_data(const char *format, const void *data, size_t len)
+{
+	(void)format; (void)data; (void)len;
+	return LUD_ERR;
+}
+
+void *
+lud_clipboard_get_data(const char *format, size_t *len_out)
+{
+	(void)format;
+	if (len_out)
+		*len_out = 0;
+	return NULL;
+}
+
+int
+lud_clipboard_set_files(const char *const *paths, int count)
+{
+	(void)paths; (void)count;
+	return LUD_ERR;
+}
+
+char **
+lud_clipboard_get_files(void)
+{
+	return NULL;
+}
+
 void
 lud__platform_set_fullscreen(int fullscreen)
 {

@@ -196,8 +196,12 @@ int lud_action_released(lud_action_t action);  /* just went up */
 
 /* ---- Clipboard ---- */
 
-/* Format string for plain UTF-8 text, used with the typed/async API below. */
-#define LUD_CLIPBOARD_TEXT "text/plain;charset=utf-8"
+/* Format strings for the typed/async API below.  TEXT is plain UTF-8; PNG is
+ * a PNG-encoded image; URI_LIST is a newline-separated list of file:// URIs
+ * (the standard target for copying and dropping files). */
+#define LUD_CLIPBOARD_TEXT     "text/plain;charset=utf-8"
+#define LUD_CLIPBOARD_PNG      "image/png"
+#define LUD_CLIPBOARD_URI_LIST "text/uri-list"
 
 /* Synchronous text clipboard.
  *
@@ -227,5 +231,35 @@ int   lud_clipboard_set_text(const char *utf8);
 typedef void (*lud_clipboard_cb)(const char *format, void *data,
 				 size_t len, void *user);
 void lud_clipboard_get_async(const char *format, lud_clipboard_cb cb, void *user);
+
+/* Synchronous typed clipboard for arbitrary binary data (images, and any
+ * other target named by a format string).
+ *
+ * lud_clipboard_set_data() copies len bytes onto the clipboard under `format`,
+ * replacing any previous contents.  It returns 0 on success, non-zero on
+ * failure.  As with text, ownership is held only while the app runs.
+ *
+ * lud_clipboard_get_data() blocks briefly for the owner to answer and returns
+ * a malloc'd buffer the caller must free(), writing its length to *len_out
+ * (which may be NULL).  The buffer is NUL-terminated for convenience, but the
+ * terminator is not counted in *len_out.  Returns NULL when the clipboard is
+ * empty, holds no data in that format, or the owner does not respond in time.
+ *
+ * Large payloads transfer automatically through the INCR protocol on X11. */
+int   lud_clipboard_set_data(const char *format, const void *data, size_t len);
+void *lud_clipboard_get_data(const char *format, size_t *len_out);
+
+/* File lists, a convenience layer over LUD_CLIPBOARD_URI_LIST.
+ *
+ * lud_clipboard_set_files() places `count` file paths on the clipboard,
+ * percent-encoding each into a file:// URI.  Paths should be absolute.
+ * Returns 0 on success, non-zero on failure.
+ *
+ * lud_clipboard_get_files() blocks briefly and returns a NULL-terminated array
+ * of malloc'd absolute path strings, decoded from the file:// URIs on the
+ * clipboard.  The caller must free() each string and then the array.  Returns
+ * NULL when the clipboard holds no file list. */
+int    lud_clipboard_set_files(const char *const *paths, int count);
+char **lud_clipboard_get_files(void);
 
 #endif /* LUDICA_INPUT_H_ */

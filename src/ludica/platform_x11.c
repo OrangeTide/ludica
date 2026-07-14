@@ -417,13 +417,16 @@ lud__platform_shutdown(void)
 
 /* ---- Clipboard ---- */
 
-/* Map a MIME-ish format string to an X11 target atom.  Text maps to
- * UTF8_STRING; any other string is interned verbatim, so callers can
- * request future targets like "image/png" without further changes here. */
+/* Map a MIME-ish format string to an X11 target atom.  Plain text maps to
+ * the conventional UTF8_STRING atom; any other string (including structured
+ * text targets like "text/uri-list") is interned verbatim, so callers can
+ * request targets like "image/png" or "text/uri-list" unchanged. */
 static Atom
 clip_format_to_target(const char *format)
 {
-	if (!format || strstr(format, "text"))
+	if (!format ||
+	    !strcmp(format, LUD_CLIPBOARD_TEXT) ||
+	    !strcmp(format, "text/plain"))
 		return utf8_atom;
 	return XInternAtom(xdisplay, format, False);
 }
@@ -579,11 +582,12 @@ clip_in_step(void)
 	return 0;
 }
 
-/* Synchronously drain an INCR transfer for lud_clipboard_get_text.  Blocks
- * with a per-chunk timeout so a stalled owner cannot hang the caller.
- * Returns a malloc'd, NUL-terminated buffer (ownership passes to caller). */
-static char *
-clip_in_sync(void)
+/* Synchronously drain an INCR transfer for the blocking get path.  Blocks
+ * with a per-chunk timeout so a stalled owner cannot hang the caller.  Returns
+ * a malloc'd, NUL-terminated buffer (ownership passes to caller) and writes
+ * the byte count to *len_out (which may be NULL). */
+static unsigned char *
+clip_in_sync(size_t *len_out)
 {
 	int fd = ConnectionNumber(xdisplay);
 
@@ -597,7 +601,9 @@ clip_in_sync(void)
 				continue;
 			progressed = 1;
 			if (clip_in_step()) {
-				char *out = (char *)clip_in.buf;
+				unsigned char *out = clip_in.buf;
+				if (len_out)
+					*len_out = clip_in.len;
 				clip_in.buf = NULL;
 				clip_in.active = 0;
 				return out; /* NULL only if nothing was received */
@@ -709,24 +715,26 @@ clip_handle_request(const XSelectionRequestEvent *req)
 	XFlush(xdisplay);
 }
 
-int
-lud_clipboard_set_text(const char *utf8)
+/* Take ownership of the clipboard, serving `len` bytes under `target`.  The
+ * bytes are copied (NUL-terminated for the convenience of text callers, with
+ * the terminator excluded from owned_len). */
+static int
+clip_set(Atom target, const void *data, size_t len)
 {
 	if (!xdisplay)
 		return LUD_ERR;
-	if (!utf8)
-		utf8 = "";
 
-	size_t len = strlen(utf8);
 	unsigned char *copy = malloc(len + 1);
 	if (!copy)
 		return LUD_ERR;
-	memcpy(copy, utf8, len + 1);
+	if (len)
+		memcpy(copy, data, len);
+	copy[len] = 0;
 
 	free(owned_data);
 	owned_data = copy;
 	owned_len = len;
-	owned_target = utf8_atom;
+	owned_target = target;
 
 	XSetSelectionOwner(xdisplay, clipboard_atom, xwindow, CurrentTime);
 	if (XGetSelectionOwner(xdisplay, clipboard_atom) != xwindow) {
@@ -740,20 +748,33 @@ lud_clipboard_set_text(const char *utf8)
 	return LUD_OK;
 }
 
-char *
-lud_clipboard_get_text(void)
+/* Blocking read of `target` from the clipboard into a malloc'd, NUL-terminated
+ * buffer.  Writes the byte count to *len_out (may be NULL).  Returns NULL when
+ * the clipboard is empty, lacks that target, or the owner does not answer. */
+static unsigned char *
+clip_get(Atom target, size_t *len_out)
 {
+	if (len_out)
+		*len_out = 0;
 	if (!xdisplay || clip_req.active)
 		return NULL;
 
 	/* If we are the owner, answer from our own copy with no round-trip. */
 	if (XGetSelectionOwner(xdisplay, clipboard_atom) == xwindow) {
-		if (owned_target == utf8_atom && owned_data)
-			return strdup((char *)owned_data);
+		if (owned_target == target && owned_data) {
+			unsigned char *out = malloc(owned_len + 1);
+			if (out) {
+				memcpy(out, owned_data, owned_len);
+				out[owned_len] = 0;
+				if (len_out)
+					*len_out = owned_len;
+			}
+			return out;
+		}
 		return NULL;
 	}
 
-	XConvertSelection(xdisplay, clipboard_atom, utf8_atom, clip_prop,
+	XConvertSelection(xdisplay, clipboard_atom, target, clip_prop,
 			  xwindow, CurrentTime);
 	XFlush(xdisplay);
 
@@ -769,8 +790,8 @@ lud_clipboard_get_text(void)
 			if (xev.xselection.property == None)
 				return NULL; /* owner refused */
 			if (clip_probe_type() == incr_atom)
-				return clip_in_sync();
-			return (char *)clip_read_prop(NULL);
+				return clip_in_sync(len_out);
+			return clip_read_prop(len_out);
 		}
 
 		gettimeofday(&now, NULL);
@@ -788,6 +809,190 @@ lud_clipboard_get_text(void)
 			return NULL;
 		XEventsQueued(xdisplay, QueuedAfterReading);
 	}
+}
+
+int
+lud_clipboard_set_text(const char *utf8)
+{
+	if (!utf8)
+		utf8 = "";
+	return clip_set(utf8_atom, utf8, strlen(utf8));
+}
+
+char *
+lud_clipboard_get_text(void)
+{
+	return (char *)clip_get(utf8_atom, NULL);
+}
+
+int
+lud_clipboard_set_data(const char *format, const void *data, size_t len)
+{
+	if (!xdisplay)
+		return LUD_ERR;
+	return clip_set(clip_format_to_target(format), data, len);
+}
+
+void *
+lud_clipboard_get_data(const char *format, size_t *len_out)
+{
+	if (len_out)
+		*len_out = 0;
+	if (!xdisplay)
+		return NULL;
+	return clip_get(clip_format_to_target(format), len_out);
+}
+
+/* ---- File lists (text/uri-list) ---- */
+
+/* RFC 3986 unreserved set plus '/', which stays literal in a path. */
+static const char uri_keep[] =
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/";
+
+static int
+hex_val(int c)
+{
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+int
+lud_clipboard_set_files(const char *const *paths, int count)
+{
+	static const char hex[] = "0123456789ABCDEF";
+
+	if (!xdisplay || !paths || count <= 0)
+		return LUD_ERR;
+
+	size_t cap = 256, len = 0;
+	char *buf = malloc(cap);
+	if (!buf)
+		return LUD_ERR;
+
+	for (int i = 0; i < count; i++) {
+		const char *p = paths[i];
+		if (!p)
+			continue;
+		/* Worst case: "file://" + every byte percent-encoded + CRLF. */
+		size_t need = len + 7 + strlen(p) * 3 + 2;
+		if (need > cap) {
+			while (cap < need)
+				cap *= 2;
+			char *nb = realloc(buf, cap);
+			if (!nb) {
+				free(buf);
+				return LUD_ERR;
+			}
+			buf = nb;
+		}
+		memcpy(buf + len, "file://", 7);
+		len += 7;
+		for (const unsigned char *s = (const unsigned char *)p; *s; s++) {
+			if (strchr(uri_keep, *s)) {
+				buf[len++] = (char)*s;
+			} else {
+				buf[len++] = '%';
+				buf[len++] = hex[*s >> 4];
+				buf[len++] = hex[*s & 0x0f];
+			}
+		}
+		buf[len++] = '\r';
+		buf[len++] = '\n';
+	}
+
+	int rc = clip_set(clip_format_to_target(LUD_CLIPBOARD_URI_LIST), buf, len);
+	free(buf);
+	return rc;
+}
+
+/* Decode one uri-list line into a malloc'd path, or NULL to skip it.  Accepts
+ * file: URIs (with an optional //authority) and bare absolute paths. */
+static char *
+uri_line_to_path(const char *line, size_t n)
+{
+	const char *p = line;
+	const char *end = line + n;
+
+	if (n >= 5 && !strncmp(p, "file:", 5)) {
+		p += 5;
+		if (end - p >= 2 && p[0] == '/' && p[1] == '/') {
+			/* Skip the authority component up to the path's slash. */
+			p += 2;
+			const char *slash = memchr(p, '/', (size_t)(end - p));
+			if (!slash)
+				return NULL;
+			p = slash;
+		}
+	} else if (p >= end || *p != '/') {
+		return NULL; /* not a file URI or absolute path */
+	}
+
+	char *out = malloc((size_t)(end - p) + 1);
+	if (!out)
+		return NULL;
+	size_t o = 0;
+	while (p < end) {
+		int hi, lo;
+		if (*p == '%' && end - p >= 3 &&
+		    (hi = hex_val(p[1])) >= 0 && (lo = hex_val(p[2])) >= 0) {
+			out[o++] = (char)((hi << 4) | lo);
+			p += 3;
+		} else {
+			out[o++] = *p++;
+		}
+	}
+	out[o] = 0;
+	return out;
+}
+
+char **
+lud_clipboard_get_files(void)
+{
+	size_t len = 0;
+	unsigned char *raw = clip_get(clip_format_to_target(LUD_CLIPBOARD_URI_LIST),
+				      &len);
+	if (!raw)
+		return NULL;
+
+	char **list = NULL;
+	int n = 0, cap = 0;
+	char *s = (char *)raw;
+	char *end = s + len;
+
+	while (s < end) {
+		char *nl = memchr(s, '\n', (size_t)(end - s));
+		char *line_end = nl ? nl : end;
+		char *line = s;
+		s = nl ? nl + 1 : end;
+
+		if (line_end > line && line_end[-1] == '\r')
+			line_end--;
+		if (line_end == line || *line == '#')
+			continue; /* blank or comment */
+
+		char *path = uri_line_to_path(line, (size_t)(line_end - line));
+		if (!path)
+			continue;
+
+		if (n + 2 > cap) {
+			cap = cap ? cap * 2 : 4;
+			char **grow = realloc(list, (size_t)cap * sizeof(*list));
+			if (!grow) {
+				free(path);
+				break;
+			}
+			list = grow;
+		}
+		list[n++] = path;
+	}
+	free(raw);
+
+	if (!list)
+		return NULL;
+	list[n] = NULL;
+	return list;
 }
 
 void
