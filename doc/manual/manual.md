@@ -387,6 +387,59 @@ Actions do not require an `event` callback — they work entirely through
 polling. This makes it straightforward to eliminate event-driven input
 handling in favor of a pure poll-based frame loop.
 
+### Clipboard
+
+Ludica reads and writes the system clipboard as UTF-8 text. The simple
+path is synchronous:
+
+```c
+/* Write text (e.g. on a copy shortcut) */
+lud_clipboard_set_text("hello, clipboard");
+
+/* Read text (e.g. on a paste shortcut). Caller owns the string. */
+char *text = lud_clipboard_get_text();
+if (text) {
+    insert_at_cursor(text);
+    free(text);
+}
+```
+
+`lud_clipboard_get_text()` returns a malloc'd, NUL-terminated string that
+the caller must `free()`. It returns `NULL` when the clipboard is empty,
+holds no text, or the owning application does not answer within a short
+timeout. `lud_clipboard_set_text()` returns 0 on success. On X11 the
+clipboard contents are served only while the app runs, so they are lost on
+exit unless a clipboard manager copies them (standard X11 behavior).
+
+For UIs that must not stall, a non-blocking read delivers its result
+through a callback during a later frame's event processing:
+
+```c
+static void on_paste(const char *format, void *data, size_t len, void *user) {
+    (void)format; (void)len;
+    if (data)
+        insert_at_cursor((const char *)data);  /* data freed after return */
+}
+
+/* Kick off a read; returns immediately. */
+lud_clipboard_get_async(LUD_CLIPBOARD_TEXT, on_paste, NULL);
+```
+
+The callback always fires, even on failure or timeout, in which case
+`data` is `NULL` and `len` is 0. The `data` buffer is owned by ludica and
+freed once the callback returns, so copy anything you need to keep. Only
+one asynchronous request may be in flight at a time; a second one started
+while the first is pending fails immediately with a `NULL` callback.
+
+The `format` argument (`LUD_CLIPBOARD_TEXT` is `"text/plain;charset=utf-8"`)
+exists so non-text targets such as images or file lists can be added later
+without changing the API. Today only text is implemented.
+
+Platform notes: X11 uses the `CLIPBOARD` selection (Ctrl+C / Ctrl+V), not
+the middle-click `PRIMARY` selection. Windows uses `CF_UNICODETEXT`. The
+Emscripten backend is a stub because the browser clipboard is asynchronous
+and gated behind a user gesture and permission prompt.
+
 ### Fonts
 
 Ludica provides bitmap fonts rendered through the sprite batch system.
