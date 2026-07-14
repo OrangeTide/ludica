@@ -5,9 +5,9 @@ Status and design notes for the ludica Windows backend. See also
 
 ## Status
 
-The Windows backend was brought up to the current platform interface in
-`src/ludica/platform_win32.c`. It mirrors `platform_x11.c` and implements
-the five entry points that `app.c` drives:
+`src/ludica/platform_win32.c` brings the Windows backend up to the current
+platform interface. It mirrors `platform_x11.c` and implements the five
+entry points that `app.c` drives:
 
 | Function | Behavior |
 |----------|----------|
@@ -21,13 +21,13 @@ A `WndProc` translates input into `lud__event_push`: keyboard through a
 `VK` to `lud_keycode` table, text through `WM_CHAR` with UTF-16 surrogate
 assembly, mouse move, buttons, and both wheel axes, plus resize and focus.
 The file uses the wide (`-W`) Win32 API explicitly so it does not depend on
-the `UNICODE` compile macro. Application text is UTF-8 and converted to
-UTF-16 at the boundary. The clipboard implementation lives here too.
+the `UNICODE` compile macro. The backend converts application text from
+UTF-8 to UTF-16 at the boundary. The clipboard implementation lives here too.
 
 ## GL strategy: ANGLE, not a runtime loader
 
 Windows `opengl32.dll` exports only OpenGL 1.1, so GLES entry points must
-come from somewhere else. Two options were considered.
+come from somewhere else. There were two options.
 
 1. ANGLE / EGL. Link `libEGL` and `libGLESv2` (ANGLE) the same way the
    Linux backend links EGL and GLES. GL symbols resolve at link time, real
@@ -40,10 +40,10 @@ come from somewhere else. Two options were considered.
    accept ludica's `#version 100` and `#version 300 es` shaders. This
    avoids redistributable DLLs but adds shader-compatibility risk and more
    code. A suitable CC0 loader exists in the birdie project
-   (`src/birdie-gui/bd_gl.c`), which could have been lifted for this path.
+   (`src/birdie-gui/bd_gl.c`), which the WGL path could lift.
 
-ANGLE was chosen. The birdie loader was therefore not used, since it only
-applies to the WGL path.
+The port uses ANGLE. The birdie loader fits only the WGL path, so it does
+not apply here.
 
 ## What is verified, and what is not
 
@@ -71,6 +71,6 @@ Windows host. Final validation must happen there.
 `platform_win32.c`. The exported Windows libraries gained `-lws2_32` for
 `automation.c`, which uses winsock.
 
-The older `src/ludica/win32/window.c` predates the `app.c` platform
-interface and is no longer built. It is the Windows twin of the also-dead
-`src/ludica/unix/ludica.c`, and is left in the tree unbuilt.
+The build no longer includes the older `src/ludica/win32/window.c`, which
+predates the `app.c` platform interface. It is the Windows twin of the
+also-dead `src/ludica/unix/ludica.c` and stays in the tree unbuilt.
