@@ -486,6 +486,43 @@ Windows implements text (`CF_UNICODETEXT`); its image and file targets are not
 wired yet. The Emscripten backend is a stub because the browser clipboard is
 asynchronous and gated behind a user gesture and permission prompt.
 
+### Drag and Drop
+
+The window is a drop target: files or data dragged onto it from another
+application arrive as a `LUD_EV_DROP` event. The event names the data type and
+carries the bytes, which are owned by ludica and valid only during the
+callback, so copy anything you need to keep.
+
+```c
+static int on_event(const lud_event_t *ev) {
+    if (ev->type != LUD_EV_DROP)
+        return 0;
+
+    if (!strcmp(ev->drop.format, LUD_CLIPBOARD_URI_LIST)) {
+        char **files = lud_parse_uri_list(ev->drop.data, ev->drop.len);
+        for (int i = 0; files && files[i]; i++)
+            open_file(files[i], ev->drop.x, ev->drop.y);
+        /* free each string, then the array */
+        for (int i = 0; files && files[i]; i++) free(files[i]);
+        free(files);
+    } else if (!strcmp(ev->drop.format, LUD_CLIPBOARD_PNG)) {
+        load_image(ev->drop.data, ev->drop.len);
+    }
+    return 1;
+}
+```
+
+`ev->drop.format` is `LUD_CLIPBOARD_URI_LIST` for files, `LUD_CLIPBOARD_PNG`
+for an image, or `LUD_CLIPBOARD_TEXT` for text. `ev->drop.x` and `ev->drop.y`
+give the drop location in window pixels. `lud_parse_uri_list()` decodes a
+dropped or copied `text/uri-list` buffer into a NULL-terminated array of paths.
+
+Platform notes: X11 implements the XDND protocol as a drop target, reusing the
+same selection transfer and `INCR` chunking as the clipboard, so a dropped file
+or large image arrives at any size. Being a drag source (starting a drag from
+the window) is not implemented. Windows and Emscripten do not deliver drop
+events yet.
+
 ### Fonts
 
 Ludica provides bitmap fonts rendered through the sprite batch system.

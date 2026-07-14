@@ -34,6 +34,7 @@ Each `module.mk` declares targets via `EXECUTABLES`, `LIBRARIES`, and
 - `samples/demo04_sprites/` — Sprite rendering demo
 - `samples/demo08_picking/` — 3D color-id picking via offscreen render target (automatable; `--selftest`)
 - `samples/cliptest/` — clipboard copy/paste demo and cross-client round-trip self-test, including large-payload INCR transfers (`--selftest`)
+- `samples/dndtest/` — drag-and-drop (XDND) drop-target demo and self-test; synthesizes a drag source over a second X connection (`--selftest`)
 - `samples/demo05_audio/` — Multi-channel audio mixer demo
 - `samples/lilpc/` — 286 XT PC emulator with CGA display
 - `samples/tridrop/` — Triangle drop demo
@@ -156,6 +157,13 @@ for file lists (`text/uri-list`, handles `file://` percent-encoding).
 via callback during event processing; one request at a time. Large payloads use
 the X11 INCR protocol automatically. X11 serves text/images/files; Windows is
 text-only for now; Emscripten is a stub (browser clipboard is permission-gated).
+
+Drag and drop: the window is an XDND drop target. Files or data dropped onto it
+arrive as a `LUD_EV_DROP` event (`ev->drop.format`, `.data`, `.len`, `.x`, `.y`;
+data owned by ludica, valid only during the callback). `lud_parse_uri_list(data,
+len)` decodes a dropped/copied `text/uri-list` into a NULL-terminated path array.
+X11 only (reuses the clipboard selection + INCR machinery); drag-source is not
+implemented; Windows/Emscripten do not deliver drops yet.
 
 ## Adding a New Sample Program
 
