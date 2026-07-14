@@ -22,12 +22,31 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
 
 #define COPY_TEXT  "cliptest copy \xE2\x98\xBA line"   /* has a UTF-8 codepoint */
 #define PASTE_TEXT "cliptest paste 12345"
+
+/* A payload well over a single X property's max request size, to force the
+ * INCR incremental-transfer path in both directions.  Plain ASCII so a chunk
+ * boundary never splits a multi-byte codepoint. */
+#define BIG_LEN 200000
+static char *big_text;
+
+static char *
+make_big_text(void)
+{
+	char *s = malloc(BIG_LEN + 1);
+	if (!s)
+		return NULL;
+	for (size_t i = 0; i < BIG_LEN; i++)
+		s[i] = (char)('A' + (i % 26));
+	s[BIG_LEN] = 0;
+	return s;
+}
 
 static int selftest;
 static int failures;
@@ -75,11 +94,37 @@ static Window   win_b;
 static Atom     clip_b;     /* CLIPBOARD */
 static Atom     utf8_b;     /* UTF8_STRING */
 static Atom     targets_b;  /* TARGETS */
+static Atom     incr_b;     /* INCR */
 static Atom     prop_b;     /* our read destination property */
 
 static const char *b_owned; /* non-NULL while client B owns the selection */
-static int   b_got_notify;  /* SelectionNotify seen for our last request */
+static size_t      b_owned_len;
+static int   b_got_notify;  /* SelectionNotify (non-INCR) seen; ready to read */
 static Atom  b_notify_prop; /* property from that SelectionNotify */
+
+/* B as requestor, receiving an INCR transfer from ludica. */
+static int      b_in_active;
+static int      b_in_done;
+static unsigned char *b_in_buf;
+static size_t   b_in_len, b_in_cap;
+
+/* B as owner, sending an INCR transfer to ludica. */
+static int      b_out_active;
+static Window   b_out_requestor;
+static Atom     b_out_prop;
+static size_t   b_out_sent;
+
+static size_t
+b_chunk_max(void)
+{
+	long units = XExtendedMaxRequestSize(dpy_b);
+	if (units <= 0)
+		units = XMaxRequestSize(dpy_b);
+	size_t bytes = (size_t)units * 4;
+	if (bytes < 4096)
+		bytes = 4096;
+	return bytes / 4;
+}
 
 static int
 client_b_init(void)
@@ -93,6 +138,7 @@ client_b_init(void)
 	clip_b    = XInternAtom(dpy_b, "CLIPBOARD", False);
 	utf8_b    = XInternAtom(dpy_b, "UTF8_STRING", False);
 	targets_b = XInternAtom(dpy_b, "TARGETS", False);
+	incr_b    = XInternAtom(dpy_b, "INCR", False);
 	prop_b    = XInternAtom(dpy_b, "CLIPTEST_B", False);
 	return 0;
 }
@@ -121,15 +167,107 @@ client_b_serve(const XSelectionRequestEvent *req)
 					PropModeReplace, (unsigned char *)t, 2);
 			notify.property = prop;
 		} else if (req->target == utf8_b) {
-			XChangeProperty(dpy_b, req->requestor, prop, utf8_b, 8,
-					PropModeReplace,
-					(const unsigned char *)b_owned,
-					(int)strlen(b_owned));
-			notify.property = prop;
+			if (b_owned_len <= b_chunk_max()) {
+				XChangeProperty(dpy_b, req->requestor, prop, utf8_b, 8,
+						PropModeReplace,
+						(const unsigned char *)b_owned,
+						(int)b_owned_len);
+				notify.property = prop;
+			} else if (!b_out_active) {
+				long hint = (long)b_owned_len;
+				XChangeProperty(dpy_b, req->requestor, prop, incr_b, 32,
+						PropModeReplace,
+						(unsigned char *)&hint, 1);
+				XSelectInput(dpy_b, req->requestor, PropertyChangeMask);
+				b_out_active = 1;
+				b_out_requestor = req->requestor;
+				b_out_prop = prop;
+				b_out_sent = 0;
+				notify.property = prop;
+			}
 		}
 	}
 	XSendEvent(dpy_b, req->requestor, False, 0, (XEvent *)&notify);
 	XFlush(dpy_b);
+}
+
+/* Send the next INCR chunk to the requestor (or the terminating zero-length
+ * write), driven by PropertyDelete on the requestor's window. */
+static void
+b_out_step(void)
+{
+	size_t chunk = b_chunk_max();
+	size_t remaining = b_owned_len - b_out_sent;
+	size_t n = remaining < chunk ? remaining : chunk;
+
+	XChangeProperty(dpy_b, b_out_requestor, b_out_prop, utf8_b, 8,
+			PropModeReplace,
+			(const unsigned char *)b_owned + b_out_sent, (int)n);
+	b_out_sent += n;
+	XFlush(dpy_b);
+
+	if (n == 0) {
+		XSelectInput(dpy_b, b_out_requestor, NoEventMask);
+		b_out_active = 0;
+		b_out_requestor = 0;
+		b_out_prop = 0;
+		b_out_sent = 0;
+	}
+}
+
+/* Probe the type of B's read destination property without fetching data. */
+static Atom
+b_probe_type(void)
+{
+	Atom type;
+	int fmt;
+	unsigned long nitems, after;
+	unsigned char *p = NULL;
+
+	if (XGetWindowProperty(dpy_b, win_b, prop_b, 0, 0, False,
+			       AnyPropertyType, &type, &fmt, &nitems, &after,
+			       &p) != Success)
+		return None;
+	if (p)
+		XFree(p);
+	return type;
+}
+
+/* Consume one incoming INCR chunk (B as requestor); zero-length ends it. */
+static void
+b_in_step(void)
+{
+	Atom type;
+	int fmt;
+	unsigned long nitems, after;
+	unsigned char *p = NULL;
+
+	if (XGetWindowProperty(dpy_b, win_b, prop_b, 0, LONG_MAX, True,
+			       AnyPropertyType, &type, &fmt, &nitems, &after,
+			       &p) != Success) {
+		b_in_active = 0;
+		b_in_done = 1;
+		return;
+	}
+	size_t chunk = (size_t)nitems * (fmt / 8);
+	if (chunk == 0) {
+		if (p)
+			XFree(p);
+		b_in_active = 0;
+		b_in_done = 1;
+		return;
+	}
+	if (b_in_len + chunk + 1 > b_in_cap) {
+		size_t ncap = b_in_cap ? b_in_cap : 4096;
+		while (ncap < b_in_len + chunk + 1)
+			ncap *= 2;
+		b_in_buf = realloc(b_in_buf, ncap);
+		b_in_cap = ncap;
+	}
+	memcpy(b_in_buf + b_in_len, p, chunk);
+	b_in_len += chunk;
+	b_in_buf[b_in_len] = 0;
+	XFree(p);
 }
 
 /* Pump B's events once (non-blocking). */
@@ -144,11 +282,34 @@ client_b_pump(void)
 			client_b_serve(&e.xselectionrequest);
 			break;
 		case SelectionNotify:
-			b_got_notify = 1;
 			b_notify_prop = e.xselection.property;
+			if (b_notify_prop != None && b_probe_type() == incr_b) {
+				/* Large reply: start an incremental receive. */
+				free(b_in_buf);
+				b_in_buf = NULL;
+				b_in_len = 0;
+				b_in_cap = 0;
+				b_in_active = 1;
+				b_in_done = 0;
+				XDeleteProperty(dpy_b, win_b, prop_b);
+				XFlush(dpy_b);
+			} else {
+				b_got_notify = 1;
+			}
+			break;
+		case PropertyNotify:
+			if (b_in_active && e.xproperty.atom == prop_b &&
+			    e.xproperty.state == PropertyNewValue)
+				b_in_step();
+			else if (b_out_active &&
+				 e.xproperty.window == b_out_requestor &&
+				 e.xproperty.atom == b_out_prop &&
+				 e.xproperty.state == PropertyDelete)
+				b_out_step();
 			break;
 		case SelectionClear:
 			b_owned = NULL;
+			b_owned_len = 0;
 			break;
 		}
 	}
@@ -185,17 +346,19 @@ client_b_read(void)
 
 enum {
 	ST_START,
-	ST_COPY_WAIT,   /* B is reading what ludica copied */
-	ST_PASTE_WAIT,  /* ludica is reading what B put on the clipboard */
+	ST_COPY_WAIT,       /* B is reading what ludica copied (small) */
+	ST_PASTE_WAIT,      /* ludica is reading what B copied (small) */
+	ST_BIG_COPY_WAIT,   /* B is reading a large ludica payload via INCR */
+	ST_BIG_PASTE_WAIT,  /* ludica is reading a large B payload via INCR */
 	ST_DONE,
 };
 
 static int state = ST_START;
 static int state_frame;               /* frame this state began */
 static int paste_done;
-static char paste_got[256];
+static char *paste_buf;               /* async paste result (caller-sized) */
 
-#define WAIT_LIMIT 180                 /* generous: a few seconds at any fps */
+#define WAIT_LIMIT 300                 /* generous; INCR needs several frames */
 
 static void
 check(const char *label, const char *got, const char *want)
@@ -203,8 +366,14 @@ check(const char *label, const char *got, const char *want)
 	int ok = got && !strcmp(got, want);
 	if (!ok)
 		failures++;
-	printf("%-6s %s got=[%s] want=[%s]\n", ok ? "PASS" : "FAIL",
-	       label, got ? got : "(null)", want);
+	/* Keep large payloads out of the log: report length, not content. */
+	if (strlen(want) > 64) {
+		printf("%-6s %s got_len=%zu want_len=%zu\n", ok ? "PASS" : "FAIL",
+		       label, got ? strlen(got) : 0, strlen(want));
+	} else {
+		printf("%-6s %s got=[%s] want=[%s]\n", ok ? "PASS" : "FAIL",
+		       label, got ? got : "(null)", want);
+	}
 	fflush(stdout);
 }
 
@@ -214,12 +383,63 @@ on_paste_async(const char *format, void *data, size_t len, void *user)
 {
 	(void)format; (void)user;
 	paste_done = 1;
-	if (data && len < sizeof(paste_got)) {
-		memcpy(paste_got, data, len);
-		paste_got[len] = 0;
-	} else {
-		paste_got[0] = 0;
+	free(paste_buf);
+	paste_buf = NULL;
+	if (data && len) {
+		paste_buf = malloc(len + 1);
+		if (paste_buf) {
+			memcpy(paste_buf, data, len);
+			paste_buf[len] = 0;
+		}
 	}
+}
+
+/* Take B's most recent read result (INCR or single-shot). Caller frees. */
+static char *
+b_take_read(void)
+{
+	if (b_in_done) {
+		char *out = (char *)b_in_buf;
+		b_in_buf = NULL;
+		b_in_len = 0;
+		b_in_cap = 0;
+		b_in_done = 0;
+		return out;
+	}
+	return b_notify_prop != None ? client_b_read() : NULL;
+}
+
+/* B requests the CLIPBOARD from ludica (copy direction). */
+static void
+begin_copy_read(void)
+{
+	b_got_notify = 0;
+	b_in_done = 0;
+	b_notify_prop = None;
+	XConvertSelection(dpy_b, clip_b, utf8_b, prop_b, win_b, CurrentTime);
+	XFlush(dpy_b);
+}
+
+/* B takes ownership, then ludica reads it async (paste direction).  XSync,
+ * not XFlush, so the server commits the ownership change before ludica queries
+ * the owner; otherwise its async-get shortcut may still see itself as owner. */
+static void
+begin_paste_read(const char *text)
+{
+	b_owned = text;
+	b_owned_len = strlen(text);
+	XSetSelectionOwner(dpy_b, clip_b, win_b, CurrentTime);
+	XSync(dpy_b, False);
+	paste_done = 0;
+	lud_clipboard_get_async(LUD_CLIPBOARD_TEXT, on_paste_async, NULL);
+}
+
+/* A copy-direction read is complete once a single-shot notify or an INCR
+ * transfer has landed. */
+static int
+copy_read_ready(void)
+{
+	return b_got_notify || b_in_done;
 }
 
 static void
@@ -239,31 +459,18 @@ selftest_step(void)
 			state = ST_DONE;
 			return;
 		}
-		b_got_notify = 0;
-		XConvertSelection(dpy_b, clip_b, utf8_b, prop_b, win_b,
-				  CurrentTime);
-		XFlush(dpy_b);
+		begin_copy_read();
 		state = ST_COPY_WAIT;
 		state_frame = frames;
 		break;
 
 	case ST_COPY_WAIT:
-		if (b_got_notify) {
-			char *got = b_notify_prop != None ? client_b_read() : NULL;
+		if (copy_read_ready()) {
+			char *got = b_take_read();
 			check("copy", got, COPY_TEXT);
 			free(got);
 
-			/* Paste direction: B owns, ludica reads it async.
-			 * XSync (not XFlush) so the server has committed the
-			 * ownership change before ludica queries the owner;
-			 * otherwise its async-get shortcut may still see itself
-			 * as owner and return the copy text. */
-			b_owned = PASTE_TEXT;
-			XSetSelectionOwner(dpy_b, clip_b, win_b, CurrentTime);
-			XSync(dpy_b, False);
-			paste_done = 0;
-			lud_clipboard_get_async(LUD_CLIPBOARD_TEXT,
-						on_paste_async, NULL);
+			begin_paste_read(PASTE_TEXT);
 			state = ST_PASTE_WAIT;
 			state_frame = frames;
 		} else if (frames - state_frame > WAIT_LIMIT) {
@@ -274,10 +481,45 @@ selftest_step(void)
 
 	case ST_PASTE_WAIT:
 		if (paste_done) {
-			check("paste", paste_got, PASTE_TEXT);
-			state = ST_DONE;
+			check("paste", paste_buf, PASTE_TEXT);
+			/* Large copy: forces the outgoing INCR path in ludica. */
+			if (lud_clipboard_set_text(big_text) != 0) {
+				printf("FAIL big-copy: set_text failed\n");
+				failures++;
+				state = ST_DONE;
+				return;
+			}
+			begin_copy_read();
+			state = ST_BIG_COPY_WAIT;
+			state_frame = frames;
 		} else if (frames - state_frame > WAIT_LIMIT) {
 			check("paste", NULL, PASTE_TEXT);
+			state = ST_DONE;
+		}
+		break;
+
+	case ST_BIG_COPY_WAIT:
+		if (copy_read_ready()) {
+			char *got = b_take_read();
+			check("big-copy", got, big_text);
+			free(got);
+
+			/* Large paste: forces the incoming INCR path in ludica. */
+			begin_paste_read(big_text);
+			state = ST_BIG_PASTE_WAIT;
+			state_frame = frames;
+		} else if (frames - state_frame > WAIT_LIMIT) {
+			check("big-copy", NULL, big_text);
+			state = ST_DONE;
+		}
+		break;
+
+	case ST_BIG_PASTE_WAIT:
+		if (paste_done) {
+			check("big-paste", paste_buf, big_text);
+			state = ST_DONE;
+		} else if (frames - state_frame > WAIT_LIMIT) {
+			check("big-paste", NULL, big_text);
 			state = ST_DONE;
 		}
 		break;
@@ -297,6 +539,13 @@ init(void)
 {
 	selftest = lud_get_config("selftest") != NULL;
 	if (selftest) {
+		big_text = make_big_text();
+		if (!big_text) {
+			printf("FAIL: out of memory building test payload\n");
+			failures++;
+			lud_quit();
+			return;
+		}
 		if (client_b_init() != 0) {
 			printf("FAIL: second X connection unavailable\n");
 			failures++;
@@ -325,6 +574,12 @@ cleanup(void)
 		XCloseDisplay(dpy_b);
 		dpy_b = NULL;
 	}
+	free(big_text);
+	big_text = NULL;
+	free(b_in_buf);
+	b_in_buf = NULL;
+	free(paste_buf);
+	paste_buf = NULL;
 }
 
 int

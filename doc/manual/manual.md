@@ -435,6 +435,11 @@ The `format` argument (`LUD_CLIPBOARD_TEXT` is `"text/plain;charset=utf-8"`)
 exists so non-text targets such as images or file lists can be added later
 without changing the API. Today only text is implemented.
 
+Payload size is not a concern. On X11 a transfer larger than the server's
+maximum request size moves through the `INCR` incremental protocol
+automatically, in both the read and write directions, so multi-megabyte text
+copies and pastes work without any caller involvement.
+
 Platform notes: X11 uses the `CLIPBOARD` selection (Ctrl+C / Ctrl+V), not
 the middle-click `PRIMARY` selection. Windows uses `CF_UNICODETEXT`. The
 Emscripten backend is a stub because the browser clipboard is asynchronous

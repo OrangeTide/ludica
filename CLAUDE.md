@@ -33,7 +33,7 @@ Each `module.mk` declares targets via `EXECUTABLES`, `LIBRARIES`, and
 - `samples/demo03_text_dialogs/` — Font rendering + dialog box UI
 - `samples/demo04_sprites/` — Sprite rendering demo
 - `samples/demo08_picking/` — 3D color-id picking via offscreen render target (automatable; `--selftest`)
-- `samples/cliptest/` — clipboard copy/paste demo and cross-client round-trip self-test (`--selftest`)
+- `samples/cliptest/` — clipboard copy/paste demo and cross-client round-trip self-test, including large-payload INCR transfers (`--selftest`)
 - `samples/demo05_audio/` — Multi-channel audio mixer demo
 - `samples/lilpc/` — 286 XT PC emulator with CGA display
 - `samples/tridrop/` — Triangle drop demo
