@@ -431,19 +431,60 @@ freed once the callback returns, so copy anything you need to keep. Only
 one asynchronous request may be in flight at a time; a second one started
 while the first is pending fails immediately with a `NULL` callback.
 
-The `format` argument (`LUD_CLIPBOARD_TEXT` is `"text/plain;charset=utf-8"`)
-exists so non-text targets such as images or file lists can be added later
-without changing the API. Today only text is implemented.
+The `format` argument names the target. `LUD_CLIPBOARD_TEXT` is
+`"text/plain;charset=utf-8"`, `LUD_CLIPBOARD_PNG` is `"image/png"`, and
+`LUD_CLIPBOARD_URI_LIST` is `"text/uri-list"` for files. Any other MIME-style
+string works too.
+
+#### Binary data and images
+
+For arbitrary bytes, the typed data functions mirror the text ones but carry a
+length and are byte-exact (embedded NUL bytes are fine):
+
+```c
+/* Copy a PNG-encoded image. */
+lud_clipboard_set_data(LUD_CLIPBOARD_PNG, png_bytes, png_len);
+
+/* Paste one. Caller frees the buffer. */
+size_t len;
+void *png = lud_clipboard_get_data(LUD_CLIPBOARD_PNG, &len);
+if (png) {
+    decode_png(png, len);
+    free(png);
+}
+```
+
+`lud_clipboard_get_data()` blocks briefly like `get_text()`; the async reader
+above handles the same targets when you must not stall.
+
+#### Files
+
+Files use the standard `text/uri-list` target, with a convenience layer that
+handles `file://` percent-encoding for you:
+
+```c
+const char *paths[] = { "/home/me/a.png", "/home/me/notes.txt" };
+lud_clipboard_set_files(paths, 2);
+
+/* Read a copied or dropped file list. */
+char **files = lud_clipboard_get_files();
+for (int i = 0; files && files[i]; i++) {
+    open_file(files[i]);
+    free(files[i]);
+}
+free(files);
+```
 
 Payload size is not a concern. On X11 a transfer larger than the server's
 maximum request size moves through the `INCR` incremental protocol
-automatically, in both the read and write directions, so multi-megabyte text
-copies and pastes work without any caller involvement.
+automatically, in both the read and write directions, so multi-megabyte images
+and text copies and pastes work without any caller involvement.
 
 Platform notes: X11 uses the `CLIPBOARD` selection (Ctrl+C / Ctrl+V), not
-the middle-click `PRIMARY` selection. Windows uses `CF_UNICODETEXT`. The
-Emscripten backend is a stub because the browser clipboard is asynchronous
-and gated behind a user gesture and permission prompt.
+the middle-click `PRIMARY` selection, and serves text, images, and file lists.
+Windows implements text (`CF_UNICODETEXT`); its image and file targets are not
+wired yet. The Emscripten backend is a stub because the browser clipboard is
+asynchronous and gated behind a user gesture and permission prompt.
 
 ### Fonts
 

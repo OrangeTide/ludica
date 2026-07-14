@@ -148,11 +148,14 @@ Gamepad axes have a rescaled dead zone (default 0.15), tunable via
 
 Clipboard: `lud_clipboard_get_text()` / `lud_clipboard_set_text()` for
 synchronous UTF-8 text (get returns a malloc'd string the caller frees;
-NULL on empty/timeout). `lud_clipboard_get_async(format, cb, user)` reads
-without blocking and delivers via callback during event processing; one
-request at a time. The `format` argument (e.g. `LUD_CLIPBOARD_TEXT`) leaves
-room for non-text targets later. X11 uses the CLIPBOARD selection; Emscripten
-is a stub (browser clipboard is permission-gated).
+NULL on empty/timeout). `lud_clipboard_get_data()` / `lud_clipboard_set_data(format,
+data, len)` for byte-exact binary (images via `LUD_CLIPBOARD_PNG`, or any MIME
+target). `lud_clipboard_get_files()` / `lud_clipboard_set_files(paths, count)`
+for file lists (`text/uri-list`, handles `file://` percent-encoding).
+`lud_clipboard_get_async(format, cb, user)` reads without blocking and delivers
+via callback during event processing; one request at a time. Large payloads use
+the X11 INCR protocol automatically. X11 serves text/images/files; Windows is
+text-only for now; Emscripten is a stub (browser clipboard is permission-gated).
 
 ## Adding a New Sample Program
 

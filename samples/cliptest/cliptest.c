@@ -48,6 +48,29 @@ make_big_text(void)
 	return s;
 }
 
+/* A small binary blob standing in for image bytes.  It deliberately contains
+ * NUL bytes so the round trip proves the path is byte-accurate, not string
+ * based.  Kept under the INCR threshold to exercise the plain single-property
+ * path for a non-text target. */
+#define IMG_LEN 5000
+static unsigned char img_blob[IMG_LEN];
+
+static void
+make_img_blob(void)
+{
+	for (size_t i = 0; i < IMG_LEN; i++)
+		img_blob[i] = (unsigned char)(i * 37 + 11);
+}
+
+/* File paths for the uri-list round trip.  Includes a space and a non-ASCII
+ * byte to exercise percent-encoding and decoding. */
+static const char *const test_paths[] = {
+	"/tmp/a file.txt",
+	"/home/u/\xC3\xA9vj.png",   /* 'e' with acute accent, UTF-8 */
+	"/x/y",
+};
+#define TEST_PATHS_N ((int)(sizeof(test_paths) / sizeof(test_paths[0])))
+
 static int selftest;
 static int failures;
 static int frames;
@@ -95,6 +118,7 @@ static Atom     clip_b;     /* CLIPBOARD */
 static Atom     utf8_b;     /* UTF8_STRING */
 static Atom     targets_b;  /* TARGETS */
 static Atom     incr_b;     /* INCR */
+static Atom     png_b;      /* image/png */
 static Atom     prop_b;     /* our read destination property */
 
 static const char *b_owned; /* non-NULL while client B owns the selection */
@@ -139,6 +163,7 @@ client_b_init(void)
 	utf8_b    = XInternAtom(dpy_b, "UTF8_STRING", False);
 	targets_b = XInternAtom(dpy_b, "TARGETS", False);
 	incr_b    = XInternAtom(dpy_b, "INCR", False);
+	png_b     = XInternAtom(dpy_b, "image/png", False);
 	prop_b    = XInternAtom(dpy_b, "CLIPTEST_B", False);
 	return 0;
 }
@@ -315,25 +340,30 @@ client_b_pump(void)
 	}
 }
 
-/* Read the property B filled after a completed request. Caller frees. */
-static char *
-client_b_read(void)
+/* Read the property B filled after a completed single-shot request, for any
+ * 8-bit target (text or binary). Caller frees; *len_out gets the byte count. */
+static unsigned char *
+client_b_read(size_t *len_out)
 {
 	Atom type;
 	int fmt;
 	unsigned long nitems, after;
 	unsigned char *data = NULL;
-	char *out = NULL;
+	unsigned char *out = NULL;
 
+	if (len_out)
+		*len_out = 0;
 	if (XGetWindowProperty(dpy_b, win_b, prop_b, 0, 65536, False,
 			       AnyPropertyType, &type, &fmt, &nitems, &after,
 			       &data) != Success)
 		return NULL;
-	if (data && type == utf8_b && fmt == 8) {
+	if (data && fmt == 8) {
 		out = malloc(nitems + 1);
 		if (out) {
 			memcpy(out, data, nitems);
 			out[nitems] = 0;
+			if (len_out)
+				*len_out = nitems;
 		}
 	}
 	if (data)
@@ -350,6 +380,7 @@ enum {
 	ST_PASTE_WAIT,      /* ludica is reading what B copied (small) */
 	ST_BIG_COPY_WAIT,   /* B is reading a large ludica payload via INCR */
 	ST_BIG_PASTE_WAIT,  /* ludica is reading a large B payload via INCR */
+	ST_IMG_COPY_WAIT,   /* B is reading a binary image/png payload */
 	ST_DONE,
 };
 
@@ -377,6 +408,51 @@ check(const char *label, const char *got, const char *want)
 	fflush(stdout);
 }
 
+/* Byte-exact comparison for binary payloads (NUL-safe). */
+static void
+check_bytes(const char *label, const unsigned char *got, size_t got_len,
+	    const unsigned char *want, size_t want_len)
+{
+	int ok = got && got_len == want_len && !memcmp(got, want, want_len);
+	if (!ok)
+		failures++;
+	printf("%-6s %s got_len=%zu want_len=%zu\n", ok ? "PASS" : "FAIL",
+	       label, got ? got_len : 0, want_len);
+	fflush(stdout);
+}
+
+/* In-process round trip for the file-list helpers: set paths, read them back,
+ * and confirm each decodes to the original.  Uses ludica's owner-side path. */
+static void
+check_files(void)
+{
+	if (lud_clipboard_set_files(test_paths, TEST_PATHS_N) != 0) {
+		printf("FAIL   files set_files failed\n");
+		failures++;
+		return;
+	}
+	char **got = lud_clipboard_get_files();
+	int n = 0;
+	if (got)
+		while (got[n])
+			n++;
+
+	int ok = got && n == TEST_PATHS_N;
+	for (int i = 0; ok && i < n; i++)
+		ok = !strcmp(got[i], test_paths[i]);
+	if (!ok)
+		failures++;
+	printf("%-6s files got=%d want=%d\n", ok ? "PASS" : "FAIL",
+	       n, TEST_PATHS_N);
+	fflush(stdout);
+
+	if (got) {
+		for (int i = 0; i < n; i++)
+			free(got[i]);
+		free(got);
+	}
+}
+
 /* async callback for the paste direction */
 static void
 on_paste_async(const char *format, void *data, size_t len, void *user)
@@ -394,29 +470,37 @@ on_paste_async(const char *format, void *data, size_t len, void *user)
 	}
 }
 
-/* Take B's most recent read result (INCR or single-shot). Caller frees. */
-static char *
-b_take_read(void)
+/* Take B's most recent read result (INCR or single-shot). Caller frees;
+ * *len_out gets the byte count. */
+static unsigned char *
+b_take_read(size_t *len_out)
 {
 	if (b_in_done) {
-		char *out = (char *)b_in_buf;
+		unsigned char *out = b_in_buf;
+		if (len_out)
+			*len_out = b_in_len;
 		b_in_buf = NULL;
 		b_in_len = 0;
 		b_in_cap = 0;
 		b_in_done = 0;
 		return out;
 	}
-	return b_notify_prop != None ? client_b_read() : NULL;
+	if (b_notify_prop == None) {
+		if (len_out)
+			*len_out = 0;
+		return NULL;
+	}
+	return client_b_read(len_out);
 }
 
-/* B requests the CLIPBOARD from ludica (copy direction). */
+/* B requests `target` (CLIPBOARD) from ludica (copy direction). */
 static void
-begin_copy_read(void)
+begin_copy_read(Atom target)
 {
 	b_got_notify = 0;
 	b_in_done = 0;
 	b_notify_prop = None;
-	XConvertSelection(dpy_b, clip_b, utf8_b, prop_b, win_b, CurrentTime);
+	XConvertSelection(dpy_b, clip_b, target, prop_b, win_b, CurrentTime);
 	XFlush(dpy_b);
 }
 
@@ -459,14 +543,14 @@ selftest_step(void)
 			state = ST_DONE;
 			return;
 		}
-		begin_copy_read();
+		begin_copy_read(utf8_b);
 		state = ST_COPY_WAIT;
 		state_frame = frames;
 		break;
 
 	case ST_COPY_WAIT:
 		if (copy_read_ready()) {
-			char *got = b_take_read();
+			char *got = (char *)b_take_read(NULL);
 			check("copy", got, COPY_TEXT);
 			free(got);
 
@@ -489,7 +573,7 @@ selftest_step(void)
 				state = ST_DONE;
 				return;
 			}
-			begin_copy_read();
+			begin_copy_read(utf8_b);
 			state = ST_BIG_COPY_WAIT;
 			state_frame = frames;
 		} else if (frames - state_frame > WAIT_LIMIT) {
@@ -500,7 +584,7 @@ selftest_step(void)
 
 	case ST_BIG_COPY_WAIT:
 		if (copy_read_ready()) {
-			char *got = b_take_read();
+			char *got = (char *)b_take_read(NULL);
 			check("big-copy", got, big_text);
 			free(got);
 
@@ -517,9 +601,35 @@ selftest_step(void)
 	case ST_BIG_PASTE_WAIT:
 		if (paste_done) {
 			check("big-paste", paste_buf, big_text);
-			state = ST_DONE;
+			/* Binary target: ludica owns image/png, B reads it. */
+			if (lud_clipboard_set_data(LUD_CLIPBOARD_PNG,
+						   img_blob, IMG_LEN) != 0) {
+				printf("FAIL img-copy: set_data failed\n");
+				failures++;
+				state = ST_DONE;
+				return;
+			}
+			begin_copy_read(png_b);
+			state = ST_IMG_COPY_WAIT;
+			state_frame = frames;
 		} else if (frames - state_frame > WAIT_LIMIT) {
 			check("big-paste", NULL, big_text);
+			state = ST_DONE;
+		}
+		break;
+
+	case ST_IMG_COPY_WAIT:
+		if (copy_read_ready()) {
+			size_t got_len = 0;
+			unsigned char *got = b_take_read(&got_len);
+			check_bytes("img-copy", got, got_len, img_blob, IMG_LEN);
+			free(got);
+
+			/* File-list helpers (in-process round trip). */
+			check_files();
+			state = ST_DONE;
+		} else if (frames - state_frame > WAIT_LIMIT) {
+			check_bytes("img-copy", NULL, 0, img_blob, IMG_LEN);
 			state = ST_DONE;
 		}
 		break;
@@ -539,6 +649,7 @@ init(void)
 {
 	selftest = lud_get_config("selftest") != NULL;
 	if (selftest) {
+		make_img_blob();
 		big_text = make_big_text();
 		if (!big_text) {
 			printf("FAIL: out of memory building test payload\n");
