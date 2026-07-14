@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "ludica.h"
 #include "ludica_internal.h"
@@ -583,6 +584,107 @@ lookup_key(const char *s)
 	}
 
 	return -1;
+}
+
+/* ---- Clipboard ---- */
+
+/* A window handle to associate clipboard access with (may be NULL). */
+static HWND
+clipboard_owner(void)
+{
+	if (current_index >= 0 && current_index < LUD_MAX_WINDOWS &&
+	    window[current_index].alive) {
+		return window[current_index].hWnd;
+	}
+	return NULL;
+}
+
+char *
+lud_clipboard_get_text(void)
+{
+	char *out = NULL;
+
+	if (!OpenClipboard(clipboard_owner())) {
+		return NULL;
+	}
+
+	HANDLE h = GetClipboardData(CF_UNICODETEXT);
+	if (h) {
+		const WCHAR *wtext = GlobalLock(h);
+		if (wtext) {
+			int n = WideCharToMultiByte(CP_UTF8, 0, wtext, -1,
+						    NULL, 0, NULL, NULL);
+			if (n > 0) {
+				out = malloc(n);
+				if (out) {
+					WideCharToMultiByte(CP_UTF8, 0, wtext, -1,
+							    out, n, NULL, NULL);
+				}
+			}
+			GlobalUnlock(h);
+		}
+	}
+
+	CloseClipboard();
+	return out;
+}
+
+int
+lud_clipboard_set_text(const char *utf8)
+{
+	if (!utf8) {
+		utf8 = "";
+	}
+
+	int n = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+	if (n <= 0) {
+		return LUD_ERR;
+	}
+
+	HGLOBAL hmem = GlobalAlloc(GMEM_MOVEABLE, (size_t)n * sizeof(WCHAR));
+	if (!hmem) {
+		return LUD_ERR;
+	}
+
+	WCHAR *dst = GlobalLock(hmem);
+	if (!dst) {
+		GlobalFree(hmem);
+		return LUD_ERR;
+	}
+	MultiByteToWideChar(CP_UTF8, 0, utf8, -1, dst, n);
+	GlobalUnlock(hmem);
+
+	if (!OpenClipboard(clipboard_owner())) {
+		GlobalFree(hmem);
+		return LUD_ERR;
+	}
+	EmptyClipboard();
+	if (!SetClipboardData(CF_UNICODETEXT, hmem)) {
+		/* SetClipboardData failed, so we still own hmem. */
+		CloseClipboard();
+		GlobalFree(hmem);
+		return LUD_ERR;
+	}
+	/* On success the clipboard owns hmem; do not free it. */
+	CloseClipboard();
+	return LUD_OK;
+}
+
+void
+lud_clipboard_get_async(const char *format, lud_clipboard_cb cb, void *user)
+{
+	if (!cb) {
+		return;
+	}
+
+	/* Win32 clipboard reads are synchronous, so satisfy the request
+	 * immediately and share the sync implementation. */
+	if (!format) {
+		format = LUD_CLIPBOARD_TEXT;
+	}
+	char *text = lud_clipboard_get_text();
+	cb(format, text, text ? strlen(text) : 0, user);
+	free(text);
 }
 
 int WINAPI

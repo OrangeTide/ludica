@@ -1,6 +1,8 @@
 #ifndef LUDICA_INPUT_H_
 #define LUDICA_INPUT_H_
 
+#include <stddef.h> /* size_t */
+
 /* Platform-independent keycodes */
 enum lud_keycode {
 	LUD_KEY_UNKNOWN = 0,
@@ -191,5 +193,39 @@ void lud_unbind_action(lud_action_t action);
 int lud_action_down(lud_action_t action);     /* held this frame */
 int lud_action_pressed(lud_action_t action);   /* just went down */
 int lud_action_released(lud_action_t action);  /* just went up */
+
+/* ---- Clipboard ---- */
+
+/* Format string for plain UTF-8 text, used with the typed/async API below. */
+#define LUD_CLIPBOARD_TEXT "text/plain;charset=utf-8"
+
+/* Synchronous text clipboard.
+ *
+ * lud_clipboard_get_text() returns a malloc'd, NUL-terminated UTF-8 string
+ * that the caller must free().  It returns NULL when the clipboard is empty,
+ * holds no text, or the owner does not respond within a short timeout.
+ *
+ * lud_clipboard_set_text() copies utf8 onto the clipboard.  It returns 0 on
+ * success and non-zero on failure.  Ownership is held only while the app is
+ * running; the contents are lost on exit unless a clipboard manager saves
+ * them (standard X11 behavior). */
+char *lud_clipboard_get_text(void);
+int   lud_clipboard_set_text(const char *utf8);
+
+/* Asynchronous, typed clipboard read.  Does not block.
+ *
+ * Requests `format` (e.g. LUD_CLIPBOARD_TEXT) and calls cb once the data
+ * arrives, from inside event processing on this or a later frame.  On
+ * failure or timeout cb is still invoked, with data==NULL and len==0.  The
+ * data buffer is owned by ludica and freed after cb returns, so copy
+ * anything you need to keep.  Only one request may be in flight at a time; a
+ * request made while another is pending fails immediately (cb called with
+ * data==NULL).
+ *
+ * The `format` axis exists so non-text targets (images, file lists) can be
+ * added later without changing this signature. */
+typedef void (*lud_clipboard_cb)(const char *format, void *data,
+				 size_t len, void *user);
+void lud_clipboard_get_async(const char *format, lud_clipboard_cb cb, void *user);
 
 #endif /* LUDICA_INPUT_H_ */

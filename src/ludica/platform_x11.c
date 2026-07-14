@@ -12,9 +12,12 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
+#include <sys/time.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/Xatom.h>
 #include <X11/keysym.h>
 
 #include <EGL/egl.h>
@@ -149,6 +152,29 @@ static Atom wm_delete_window;
 static Atom net_wm_state;
 static Atom net_wm_state_fullscreen;
 
+/* ---- Clipboard state ---- */
+
+static Atom clipboard_atom;   /* CLIPBOARD selection (Ctrl+C/Ctrl+V) */
+static Atom utf8_atom;        /* UTF8_STRING target */
+static Atom targets_atom;     /* TARGETS meta-target */
+static Atom incr_atom;        /* INCR (incremental transfer) type */
+static Atom clip_prop;        /* our destination property for reads */
+
+/* Selection data we serve while we own CLIPBOARD.  Stored as
+ * (target, bytes, len) rather than a bare string so non-text targets
+ * (images, file lists) can be added later without reshaping this. */
+static Atom            owned_target;
+static unsigned char  *owned_data;
+static size_t          owned_len;
+
+/* A single pending asynchronous read.  Only one may be in flight. */
+static struct {
+	int              active;
+	lud_clipboard_cb cb;
+	void            *user;
+	char             format[64];
+} clip_req;
+
 /* Track key-repeat: X11 generates KeyRelease+KeyPress pairs for held keys */
 static int auto_repeat_detected;
 
@@ -242,6 +268,11 @@ lud__platform_init(const lud_desc_t *desc)
 	wm_delete_window = XInternAtom(xdisplay, "WM_DELETE_WINDOW", False);
 	net_wm_state = XInternAtom(xdisplay, "_NET_WM_STATE", False);
 	net_wm_state_fullscreen = XInternAtom(xdisplay, "_NET_WM_STATE_FULLSCREEN", False);
+	clipboard_atom = XInternAtom(xdisplay, "CLIPBOARD", False);
+	utf8_atom = XInternAtom(xdisplay, "UTF8_STRING", False);
+	targets_atom = XInternAtom(xdisplay, "TARGETS", False);
+	incr_atom = XInternAtom(xdisplay, "INCR", False);
+	clip_prop = XInternAtom(xdisplay, "LUD_CLIPBOARD", False);
 
 	/* Configure EGL for requested GLES version */
 	gles_ctx_attribs[1] = desc->gles_version;
@@ -326,6 +357,242 @@ lud__platform_shutdown(void)
 		XCloseDisplay(xdisplay);
 		xdisplay = NULL;
 	}
+
+	free(owned_data);
+	owned_data = NULL;
+	owned_len = 0;
+	owned_target = None;
+}
+
+/* ---- Clipboard ---- */
+
+/* Map a MIME-ish format string to an X11 target atom.  Text maps to
+ * UTF8_STRING; any other string is interned verbatim, so callers can
+ * request future targets like "image/png" without further changes here. */
+static Atom
+clip_format_to_target(const char *format)
+{
+	if (!format || strstr(format, "text"))
+		return utf8_atom;
+	return XInternAtom(xdisplay, format, False);
+}
+
+/* Read our destination property (filled by the selection owner) into a
+ * malloc'd, NUL-terminated buffer.  Returns NULL on failure or when the
+ * transfer is incremental (INCR), which is not yet supported. */
+static unsigned char *
+clip_read_prop(size_t *len_out)
+{
+	Atom type;
+	int format;
+	unsigned long nitems, bytes_after;
+	unsigned char *prop = NULL;
+
+	/* Probe the size without fetching data. */
+	if (XGetWindowProperty(xdisplay, xwindow, clip_prop, 0, 0, False,
+			       AnyPropertyType, &type, &format,
+			       &nitems, &bytes_after, &prop) != Success)
+		return NULL;
+	if (prop) {
+		XFree(prop);
+		prop = NULL;
+	}
+
+	if (type == None)
+		return NULL;
+	if (type == incr_atom) {
+		/* TODO: INCR for payloads > max-request-size (large media/files). */
+		XDeleteProperty(xdisplay, xwindow, clip_prop);
+		return NULL;
+	}
+
+	long nbytes = (long)bytes_after;
+	if (XGetWindowProperty(xdisplay, xwindow, clip_prop, 0, (nbytes + 3) / 4,
+			       False, AnyPropertyType, &type, &format,
+			       &nitems, &bytes_after, &prop) != Success)
+		return NULL;
+
+	size_t len = (size_t)nitems * (format / 8);
+	unsigned char *out = malloc(len + 1);
+	if (out) {
+		memcpy(out, prop, len);
+		out[len] = 0;
+		if (len_out)
+			*len_out = len;
+	}
+	XFree(prop);
+	XDeleteProperty(xdisplay, xwindow, clip_prop);
+	return out;
+}
+
+/* Serve an incoming request from another client for our selection. */
+static void
+clip_handle_request(const XSelectionRequestEvent *req)
+{
+	XSelectionEvent notify;
+
+	memset(&notify, 0, sizeof(notify));
+	notify.type = SelectionNotify;
+	notify.display = req->display;
+	notify.requestor = req->requestor;
+	notify.selection = req->selection;
+	notify.target = req->target;
+	notify.time = req->time;
+	notify.property = None; /* None signals refusal */
+
+	if (owned_data && req->selection == clipboard_atom) {
+		/* Obsolete clients set property to None; fall back to target. */
+		Atom prop = req->property != None ? req->property : req->target;
+
+		if (req->target == targets_atom) {
+			Atom targets[] = { targets_atom, owned_target };
+			XChangeProperty(xdisplay, req->requestor, prop,
+					XA_ATOM, 32, PropModeReplace,
+					(unsigned char *)targets,
+					sizeof(targets) / sizeof(targets[0]));
+			notify.property = prop;
+		} else if (req->target == owned_target) {
+			/* TODO: INCR for payloads > max-request-size. */
+			XChangeProperty(xdisplay, req->requestor, prop,
+					owned_target, 8, PropModeReplace,
+					owned_data, (int)owned_len);
+			notify.property = prop;
+		}
+	}
+
+	XSendEvent(xdisplay, req->requestor, False, 0, (XEvent *)&notify);
+	XFlush(xdisplay);
+}
+
+int
+lud_clipboard_set_text(const char *utf8)
+{
+	if (!xdisplay)
+		return LUD_ERR;
+	if (!utf8)
+		utf8 = "";
+
+	size_t len = strlen(utf8);
+	unsigned char *copy = malloc(len + 1);
+	if (!copy)
+		return LUD_ERR;
+	memcpy(copy, utf8, len + 1);
+
+	free(owned_data);
+	owned_data = copy;
+	owned_len = len;
+	owned_target = utf8_atom;
+
+	XSetSelectionOwner(xdisplay, clipboard_atom, xwindow, CurrentTime);
+	if (XGetSelectionOwner(xdisplay, clipboard_atom) != xwindow) {
+		free(owned_data);
+		owned_data = NULL;
+		owned_len = 0;
+		owned_target = None;
+		return LUD_ERR;
+	}
+	XFlush(xdisplay);
+	return LUD_OK;
+}
+
+char *
+lud_clipboard_get_text(void)
+{
+	if (!xdisplay || clip_req.active)
+		return NULL;
+
+	/* If we are the owner, answer from our own copy with no round-trip. */
+	if (XGetSelectionOwner(xdisplay, clipboard_atom) == xwindow) {
+		if (owned_target == utf8_atom && owned_data)
+			return strdup((char *)owned_data);
+		return NULL;
+	}
+
+	XConvertSelection(xdisplay, clipboard_atom, utf8_atom, clip_prop,
+			  xwindow, CurrentTime);
+	XFlush(xdisplay);
+
+	/* Block up to ~100ms for the reply.  XCheckTypedWindowEvent pulls only
+	 * our SelectionNotify, leaving other queued events (keys, mouse) in
+	 * place for the normal frame poll. */
+	int fd = ConnectionNumber(xdisplay);
+	struct timeval start, now;
+	gettimeofday(&start, NULL);
+	for (;;) {
+		XEvent xev;
+		if (XCheckTypedWindowEvent(xdisplay, xwindow, SelectionNotify, &xev)) {
+			if (xev.xselection.property == None)
+				return NULL; /* owner refused */
+			return (char *)clip_read_prop(NULL);
+		}
+
+		gettimeofday(&now, NULL);
+		long elapsed = (now.tv_sec - start.tv_sec) * 1000000L +
+			       (now.tv_usec - start.tv_usec);
+		long remaining = 100000L - elapsed;
+		if (remaining <= 0)
+			return NULL; /* timeout: no owner or slow owner */
+
+		fd_set fds;
+		FD_ZERO(&fds);
+		FD_SET(fd, &fds);
+		struct timeval tv = { 0, remaining };
+		if (select(fd + 1, &fds, NULL, NULL, &tv) <= 0)
+			return NULL;
+		XEventsQueued(xdisplay, QueuedAfterReading);
+	}
+}
+
+void
+lud_clipboard_get_async(const char *format, lud_clipboard_cb cb, void *user)
+{
+	if (!cb)
+		return;
+
+	/* Fail fast if unavailable or another request is still pending. */
+	if (!xdisplay || clip_req.active) {
+		cb(format, NULL, 0, user);
+		return;
+	}
+
+	Atom target = clip_format_to_target(format);
+	snprintf(clip_req.format, sizeof(clip_req.format), "%s",
+		 format ? format : LUD_CLIPBOARD_TEXT);
+
+	/* Owner shortcut: satisfy from our own copy immediately. */
+	if (XGetSelectionOwner(xdisplay, clipboard_atom) == xwindow) {
+		if (owned_target == target && owned_data)
+			cb(clip_req.format, owned_data, owned_len, user);
+		else
+			cb(clip_req.format, NULL, 0, user);
+		return;
+	}
+
+	clip_req.active = 1;
+	clip_req.cb = cb;
+	clip_req.user = user;
+	XConvertSelection(xdisplay, clipboard_atom, target, clip_prop,
+			  xwindow, CurrentTime);
+	XFlush(xdisplay);
+}
+
+/* Deliver a completed async read (called from the event poll). */
+static void
+clip_deliver(const XSelectionEvent *sel)
+{
+	unsigned char *data = NULL;
+	size_t len = 0;
+
+	if (sel->property != None)
+		data = clip_read_prop(&len);
+
+	if (clip_req.cb)
+		clip_req.cb(clip_req.format, data, len, clip_req.user);
+
+	free(data);
+	clip_req.active = 0;
+	clip_req.cb = NULL;
+	clip_req.user = NULL;
 }
 
 void
@@ -505,6 +772,26 @@ lud__platform_poll_events(void)
 			if (xev.xclient.message_type == wm_protocols &&
 			    (Atom)xev.xclient.data.l[0] == wm_delete_window) {
 				lud_quit();
+			}
+			break;
+
+		case SelectionRequest:
+			clip_handle_request(&xev.xselectionrequest);
+			break;
+
+		case SelectionNotify:
+			if (clip_req.active &&
+			    xev.xselection.selection == clipboard_atom)
+				clip_deliver(&xev.xselection);
+			break;
+
+		case SelectionClear:
+			/* Lost ownership of a selection; drop our cached copy. */
+			if (xev.xselectionclear.selection == clipboard_atom) {
+				free(owned_data);
+				owned_data = NULL;
+				owned_len = 0;
+				owned_target = None;
 			}
 			break;
 

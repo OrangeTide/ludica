@@ -511,6 +511,34 @@ lud__platform_swap(void)
 	 * requestAnimationFrame callback.  Nothing to do here. */
 }
 
+/* ---- Clipboard ----
+ *
+ * The browser clipboard (navigator.clipboard) is asynchronous and gated
+ * behind a user gesture and permission prompt, so it does not map onto the
+ * synchronous API.  These are honest stubs: they keep the wasm build linking
+ * and report "unavailable" rather than silently doing nothing wrong.
+ * TODO: wire navigator.clipboard via EM_ASM for the async path. */
+
+char *
+lud_clipboard_get_text(void)
+{
+	return NULL;
+}
+
+int
+lud_clipboard_set_text(const char *utf8)
+{
+	(void)utf8;
+	return LUD_ERR;
+}
+
+void
+lud_clipboard_get_async(const char *format, lud_clipboard_cb cb, void *user)
+{
+	if (cb)
+		cb(format, NULL, 0, user);
+}
+
 void
 lud__platform_set_fullscreen(int fullscreen)
 {
