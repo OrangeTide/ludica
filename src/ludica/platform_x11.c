@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <sys/select.h>
 #include <sys/time.h>
 
@@ -176,6 +177,30 @@ static struct {
 	char             format[64];
 } clip_req;
 
+/* Incremental receive: the selection owner advertised INCR, so the payload
+ * arrives in chunks via PropertyNotify.  is_async delivers through
+ * clip_req.cb on completion; the synchronous path drains it inline. */
+static struct {
+	int             active;
+	int             is_async;
+	unsigned char  *buf;
+	size_t          len;
+	size_t          cap;
+} clip_in;
+
+/* Incremental send: we own the selection and a requestor is pulling a large
+ * payload from us one chunk per PropertyDelete.  Only one may be in flight;
+ * a snapshot of the bytes keeps a concurrent set_text from freeing them. */
+static struct {
+	int             active;
+	Window          requestor;
+	Atom            prop;
+	Atom            target;
+	unsigned char  *data;
+	size_t          len;
+	size_t          sent;
+} clip_out;
+
 /* Track key-repeat: X11 generates KeyRelease+KeyPress pairs for held keys */
 static int auto_repeat_detected;
 
@@ -195,6 +220,7 @@ create_window(const lud_desc_t *desc)
 		PointerMotionMask |
 		EnterWindowMask | LeaveWindowMask |
 		FocusChangeMask |
+		PropertyChangeMask |   /* INCR clipboard transfers */
 		ExposureMask;
 
 	XSetWindowAttributes wattr;
@@ -254,6 +280,22 @@ create_window(const lud_desc_t *desc)
 	return win;
 }
 
+static int (*prev_x_error_handler)(Display *, XErrorEvent *);
+
+/* Xlib delivers protocol errors asynchronously and its default handler exits
+ * the process.  During an INCR clipboard transfer we touch another client's
+ * window, and that requestor can vanish mid-transfer (clipboard managers do
+ * this routinely), producing a BadWindow or BadMatch we must survive.  Swallow
+ * exactly those; defer anything else to the previous handler so real faults
+ * still surface. */
+static int
+x_error_handler(Display *d, XErrorEvent *e)
+{
+	if (e->error_code == BadWindow || e->error_code == BadMatch)
+		return 0;
+	return prev_x_error_handler ? prev_x_error_handler(d, e) : 0;
+}
+
 int
 lud__platform_init(const lud_desc_t *desc)
 {
@@ -263,6 +305,9 @@ lud__platform_init(const lud_desc_t *desc)
 		lud_err("Failed to open X11 display");
 		return LUD_ERR;
 	}
+
+	/* Survive protocol errors from clipboard requestors that disappear. */
+	prev_x_error_handler = XSetErrorHandler(x_error_handler);
 
 	/* Intern atoms */
 	wm_protocols = XInternAtom(xdisplay, "WM_PROTOCOLS", False);
@@ -363,6 +408,11 @@ lud__platform_shutdown(void)
 	owned_data = NULL;
 	owned_len = 0;
 	owned_target = None;
+
+	free(clip_in.buf);
+	memset(&clip_in, 0, sizeof(clip_in));
+	free(clip_out.data);
+	memset(&clip_out, 0, sizeof(clip_out));
 }
 
 /* ---- Clipboard ---- */
@@ -378,9 +428,52 @@ clip_format_to_target(const char *format)
 	return XInternAtom(xdisplay, format, False);
 }
 
+static void
+clip_req_reset(void)
+{
+	clip_req.active = 0;
+	clip_req.cb = NULL;
+	clip_req.user = NULL;
+}
+
+/* Largest single-property transfer we attempt, in bytes.  ICCCM advises
+ * staying well under the server's maximum request size so an INCR transfer
+ * does not collide with other traffic; a quarter of it is the usual choice.
+ * Payloads above this switch to INCR. */
+static size_t
+clip_chunk_max(void)
+{
+	long units = XExtendedMaxRequestSize(xdisplay);
+	if (units <= 0)
+		units = XMaxRequestSize(xdisplay);
+	size_t bytes = (size_t)units * 4;
+	if (bytes < 4096)
+		bytes = 4096;
+	return bytes / 4;
+}
+
+/* Probe the type of our destination property without fetching its value.
+ * Used to spot an INCR reply before reading. */
+static Atom
+clip_probe_type(void)
+{
+	Atom type;
+	int format;
+	unsigned long nitems, bytes_after;
+	unsigned char *prop = NULL;
+
+	if (XGetWindowProperty(xdisplay, xwindow, clip_prop, 0, 0, False,
+			       AnyPropertyType, &type, &format,
+			       &nitems, &bytes_after, &prop) != Success)
+		return None;
+	if (prop)
+		XFree(prop);
+	return type;
+}
+
 /* Read our destination property (filled by the selection owner) into a
- * malloc'd, NUL-terminated buffer.  Returns NULL on failure or when the
- * transfer is incremental (INCR), which is not yet supported. */
+ * malloc'd, NUL-terminated buffer.  Returns NULL on failure.  The caller
+ * must have ruled out an INCR reply first (see clip_probe_type). */
 static unsigned char *
 clip_read_prop(size_t *len_out)
 {
@@ -402,7 +495,8 @@ clip_read_prop(size_t *len_out)
 	if (type == None)
 		return NULL;
 	if (type == incr_atom) {
-		/* TODO: INCR for payloads > max-request-size (large media/files). */
+		/* Callers probe for INCR first and drive it incrementally; reaching
+		 * here means a caller skipped that, so decline rather than misread. */
 		XDeleteProperty(xdisplay, xwindow, clip_prop);
 		return NULL;
 	}
@@ -424,6 +518,130 @@ clip_read_prop(size_t *len_out)
 	XFree(prop);
 	XDeleteProperty(xdisplay, xwindow, clip_prop);
 	return out;
+}
+
+/* Begin an incremental receive after the owner advertised INCR.  Deleting
+ * the INCR property tells the owner to start appending data chunks, each of
+ * which arrives as a PropertyNotify(PropertyNewValue). */
+static void
+clip_in_begin(int is_async)
+{
+	free(clip_in.buf);
+	clip_in.buf = NULL;
+	clip_in.len = 0;
+	clip_in.cap = 0;
+	clip_in.active = 1;
+	clip_in.is_async = is_async;
+	XDeleteProperty(xdisplay, xwindow, clip_prop);
+	XFlush(xdisplay);
+}
+
+/* Consume one INCR chunk from the destination property and delete it to
+ * request the next.  A zero-length chunk terminates the transfer.  Returns 1
+ * when the transfer is complete (buf/len then hold the result), 0 for more. */
+static int
+clip_in_step(void)
+{
+	Atom type;
+	int format;
+	unsigned long nitems, bytes_after;
+	unsigned char *prop = NULL;
+
+	/* Delete-on-read hands the owner its cue to send the following chunk. */
+	if (XGetWindowProperty(xdisplay, xwindow, clip_prop, 0, LONG_MAX, True,
+			       AnyPropertyType, &type, &format,
+			       &nitems, &bytes_after, &prop) != Success)
+		return 1;
+
+	size_t chunk = (size_t)nitems * (format / 8);
+	if (chunk == 0) {
+		if (prop)
+			XFree(prop);
+		return 1; /* terminator: transfer complete */
+	}
+
+	if (clip_in.len + chunk + 1 > clip_in.cap) {
+		size_t ncap = clip_in.cap ? clip_in.cap : 4096;
+		while (ncap < clip_in.len + chunk + 1)
+			ncap *= 2;
+		unsigned char *nb = realloc(clip_in.buf, ncap);
+		if (!nb) {
+			XFree(prop);
+			return 1; /* out of memory: give up with what we have */
+		}
+		clip_in.buf = nb;
+		clip_in.cap = ncap;
+	}
+	memcpy(clip_in.buf + clip_in.len, prop, chunk);
+	clip_in.len += chunk;
+	clip_in.buf[clip_in.len] = 0;
+	XFree(prop);
+	return 0;
+}
+
+/* Synchronously drain an INCR transfer for lud_clipboard_get_text.  Blocks
+ * with a per-chunk timeout so a stalled owner cannot hang the caller.
+ * Returns a malloc'd, NUL-terminated buffer (ownership passes to caller). */
+static char *
+clip_in_sync(void)
+{
+	int fd = ConnectionNumber(xdisplay);
+
+	clip_in_begin(0);
+	for (;;) {
+		XEvent xev;
+		int progressed = 0;
+		while (XCheckTypedWindowEvent(xdisplay, xwindow, PropertyNotify, &xev)) {
+			if (xev.xproperty.atom != clip_prop ||
+			    xev.xproperty.state != PropertyNewValue)
+				continue;
+			progressed = 1;
+			if (clip_in_step()) {
+				char *out = (char *)clip_in.buf;
+				clip_in.buf = NULL;
+				clip_in.active = 0;
+				return out; /* NULL only if nothing was received */
+			}
+		}
+		if (progressed)
+			continue; /* made progress: reset the wait */
+
+		fd_set fds;
+		FD_ZERO(&fds);
+		FD_SET(fd, &fds);
+		struct timeval tv = { 1, 0 }; /* 1s per chunk */
+		if (select(fd + 1, &fds, NULL, NULL, &tv) <= 0) {
+			free(clip_in.buf);
+			clip_in.buf = NULL;
+			clip_in.active = 0;
+			return NULL; /* stalled owner */
+		}
+		XEventsQueued(xdisplay, QueuedAfterReading);
+	}
+}
+
+/* Send the next INCR chunk to the requestor, or the terminating zero-length
+ * write once all data has gone.  Driven by PropertyDelete on the requestor. */
+static void
+clip_out_step(void)
+{
+	size_t chunk = clip_chunk_max();
+	size_t remaining = clip_out.len - clip_out.sent;
+	size_t n = remaining < chunk ? remaining : chunk;
+
+	XChangeProperty(xdisplay, clip_out.requestor, clip_out.prop,
+			clip_out.target, 8, PropModeReplace,
+			clip_out.data + clip_out.sent, (int)n);
+	clip_out.sent += n;
+	XFlush(xdisplay);
+
+	if (n == 0) {
+		/* The zero-length write just sent marks the end.  Stop watching
+		 * the requestor and drop the snapshot. */
+		XSelectInput(xdisplay, clip_out.requestor, NoEventMask);
+		free(clip_out.data);
+		memset(&clip_out, 0, sizeof(clip_out));
+	}
 }
 
 /* Serve an incoming request from another client for our selection. */
@@ -453,11 +671,37 @@ clip_handle_request(const XSelectionRequestEvent *req)
 					sizeof(targets) / sizeof(targets[0]));
 			notify.property = prop;
 		} else if (req->target == owned_target) {
-			/* TODO: INCR for payloads > max-request-size. */
-			XChangeProperty(xdisplay, req->requestor, prop,
-					owned_target, 8, PropModeReplace,
-					owned_data, (int)owned_len);
-			notify.property = prop;
+			if (owned_len <= clip_chunk_max()) {
+				/* Small enough for a single property write. */
+				XChangeProperty(xdisplay, req->requestor, prop,
+						owned_target, 8, PropModeReplace,
+						owned_data, (int)owned_len);
+				notify.property = prop;
+			} else if (!clip_out.active) {
+				/* Large: advertise INCR, then stream on PropertyDelete.
+				 * Snapshot the bytes so a later set_text cannot free
+				 * them mid-transfer. */
+				unsigned char *snap = malloc(owned_len);
+				if (snap) {
+					long hint = (long)owned_len;
+					memcpy(snap, owned_data, owned_len);
+					XChangeProperty(xdisplay, req->requestor, prop,
+							incr_atom, 32, PropModeReplace,
+							(unsigned char *)&hint, 1);
+					XSelectInput(xdisplay, req->requestor,
+						     PropertyChangeMask);
+					clip_out.active = 1;
+					clip_out.requestor = req->requestor;
+					clip_out.prop = prop;
+					clip_out.target = owned_target;
+					clip_out.data = snap;
+					clip_out.len = owned_len;
+					clip_out.sent = 0;
+					notify.property = prop;
+				}
+			}
+			/* If an INCR send is already in flight, leave property None
+			 * to refuse this second requestor. */
 		}
 	}
 
@@ -524,6 +768,8 @@ lud_clipboard_get_text(void)
 		if (XCheckTypedWindowEvent(xdisplay, xwindow, SelectionNotify, &xev)) {
 			if (xev.xselection.property == None)
 				return NULL; /* owner refused */
+			if (clip_probe_type() == incr_atom)
+				return clip_in_sync();
 			return (char *)clip_read_prop(NULL);
 		}
 
@@ -577,12 +823,19 @@ lud_clipboard_get_async(const char *format, lud_clipboard_cb cb, void *user)
 	XFlush(xdisplay);
 }
 
-/* Deliver a completed async read (called from the event poll). */
+/* Deliver a completed async read (called from the event poll).  For an INCR
+ * reply, start the incremental receive instead and defer delivery until the
+ * PropertyNotify handler sees the terminating chunk. */
 static void
 clip_deliver(const XSelectionEvent *sel)
 {
 	unsigned char *data = NULL;
 	size_t len = 0;
+
+	if (sel->property != None && clip_probe_type() == incr_atom) {
+		clip_in_begin(1);
+		return; /* completion happens in the PropertyNotify handler */
+	}
 
 	if (sel->property != None)
 		data = clip_read_prop(&len);
@@ -591,9 +844,19 @@ clip_deliver(const XSelectionEvent *sel)
 		clip_req.cb(clip_req.format, data, len, clip_req.user);
 
 	free(data);
-	clip_req.active = 0;
-	clip_req.cb = NULL;
-	clip_req.user = NULL;
+	clip_req_reset();
+}
+
+/* Finish an async INCR receive once the terminating chunk has arrived. */
+static void
+clip_in_finish_async(void)
+{
+	if (clip_req.cb)
+		clip_req.cb(clip_req.format, clip_in.buf, clip_in.len, clip_req.user);
+	free(clip_in.buf);
+	clip_in.buf = NULL;
+	clip_in.active = 0;
+	clip_req_reset();
 }
 
 void
@@ -793,6 +1056,23 @@ lud__platform_poll_events(void)
 				owned_data = NULL;
 				owned_len = 0;
 				owned_target = None;
+			}
+			break;
+
+		case PropertyNotify:
+			/* Incoming INCR chunk on our window. */
+			if (clip_in.active && clip_in.is_async &&
+			    xev.xproperty.atom == clip_prop &&
+			    xev.xproperty.state == PropertyNewValue) {
+				if (clip_in_step())
+					clip_in_finish_async();
+			}
+			/* Requestor consumed a chunk of our outgoing INCR send. */
+			else if (clip_out.active &&
+				 xev.xproperty.window == clip_out.requestor &&
+				 xev.xproperty.atom == clip_out.prop &&
+				 xev.xproperty.state == PropertyDelete) {
+				clip_out_step();
 			}
 			break;
 
