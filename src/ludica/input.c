@@ -297,6 +297,35 @@ lud__key_name(enum lud_keycode code)
 	return NULL;
 }
 
+/* ---- Rich text (HTML), shared across backends over set_multi/get_data ---- */
+
+int
+lud_clipboard_set_html(const char *html, const char *plain)
+{
+	if (!html)
+		return LUD_ERR;
+
+	lud_clip_item_t items[2];
+	int n = 0;
+	items[n].format = LUD_CLIPBOARD_HTML;
+	items[n].data = html;
+	items[n].len = strlen(html);
+	n++;
+	if (plain) {
+		items[n].format = LUD_CLIPBOARD_TEXT;
+		items[n].data = plain;
+		items[n].len = strlen(plain);
+		n++;
+	}
+	return lud_clipboard_set_multi(items, n);
+}
+
+char *
+lud_clipboard_get_html(void)
+{
+	return (char *)lud_clipboard_get_data(LUD_CLIPBOARD_HTML, NULL);
+}
+
 /* ---- text/uri-list encode and parse (shared by clipboard and drag/drop) ---- */
 
 /* RFC 3986 unreserved set plus '/', which stays literal in a path. */

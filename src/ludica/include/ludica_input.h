@@ -213,6 +213,8 @@ int lud_action_released(lud_action_t action);  /* just went up */
 #define LUD_CLIPBOARD_TEXT     "text/plain;charset=utf-8"
 #define LUD_CLIPBOARD_PNG      "image/png"
 #define LUD_CLIPBOARD_URI_LIST "text/uri-list"
+#define LUD_CLIPBOARD_HTML     "text/html"   /* rich text as HTML */
+#define LUD_CLIPBOARD_RTF      "text/rtf"    /* rich text as RTF */
 
 /* Synchronous text clipboard.
  *
@@ -273,6 +275,15 @@ typedef struct {
  * copied.  Returns 0 on success, non-zero on failure.  set_text/set_data are
  * the single-format shorthands for this. */
 int lud_clipboard_set_multi(const lud_clip_item_t *items, int count);
+
+/* Rich text.  lud_clipboard_set_html() copies formatted text as HTML, and also
+ * offers a plain-text fallback (pass NULL for `plain` to skip it) so editors
+ * that take only plain text still get something.  lud_clipboard_get_html()
+ * reads HTML from the clipboard, returning a malloc'd, NUL-terminated UTF-8
+ * string the caller frees, or NULL when the clipboard holds no HTML.  Both are
+ * thin layers over set_multi / get_data with the LUD_CLIPBOARD_HTML target. */
+int   lud_clipboard_set_html(const char *html, const char *plain);
+char *lud_clipboard_get_html(void);
 
 /* File lists, a convenience layer over LUD_CLIPBOARD_URI_LIST.
  *
