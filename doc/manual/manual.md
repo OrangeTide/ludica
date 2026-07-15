@@ -587,7 +587,11 @@ Only one drag may be active at a time.
 Platform notes: X11 implements the XDND protocol as both a drop target and a
 drag source, reusing the same selection transfer and `INCR` chunking as the
 clipboard, so a file or large image transfers at any size in either direction.
-Windows and Emscripten do not implement drag-and-drop yet.
+Windows implements the drop target: the window registers an OLE `IDropTarget`
+(`RegisterDragDrop`), and a drop pulls the data from the source `IDataObject`
+and decodes it with the same format mapping as the clipboard, delivering a
+`LUD_EV_DROP`. The Windows drag source (`lud_drag_*`) is not wired yet and
+returns `LUD_ERR`. Emscripten does not implement drag-and-drop yet.
 
 ### Fonts
 

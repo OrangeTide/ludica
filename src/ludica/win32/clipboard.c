@@ -27,9 +27,7 @@
 #include <string.h>
 
 #include "ludica_internal.h"
-
-/* The application window, owned by platform_win32.c. */
-extern HWND lud__win32_window(void);
+#include "win32.h"
 
 /* ---- Clipboard (CF_UNICODETEXT) ---- */
 
@@ -354,23 +352,28 @@ hdrop_paths(HDROP hd)
 	return list;
 }
 
-/* ---- Public API ---- */
+/* ---- Shared with dragdrop.c (see win32.h) ---- */
+
+UINT
+lud__win32_clip_cf(const char *format)
+{
+	enum win_clip_kind k;
+	return win_clip_format(format, &k);
+}
 
 void *
-lud_clipboard_get_data(const char *format, size_t *len_out)
+lud__win32_clip_decode(const char *format, HANDLE h, size_t *len_out)
 {
 	if (len_out)
 		*len_out = 0;
-
-	enum win_clip_kind k;
-	UINT cf = win_clip_format(format, &k);
-	if (!OpenClipboard(lud__win32_window()))
+	if (!h)
 		return NULL;
 
-	HANDLE h = GetClipboardData(cf);
+	enum win_clip_kind k;
+	win_clip_format(format, &k);
 	void *out = NULL;
 	size_t olen = 0;
-	if (h && k == WC_HDROP) {
+	if (k == WC_HDROP) {
 		char **paths = hdrop_paths((HDROP)h);
 		if (paths) {
 			int count = 0;
@@ -382,7 +385,7 @@ lud_clipboard_get_data(const char *format, size_t *len_out)
 				free(paths[i]);
 			free(paths);
 		}
-	} else if (h) {
+	} else {
 		SIZE_T sz = GlobalSize(h);
 		const void *src = GlobalLock(h);
 		if (src) {
@@ -401,9 +404,26 @@ lud_clipboard_get_data(const char *format, size_t *len_out)
 		}
 	}
 
-	CloseClipboard();
 	if (out && len_out)
 		*len_out = olen;
+	return out;
+}
+
+/* ---- Public API ---- */
+
+void *
+lud_clipboard_get_data(const char *format, size_t *len_out)
+{
+	if (len_out)
+		*len_out = 0;
+
+	if (!OpenClipboard(lud__win32_window()))
+		return NULL;
+
+	HANDLE h = GetClipboardData(lud__win32_clip_cf(format));
+	void *out = lud__win32_clip_decode(format, h, len_out);
+
+	CloseClipboard();
 	return out;
 }
 

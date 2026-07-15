@@ -173,8 +173,10 @@ array. To start a drag out of the window, call `lud_drag_data(format, data,
 len)`, `lud_drag_files(paths, count)`, or `lud_drag_multi(items, count)` (several
 formats at once) when a drag gesture begins (mouse button held); non-blocking,
 ends with a `LUD_EV_DRAG_END` event (`ev->drag_end.accepted`).
-X11 only (reuses the clipboard selection + INCR machinery); Windows/Emscripten
-do not implement drag-and-drop yet.
+On X11 both directions work (reuses the clipboard selection + INCR machinery).
+On Windows the drop target works (an OLE IDropTarget delivers `LUD_EV_DROP`,
+reusing the clipboard format decoders); the drag source (`lud_drag_*`) is still
+a stub. Emscripten does not implement drag-and-drop yet.
 
 ## Adding a New Sample Program
 

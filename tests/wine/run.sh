@@ -24,12 +24,31 @@ if ! command -v "$WINE" >/dev/null 2>&1; then
 	exit 0
 fi
 
+inc="-I $root/src/ludica/include -I $root/src/ludica"
+rc=0
+
+# Clipboard round-trip (win32/clipboard.c).
 "$CC" -o "$out/clipboard_test.exe" \
 	"$root/src/ludica/win32/clipboard.c" \
 	"$root/src/ludica/input.c" \
 	"$here/win_stub.c" \
 	"$here/clipboard_test.c" \
-	-I "$root/src/ludica/include" -I "$root/src/ludica" \
-	-Wall -Wextra -O2 -lshell32 -lole32
+	$inc -Wall -Wextra -O2 -lshell32 -lole32
 
-WINEDEBUG=${WINEDEBUG:--all} "$WINE" "$out/clipboard_test.exe"
+echo "== clipboard =="
+WINEDEBUG=${WINEDEBUG:--all} "$WINE" "$out/clipboard_test.exe" || rc=1
+
+# Drop target (win32/dragdrop.c). Provides its own lud__event_push, so it does
+# not link win_stub.c's; it still needs lud__win32_window from the stub.
+"$CC" -o "$out/dragdrop_test.exe" \
+	"$root/src/ludica/win32/dragdrop.c" \
+	"$root/src/ludica/win32/clipboard.c" \
+	"$root/src/ludica/input.c" \
+	"$here/win_stub.c" \
+	"$here/dragdrop_test.c" \
+	$inc -Wall -Wextra -O2 -lshell32 -lole32 -luuid
+
+echo "== dragdrop =="
+WINEDEBUG=${WINEDEBUG:--all} "$WINE" "$out/dragdrop_test.exe" || rc=1
+
+exit $rc

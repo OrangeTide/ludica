@@ -35,6 +35,7 @@
 #include <GLES2/gl2.h>
 
 #include "ludica_internal.h"
+#include "win32/win32.h"
 
 /* EGL 1.5 / EGL_KHR_create_context */
 #ifndef EGL_OPENGL_ES3_BIT
@@ -171,34 +172,11 @@ static WCHAR       pending_high; /* buffered UTF-16 high surrogate, 0 if none */
 static LONG        saved_style;
 static WINDOWPLACEMENT saved_place;
 
-/* Expose the app window to win32/clipboard.c. */
+/* Expose the app window to win32/clipboard.c and win32/dragdrop.c. */
 HWND
 lud__win32_window(void)
 {
 	return hwnd;
-}
-
-
-/* Drag source: not yet wired on Windows (would use DoDragDrop / IDropSource). */
-int
-lud_drag_data(const char *format, const void *data, size_t len)
-{
-	(void)format; (void)data; (void)len;
-	return LUD_ERR;
-}
-
-int
-lud_drag_files(const char *const *paths, int count)
-{
-	(void)paths; (void)count;
-	return LUD_ERR;
-}
-
-int
-lud_drag_multi(const lud_clip_item_t *items, int count)
-{
-	(void)items; (void)count;
-	return LUD_ERR;
 }
 
 /* ---- Event translation ---- */
@@ -414,6 +392,9 @@ lud__platform_init(const lud_desc_t *desc)
 	}
 	hdc = GetDC(hwnd);
 
+	/* Register as an OLE drop target (drag-and-drop into the window). */
+	lud__win32_dnd_register(hwnd);
+
 	/* Configure EGL for the requested GLES version. */
 	gles_ctx_attribs[1] = desc->gles_version;
 	config_attribs[CONFIG_RENDERABLE_IDX] =
@@ -494,6 +475,7 @@ lud__platform_shutdown(void)
 	}
 
 	if (hwnd) {
+		lud__win32_dnd_unregister(hwnd);
 		if (hdc) {
 			ReleaseDC(hwnd, hdc);
 			hdc = NULL;
@@ -507,6 +489,10 @@ lud__platform_shutdown(void)
 void
 lud__platform_poll_events(void)
 {
+	/* Free the previous frame's delivered drop buffer (LUD_EV_DROP data is
+	 * valid only for the frame it is delivered in, matching X11). */
+	lud__win32_dnd_frame_reset();
+
 	MSG msg;
 	while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
 		if (msg.message == WM_QUIT) {
