@@ -160,8 +160,10 @@ image/png + text fallback); reads stay per-format via get_data/get_text.
 (HTML, offers a plain-text fallback); `LUD_CLIPBOARD_HTML`/`_RTF` constants.
 `lud_clipboard_get_async(format, cb, user)` reads without blocking and delivers
 via callback during event processing; one request at a time. Large payloads use
-the X11 INCR protocol automatically. X11 serves text/images/files; Windows is
-text-only for now; Emscripten is a stub (browser clipboard is permission-gated).
+the X11 INCR protocol automatically. X11 serves text/images/files; Windows maps
+formats to native clipboard types (CF_UNICODETEXT/CF_HDROP/HTML Format/registered),
+compile-verified but not yet run; Emscripten is a stub (browser clipboard is
+permission-gated).
 
 Drag and drop: the window is an XDND drop target AND drag source. Drops arrive
 as a `LUD_EV_DROP` event (`ev->drop.format`, `.data`, `.len`, `.x`, `.y`; data

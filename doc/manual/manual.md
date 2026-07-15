@@ -523,8 +523,11 @@ and text copies and pastes work without any caller involvement.
 
 Platform notes: X11 uses the `CLIPBOARD` selection (Ctrl+C / Ctrl+V), not
 the middle-click `PRIMARY` selection, and serves text, images, and file lists.
-Windows implements text (`CF_UNICODETEXT`); its image and file targets are not
-wired yet. The Emscripten backend is a stub because the browser clipboard is
+Windows maps each format to its native clipboard type (`CF_UNICODETEXT` for
+text, `CF_HDROP` for files, the `HTML Format` for HTML, and a registered format
+for images and other bytes) and offers several at once natively; that backend
+is compile-verified but not yet run, so validate it on Windows before relying
+on it. The Emscripten backend is a stub because the browser clipboard is
 asynchronous and gated behind a user gesture and permission prompt.
 
 ### Drag and Drop
