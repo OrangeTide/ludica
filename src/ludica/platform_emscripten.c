@@ -568,6 +568,20 @@ lud_clipboard_get_files(void)
 	return NULL;
 }
 
+int
+lud_drag_data(const char *format, const void *data, size_t len)
+{
+	(void)format; (void)data; (void)len;
+	return LUD_ERR;
+}
+
+int
+lud_drag_files(const char *const *paths, int count)
+{
+	(void)paths; (void)count;
+	return LUD_ERR;
+}
+
 void
 lud__platform_set_fullscreen(int fullscreen)
 {

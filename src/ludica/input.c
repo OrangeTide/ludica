@@ -297,7 +297,62 @@ lud__key_name(enum lud_keycode code)
 	return NULL;
 }
 
-/* ---- text/uri-list parsing (shared by clipboard files and file drops) ---- */
+/* ---- text/uri-list encode and parse (shared by clipboard and drag/drop) ---- */
+
+/* RFC 3986 unreserved set plus '/', which stays literal in a path. */
+static const char uri_keep[] =
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/";
+
+char *
+lud__uri_list_encode(const char *const *paths, int count, size_t *len_out)
+{
+	static const char hex[] = "0123456789ABCDEF";
+
+	if (len_out)
+		*len_out = 0;
+	if (!paths || count <= 0)
+		return NULL;
+
+	size_t cap = 256, len = 0;
+	char *buf = malloc(cap);
+	if (!buf)
+		return NULL;
+
+	for (int i = 0; i < count; i++) {
+		const char *p = paths[i];
+		if (!p)
+			continue;
+		/* Worst case: "file://" + every byte percent-encoded + CRLF. */
+		size_t need = len + 7 + strlen(p) * 3 + 2;
+		if (need > cap) {
+			while (cap < need)
+				cap *= 2;
+			char *nb = realloc(buf, cap);
+			if (!nb) {
+				free(buf);
+				return NULL;
+			}
+			buf = nb;
+		}
+		memcpy(buf + len, "file://", 7);
+		len += 7;
+		for (const unsigned char *s = (const unsigned char *)p; *s; s++) {
+			if (strchr(uri_keep, *s)) {
+				buf[len++] = (char)*s;
+			} else {
+				buf[len++] = '%';
+				buf[len++] = hex[*s >> 4];
+				buf[len++] = hex[*s & 0x0f];
+			}
+		}
+		buf[len++] = '\r';
+		buf[len++] = '\n';
+	}
+
+	if (len_out)
+		*len_out = len;
+	return buf;
+}
 
 static int
 uri_hex_val(int c)

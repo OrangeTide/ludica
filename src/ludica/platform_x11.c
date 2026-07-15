@@ -234,6 +234,20 @@ static unsigned char *drop_data;
 static size_t         drop_len;
 static const char    *drop_format;
 
+/* A drag we started (source side).  While active we own XdndSelection and have
+ * grabbed the pointer; `over` tracks the XDND-aware window under the pointer. */
+static struct {
+	int    active;
+	Window over;         /* current target window, 0 if none */
+	int    over_version; /* target's XDND version */
+	int    accepted;     /* last XdndStatus from `over` accepted */
+	int    dropping;     /* XdndDrop sent, awaiting XdndFinished */
+	struct timeval deadline; /* give up waiting for XdndFinished after this */
+} drag;
+static unsigned char *drag_data;   /* payload we serve on XdndSelection */
+static size_t         drag_len;
+static Atom           drag_target;
+
 /* Track key-repeat: X11 generates KeyRelease+KeyPress pairs for held keys */
 static int auto_repeat_detected;
 
@@ -471,6 +485,11 @@ lud__platform_shutdown(void)
 	drop_data = NULL;
 	drop_len = 0;
 	drop_format = NULL;
+
+	free(drag_data);
+	drag_data = NULL;
+	drag_len = 0;
+	drag_target = None;
 }
 
 /* ---- Clipboard ---- */
@@ -723,32 +742,47 @@ clip_handle_request(const XSelectionRequestEvent *req)
 	notify.time = req->time;
 	notify.property = None; /* None signals refusal */
 
-	if (owned_data && req->selection == clipboard_atom) {
+	/* We serve two selections with the same machinery: CLIPBOARD from the
+	 * clipboard copy, and XdndSelection from the active drag's payload. */
+	unsigned char *sdata = NULL;
+	size_t         slen = 0;
+	Atom           starget = None;
+	if (req->selection == clipboard_atom) {
+		sdata = owned_data;
+		slen = owned_len;
+		starget = owned_target;
+	} else if (req->selection == xdnd_selection) {
+		sdata = drag_data;
+		slen = drag_len;
+		starget = drag_target;
+	}
+
+	if (sdata) {
 		/* Obsolete clients set property to None; fall back to target. */
 		Atom prop = req->property != None ? req->property : req->target;
 
 		if (req->target == targets_atom) {
-			Atom targets[] = { targets_atom, owned_target };
+			Atom targets[] = { targets_atom, starget };
 			XChangeProperty(xdisplay, req->requestor, prop,
 					XA_ATOM, 32, PropModeReplace,
 					(unsigned char *)targets,
 					sizeof(targets) / sizeof(targets[0]));
 			notify.property = prop;
-		} else if (req->target == owned_target) {
-			if (owned_len <= clip_chunk_max()) {
+		} else if (req->target == starget) {
+			if (slen <= clip_chunk_max()) {
 				/* Small enough for a single property write. */
 				XChangeProperty(xdisplay, req->requestor, prop,
-						owned_target, 8, PropModeReplace,
-						owned_data, (int)owned_len);
+						starget, 8, PropModeReplace,
+						sdata, (int)slen);
 				notify.property = prop;
 			} else if (!clip_out.active) {
 				/* Large: advertise INCR, then stream on PropertyDelete.
-				 * Snapshot the bytes so a later set_text cannot free
-				 * them mid-transfer. */
-				unsigned char *snap = malloc(owned_len);
+				 * Snapshot the bytes so a later set cannot free them
+				 * mid-transfer. */
+				unsigned char *snap = malloc(slen);
 				if (snap) {
-					long hint = (long)owned_len;
-					memcpy(snap, owned_data, owned_len);
+					long hint = (long)slen;
+					memcpy(snap, sdata, slen);
 					XChangeProperty(xdisplay, req->requestor, prop,
 							incr_atom, 32, PropModeReplace,
 							(unsigned char *)&hint, 1);
@@ -757,9 +791,9 @@ clip_handle_request(const XSelectionRequestEvent *req)
 					clip_out.active = 1;
 					clip_out.requestor = req->requestor;
 					clip_out.prop = prop;
-					clip_out.target = owned_target;
+					clip_out.target = starget;
 					clip_out.data = snap;
-					clip_out.len = owned_len;
+					clip_out.len = slen;
 					clip_out.sent = 0;
 					notify.property = prop;
 				}
@@ -903,53 +937,16 @@ lud_clipboard_get_data(const char *format, size_t *len_out)
 
 /* ---- File lists (text/uri-list) ---- */
 
-/* RFC 3986 unreserved set plus '/', which stays literal in a path. */
-static const char uri_keep[] =
-	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/";
-
 int
 lud_clipboard_set_files(const char *const *paths, int count)
 {
-	static const char hex[] = "0123456789ABCDEF";
-
-	if (!xdisplay || !paths || count <= 0)
+	if (!xdisplay)
 		return LUD_ERR;
 
-	size_t cap = 256, len = 0;
-	char *buf = malloc(cap);
+	size_t len = 0;
+	char *buf = lud__uri_list_encode(paths, count, &len);
 	if (!buf)
 		return LUD_ERR;
-
-	for (int i = 0; i < count; i++) {
-		const char *p = paths[i];
-		if (!p)
-			continue;
-		/* Worst case: "file://" + every byte percent-encoded + CRLF. */
-		size_t need = len + 7 + strlen(p) * 3 + 2;
-		if (need > cap) {
-			while (cap < need)
-				cap *= 2;
-			char *nb = realloc(buf, cap);
-			if (!nb) {
-				free(buf);
-				return LUD_ERR;
-			}
-			buf = nb;
-		}
-		memcpy(buf + len, "file://", 7);
-		len += 7;
-		for (const unsigned char *s = (const unsigned char *)p; *s; s++) {
-			if (strchr(uri_keep, *s)) {
-				buf[len++] = (char)*s;
-			} else {
-				buf[len++] = '%';
-				buf[len++] = hex[*s >> 4];
-				buf[len++] = hex[*s & 0x0f];
-			}
-		}
-		buf[len++] = '\r';
-		buf[len++] = '\n';
-	}
 
 	int rc = clip_set(clip_format_to_target(LUD_CLIPBOARD_URI_LIST), buf, len);
 	free(buf);
@@ -1223,6 +1220,191 @@ xdnd_finish_drop(void)
 	xdnd_deliver(data, len);
 }
 
+/* ---- Drag and drop (XDND drag source) ---- */
+
+/* The XDND version a window advertises, or 0 if it is not a drop target. */
+static int
+win_xdnd_version(Window w)
+{
+	Atom type;
+	int fmt;
+	unsigned long nitems, after;
+	unsigned char *data = NULL;
+	int ver = 0;
+
+	if (XGetWindowProperty(xdisplay, w, xdnd_aware, 0, 1, False, XA_ATOM,
+			       &type, &fmt, &nitems, &after, &data) == Success) {
+		if (data && type == XA_ATOM && nitems >= 1)
+			ver = (int)(((long *)data)[0]);
+		if (data)
+			XFree(data);
+	}
+	return ver;
+}
+
+/* Find the XDND-aware window at root coordinates (rx, ry): descend to the
+ * deepest window under the point, then walk up to the first aware ancestor
+ * (aware lives on the toplevel).  Skips our own window. */
+static Window
+drag_find_target(int rx, int ry, int *ver_out)
+{
+	Window root = DefaultRootWindow(xdisplay);
+	Window w = root, child;
+	int wx, wy;
+
+	for (;;) {
+		if (!XTranslateCoordinates(xdisplay, root, w, rx, ry, &wx, &wy, &child))
+			break;
+		if (!child)
+			break;
+		w = child;
+	}
+
+	for (Window cur = w; cur && cur != root; ) {
+		int ver = win_xdnd_version(cur);
+		if (ver > 0 && cur != xwindow) {
+			if (ver_out)
+				*ver_out = ver;
+			return cur;
+		}
+		Window r, parent, *kids = NULL;
+		unsigned n = 0;
+		if (!XQueryTree(xdisplay, cur, &r, &parent, &kids, &n))
+			break;
+		if (kids)
+			XFree(kids);
+		cur = parent;
+	}
+	if (ver_out)
+		*ver_out = 0;
+	return 0;
+}
+
+/* Update the drag as the pointer moves to root coordinates (rx, ry): switch
+ * target windows with XdndLeave/XdndEnter and send XdndPosition. */
+static void
+drag_update(int rx, int ry)
+{
+	int ver = 0;
+	Window t = drag_find_target(rx, ry, &ver);
+
+	if (t != drag.over) {
+		if (drag.over)
+			xdnd_send(drag.over, xdnd_leave, 0, 0, 0, 0, 0);
+		drag.over = t;
+		drag.over_version = ver;
+		drag.accepted = 0;
+		if (t)
+			xdnd_send(t, xdnd_enter, 0,
+				  (long)((unsigned long)XDND_VERSION << 24),
+				  (long)drag_target, 0, 0);
+	}
+	if (drag.over)
+		xdnd_send(drag.over, xdnd_position, 0, 0,
+			  ((long)rx << 16) | (ry & 0xffff),
+			  (long)CurrentTime, (long)xdnd_action_copy);
+}
+
+/* End the drag and report the outcome to the app. */
+static void
+drag_end(int accepted)
+{
+	free(drag_data);
+	drag_data = NULL;
+	drag_len = 0;
+	drag_target = None;
+	memset(&drag, 0, sizeof(drag));
+
+	lud_event_t ev;
+	memset(&ev, 0, sizeof(ev));
+	ev.type = LUD_EV_DRAG_END;
+	ev.drag_end.accepted = accepted;
+	lud__event_push(&ev);
+}
+
+/* Pointer released during a drag: drop on the target if it accepts, else
+ * cancel.  A successful drop keeps the drag alive to serve the data until
+ * XdndFinished (or the deadline). */
+static void
+drag_release(void)
+{
+	XUngrabPointer(xdisplay, CurrentTime);
+
+	if (drag.over && drag.accepted) {
+		xdnd_send(drag.over, xdnd_drop, 0, 0, (long)CurrentTime, 0, 0);
+		drag.dropping = 1;
+		gettimeofday(&drag.deadline, NULL);
+		drag.deadline.tv_sec += 5; /* bound the wait for XdndFinished */
+	} else {
+		if (drag.over)
+			xdnd_send(drag.over, xdnd_leave, 0, 0, 0, 0, 0);
+		drag_end(0);
+	}
+	XFlush(xdisplay);
+}
+
+int
+lud_drag_data(const char *format, const void *data, size_t len)
+{
+	if (!xdisplay || drag.active)
+		return LUD_ERR;
+
+	unsigned char *copy = malloc(len + 1);
+	if (!copy)
+		return LUD_ERR;
+	if (len)
+		memcpy(copy, data, len);
+	copy[len] = 0;
+
+	drag_data = copy;
+	drag_len = len;
+	drag_target = clip_format_to_target(format);
+
+	XSetSelectionOwner(xdisplay, xdnd_selection, xwindow, CurrentTime);
+	if (XGetSelectionOwner(xdisplay, xdnd_selection) != xwindow) {
+		free(drag_data);
+		drag_data = NULL;
+		drag_len = 0;
+		drag_target = None;
+		return LUD_ERR;
+	}
+
+	if (XGrabPointer(xdisplay, xwindow, False,
+			 ButtonReleaseMask | PointerMotionMask,
+			 GrabModeAsync, GrabModeAsync, None, None,
+			 CurrentTime) != GrabSuccess) {
+		free(drag_data);
+		drag_data = NULL;
+		drag_len = 0;
+		drag_target = None;
+		return LUD_ERR;
+	}
+
+	drag.active = 1;
+
+	/* Kick off the handshake from the pointer's current position. */
+	Window root_ret, child;
+	int rx, ry, wx, wy;
+	unsigned mask;
+	XQueryPointer(xdisplay, xwindow, &root_ret, &child, &rx, &ry,
+		      &wx, &wy, &mask);
+	drag_update(rx, ry);
+	XFlush(xdisplay);
+	return LUD_OK;
+}
+
+int
+lud_drag_files(const char *const *paths, int count)
+{
+	size_t len = 0;
+	char *buf = lud__uri_list_encode(paths, count, &len);
+	if (!buf)
+		return LUD_ERR;
+	int rc = lud_drag_data(LUD_CLIPBOARD_URI_LIST, buf, len);
+	free(buf);
+	return rc;
+}
+
 void
 lud__platform_poll_events(void)
 {
@@ -1236,6 +1418,16 @@ lud__platform_poll_events(void)
 		drop_data = NULL;
 		drop_len = 0;
 		drop_format = NULL;
+	}
+
+	/* Give up on a drop whose target never sent XdndFinished. */
+	if (drag.active && drag.dropping) {
+		struct timeval now;
+		gettimeofday(&now, NULL);
+		if (now.tv_sec > drag.deadline.tv_sec ||
+		    (now.tv_sec == drag.deadline.tv_sec &&
+		     now.tv_usec >= drag.deadline.tv_usec))
+			drag_end(0);
 	}
 
 	while (XPending(xdisplay)) {
@@ -1335,6 +1527,8 @@ lud__platform_poll_events(void)
 		}
 
 		case MotionNotify:
+			if (drag.active && !drag.dropping)
+				drag_update(xev.xmotion.x_root, xev.xmotion.y_root);
 			ev.type = LUD_EV_MOUSE_MOVE;
 			ev.modifiers = translate_modifiers(xev.xmotion.state);
 			ev.mouse_move.x = xev.xmotion.x;
@@ -1345,6 +1539,10 @@ lud__platform_poll_events(void)
 		case ButtonPress:
 		case ButtonRelease: {
 			unsigned btn = xev.xbutton.button;
+
+			/* A button release ends an active drag we started. */
+			if (xev.type == ButtonRelease && drag.active && !drag.dropping)
+				drag_release();
 
 			/* Buttons 4/5 are scroll wheel on X11 */
 			if (btn == Button4 || btn == Button5) {
@@ -1417,6 +1615,21 @@ lud__platform_poll_events(void)
 				xdnd_reset();
 			} else if (xev.xclient.message_type == xdnd_drop) {
 				xdnd_handle_drop(&xev.xclient);
+			} else if (xev.xclient.message_type == xdnd_status) {
+				/* Source side: the target reports whether it accepts. */
+				if (drag.active &&
+				    (Window)xev.xclient.data.l[0] == drag.over)
+					drag.accepted =
+						(xev.xclient.data.l[1] & 1) != 0;
+			} else if (xev.xclient.message_type == xdnd_finished) {
+				/* Source side: the target finished the transfer. */
+				if (drag.active &&
+				    (Window)xev.xclient.data.l[0] == drag.over) {
+					int ok = drag.over_version >= 5
+						? (int)(xev.xclient.data.l[1] & 1)
+						: 1;
+					drag_end(ok);
+				}
 			}
 			break;
 

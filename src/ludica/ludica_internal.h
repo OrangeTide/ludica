@@ -41,6 +41,9 @@ int  lud__event_poll(lud_event_t *ev);
 /* input.c */
 void lud__input_init(void);
 void lud__input_update(const lud_event_t *ev);
+/* Encode absolute paths into a malloc'd text/uri-list buffer (file:// URIs,
+ * percent-encoded).  *len_out gets the byte length.  NULL on failure. */
+char *lud__uri_list_encode(const char *const *paths, int count, size_t *len_out);
 
 /* args.c */
 void lud__parse_args(lud_desc_t *desc);

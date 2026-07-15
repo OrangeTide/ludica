@@ -104,6 +104,7 @@ enum lud_event_type {
 	LUD_EV_FOCUS,
 	LUD_EV_UNFOCUS,
 	LUD_EV_DROP,     /* files or data dropped onto the window (drag-and-drop) */
+	LUD_EV_DRAG_END, /* a drag we started (lud_drag_*) finished */
 };
 
 /* Modifier key bitmask */
@@ -158,6 +159,9 @@ typedef struct lud_event {
 			size_t      len;
 			int         x, y;   /* drop location in window pixels */
 		} drop;
+		struct {
+			int accepted;       /* 1 if a target took the drop, else 0 */
+		} drag_end;
 	};
 } lud_event_t;
 
@@ -285,5 +289,22 @@ char **lud_clipboard_get_files(void);
  * ev->drop.data / .len hold the bytes, owned by ludica and valid only during
  * the callback.  ev->drop.x / .y give the drop location in window pixels. */
 char **lud_parse_uri_list(const void *data, size_t len);
+
+/* ---- Drag source ---- */
+
+/* Start a drag-and-drop out of the window, offering `data` under `format`
+ * (e.g. LUD_CLIPBOARD_PNG or LUD_CLIPBOARD_TEXT).  Call this once a drag
+ * gesture is recognized, while a mouse button is held: the drag then follows
+ * the pointer and completes when the button is released.  lud_drag_files() is
+ * a convenience that offers a set of paths as text/uri-list.
+ *
+ * Returns 0 when the drag started, non-zero on failure.  The bytes are copied.
+ * When the drag ends, a LUD_EV_DRAG_END event reports whether a target
+ * accepted it (ev->drag_end.accepted).  Non-blocking: the drag proceeds across
+ * frames.  Only one drag may be active at a time.
+ *
+ * Drag source is implemented on X11 only; other backends return failure. */
+int lud_drag_data(const char *format, const void *data, size_t len);
+int lud_drag_files(const char *const *paths, int count);
 
 #endif /* LUDICA_INPUT_H_ */
