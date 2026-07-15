@@ -610,7 +610,7 @@ gesture on a draggable element.
 
 For the full cross-platform picture, a per-backend capability table, the design
 of the native mappings and the drop-buffer ring, and how each backend is tested,
-see the [Clipboard and Drag-and-Drop Notes](../notes/clipboard-dnd.md).
+see the [Clipboard and Drag-and-Drop Notes](clipboard-dnd.html).
 
 ### Fonts
 
