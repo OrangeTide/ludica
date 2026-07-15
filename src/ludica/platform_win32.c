@@ -270,6 +270,13 @@ lud_clipboard_get_data(const char *format, size_t *len_out)
 }
 
 int
+lud_clipboard_set_multi(const lud_clip_item_t *items, int count)
+{
+	(void)items; (void)count;
+	return LUD_ERR;
+}
+
+int
 lud_clipboard_set_files(const char *const *paths, int count)
 {
 	(void)paths; (void)count;

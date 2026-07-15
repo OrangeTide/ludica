@@ -164,12 +164,36 @@ static Atom clip_prop;        /* our destination property for reads */
 static Atom uri_list_atom;    /* text/uri-list target (files) */
 static Atom png_atom;         /* image/png target */
 
-/* Selection data we serve while we own CLIPBOARD.  Stored as
- * (target, bytes, len) rather than a bare string so non-text targets
- * (images, file lists) can be added later without reshaping this. */
-static Atom            owned_target;
-static unsigned char  *owned_data;
-static size_t          owned_len;
+/* Selection data we serve while we own CLIPBOARD.  A copy may offer several
+ * formats at once (e.g. image/png plus image/bmp); each is one offer, and a
+ * requestor picks the target it understands. */
+#define CLIP_MAX_OFFERS 8
+struct clip_offer {
+	Atom           target;
+	unsigned char *data;
+	size_t         len;
+};
+static struct clip_offer owned_offers[CLIP_MAX_OFFERS];
+static int               owned_count;
+
+static void
+clip_offers_free(void)
+{
+	for (int i = 0; i < owned_count; i++) {
+		free(owned_offers[i].data);
+		owned_offers[i].data = NULL;
+	}
+	owned_count = 0;
+}
+
+static struct clip_offer *
+clip_find_offer(Atom target)
+{
+	for (int i = 0; i < owned_count; i++)
+		if (owned_offers[i].target == target)
+			return &owned_offers[i];
+	return NULL;
+}
 
 /* A single pending asynchronous read.  Only one may be in flight. */
 static struct {
@@ -471,10 +495,7 @@ lud__platform_shutdown(void)
 		xdisplay = NULL;
 	}
 
-	free(owned_data);
-	owned_data = NULL;
-	owned_len = 0;
-	owned_target = None;
+	clip_offers_free();
 
 	free(clip_in.buf);
 	memset(&clip_in, 0, sizeof(clip_in));
@@ -727,7 +748,70 @@ clip_out_step(void)
 	}
 }
 
-/* Serve an incoming request from another client for our selection. */
+/* Answer one SelectionRequest from a set of offers: advertise every target on
+ * a TARGETS request, else serve the matching offer (single write, or INCR when
+ * large).  Sets notify->property on success. */
+static void
+serve_offers(const XSelectionRequestEvent *req, XSelectionEvent *notify,
+	     const struct clip_offer *offers, int count)
+{
+	/* Obsolete clients set property to None; fall back to target. */
+	Atom prop = req->property != None ? req->property : req->target;
+
+	if (req->target == targets_atom) {
+		Atom list[1 + CLIP_MAX_OFFERS];
+		int n = 0;
+		list[n++] = targets_atom;
+		for (int i = 0; i < count; i++)
+			list[n++] = offers[i].target;
+		XChangeProperty(xdisplay, req->requestor, prop, XA_ATOM, 32,
+				PropModeReplace, (unsigned char *)list, n);
+		notify->property = prop;
+		return;
+	}
+
+	const struct clip_offer *o = NULL;
+	for (int i = 0; i < count; i++)
+		if (offers[i].target == req->target) {
+			o = &offers[i];
+			break;
+		}
+	if (!o)
+		return; /* unsupported target: leave property None to refuse */
+
+	if (o->len <= clip_chunk_max()) {
+		/* Small enough for a single property write. */
+		XChangeProperty(xdisplay, req->requestor, prop, o->target, 8,
+				PropModeReplace, o->data, (int)o->len);
+		notify->property = prop;
+	} else if (!clip_out.active) {
+		/* Large: advertise INCR, then stream on PropertyDelete.  Snapshot
+		 * the bytes so a later set cannot free them mid-transfer. */
+		unsigned char *snap = malloc(o->len);
+		if (snap) {
+			long hint = (long)o->len;
+			memcpy(snap, o->data, o->len);
+			XChangeProperty(xdisplay, req->requestor, prop, incr_atom,
+					32, PropModeReplace,
+					(unsigned char *)&hint, 1);
+			XSelectInput(xdisplay, req->requestor, PropertyChangeMask);
+			clip_out.active = 1;
+			clip_out.requestor = req->requestor;
+			clip_out.prop = prop;
+			clip_out.target = o->target;
+			clip_out.data = snap;
+			clip_out.len = o->len;
+			clip_out.sent = 0;
+			notify->property = prop;
+		}
+		/* If an INCR send is already in flight, leave property None to
+		 * refuse this second requestor. */
+	}
+}
+
+/* Serve an incoming request from another client.  We answer two selections
+ * with the same machinery: CLIPBOARD from the clipboard offers, and
+ * XdndSelection from the active drag's single-format payload. */
 static void
 clip_handle_request(const XSelectionRequestEvent *req)
 {
@@ -742,74 +826,34 @@ clip_handle_request(const XSelectionRequestEvent *req)
 	notify.time = req->time;
 	notify.property = None; /* None signals refusal */
 
-	/* We serve two selections with the same machinery: CLIPBOARD from the
-	 * clipboard copy, and XdndSelection from the active drag's payload. */
-	unsigned char *sdata = NULL;
-	size_t         slen = 0;
-	Atom           starget = None;
-	if (req->selection == clipboard_atom) {
-		sdata = owned_data;
-		slen = owned_len;
-		starget = owned_target;
-	} else if (req->selection == xdnd_selection) {
-		sdata = drag_data;
-		slen = drag_len;
-		starget = drag_target;
-	}
-
-	if (sdata) {
-		/* Obsolete clients set property to None; fall back to target. */
-		Atom prop = req->property != None ? req->property : req->target;
-
-		if (req->target == targets_atom) {
-			Atom targets[] = { targets_atom, starget };
-			XChangeProperty(xdisplay, req->requestor, prop,
-					XA_ATOM, 32, PropModeReplace,
-					(unsigned char *)targets,
-					sizeof(targets) / sizeof(targets[0]));
-			notify.property = prop;
-		} else if (req->target == starget) {
-			if (slen <= clip_chunk_max()) {
-				/* Small enough for a single property write. */
-				XChangeProperty(xdisplay, req->requestor, prop,
-						starget, 8, PropModeReplace,
-						sdata, (int)slen);
-				notify.property = prop;
-			} else if (!clip_out.active) {
-				/* Large: advertise INCR, then stream on PropertyDelete.
-				 * Snapshot the bytes so a later set cannot free them
-				 * mid-transfer. */
-				unsigned char *snap = malloc(slen);
-				if (snap) {
-					long hint = (long)slen;
-					memcpy(snap, sdata, slen);
-					XChangeProperty(xdisplay, req->requestor, prop,
-							incr_atom, 32, PropModeReplace,
-							(unsigned char *)&hint, 1);
-					XSelectInput(xdisplay, req->requestor,
-						     PropertyChangeMask);
-					clip_out.active = 1;
-					clip_out.requestor = req->requestor;
-					clip_out.prop = prop;
-					clip_out.target = starget;
-					clip_out.data = snap;
-					clip_out.len = slen;
-					clip_out.sent = 0;
-					notify.property = prop;
-				}
-			}
-			/* If an INCR send is already in flight, leave property None
-			 * to refuse this second requestor. */
-		}
+	if (req->selection == clipboard_atom && owned_count > 0) {
+		serve_offers(req, &notify, owned_offers, owned_count);
+	} else if (req->selection == xdnd_selection && drag_data) {
+		struct clip_offer one = { drag_target, drag_data, drag_len };
+		serve_offers(req, &notify, &one, 1);
 	}
 
 	XSendEvent(xdisplay, req->requestor, False, 0, (XEvent *)&notify);
 	XFlush(xdisplay);
 }
 
-/* Take ownership of the clipboard, serving `len` bytes under `target`.  The
- * bytes are copied (NUL-terminated for the convenience of text callers, with
- * the terminator excluded from owned_len). */
+/* Claim CLIPBOARD ownership now that owned_offers is populated.  On refusal,
+ * drop the offers so we do not claim to serve what we no longer own. */
+static int
+clip_own(void)
+{
+	XSetSelectionOwner(xdisplay, clipboard_atom, xwindow, CurrentTime);
+	if (XGetSelectionOwner(xdisplay, clipboard_atom) != xwindow) {
+		clip_offers_free();
+		return LUD_ERR;
+	}
+	XFlush(xdisplay);
+	return LUD_OK;
+}
+
+/* Replace the clipboard with a single offer serving `len` bytes under
+ * `target`.  The bytes are copied and NUL-terminated (terminator not counted
+ * in the offer length). */
 static int
 clip_set(Atom target, const void *data, size_t len)
 {
@@ -823,21 +867,12 @@ clip_set(Atom target, const void *data, size_t len)
 		memcpy(copy, data, len);
 	copy[len] = 0;
 
-	free(owned_data);
-	owned_data = copy;
-	owned_len = len;
-	owned_target = target;
-
-	XSetSelectionOwner(xdisplay, clipboard_atom, xwindow, CurrentTime);
-	if (XGetSelectionOwner(xdisplay, clipboard_atom) != xwindow) {
-		free(owned_data);
-		owned_data = NULL;
-		owned_len = 0;
-		owned_target = None;
-		return LUD_ERR;
-	}
-	XFlush(xdisplay);
-	return LUD_OK;
+	clip_offers_free();
+	owned_offers[0].target = target;
+	owned_offers[0].data = copy;
+	owned_offers[0].len = len;
+	owned_count = 1;
+	return clip_own();
 }
 
 /* Blocking read of `target` from the clipboard into a malloc'd, NUL-terminated
@@ -853,13 +888,14 @@ clip_get(Atom target, size_t *len_out)
 
 	/* If we are the owner, answer from our own copy with no round-trip. */
 	if (XGetSelectionOwner(xdisplay, clipboard_atom) == xwindow) {
-		if (owned_target == target && owned_data) {
-			unsigned char *out = malloc(owned_len + 1);
+		struct clip_offer *o = clip_find_offer(target);
+		if (o) {
+			unsigned char *out = malloc(o->len + 1);
 			if (out) {
-				memcpy(out, owned_data, owned_len);
-				out[owned_len] = 0;
+				memcpy(out, o->data, o->len);
+				out[o->len] = 0;
 				if (len_out)
-					*len_out = owned_len;
+					*len_out = o->len;
 			}
 			return out;
 		}
@@ -935,6 +971,40 @@ lud_clipboard_get_data(const char *format, size_t *len_out)
 	return clip_get(clip_format_to_target(format), len_out);
 }
 
+int
+lud_clipboard_set_multi(const lud_clip_item_t *items, int count)
+{
+	if (!xdisplay || !items || count <= 0 || count > CLIP_MAX_OFFERS)
+		return LUD_ERR;
+
+	/* Build the offers in a scratch array first; only swap them in once all
+	 * copies succeed, so a mid-way failure leaves the clipboard untouched. */
+	struct clip_offer tmp[CLIP_MAX_OFFERS];
+	int n = 0;
+	for (int i = 0; i < count; i++) {
+		size_t len = items[i].len;
+		unsigned char *copy = malloc(len + 1);
+		if (!copy) {
+			for (int j = 0; j < n; j++)
+				free(tmp[j].data);
+			return LUD_ERR;
+		}
+		if (len)
+			memcpy(copy, items[i].data, len);
+		copy[len] = 0;
+		tmp[n].target = clip_format_to_target(items[i].format);
+		tmp[n].data = copy;
+		tmp[n].len = len;
+		n++;
+	}
+
+	clip_offers_free();
+	for (int i = 0; i < n; i++)
+		owned_offers[i] = tmp[i];
+	owned_count = n;
+	return clip_own();
+}
+
 /* ---- File lists (text/uri-list) ---- */
 
 int
@@ -984,8 +1054,9 @@ lud_clipboard_get_async(const char *format, lud_clipboard_cb cb, void *user)
 
 	/* Owner shortcut: satisfy from our own copy immediately. */
 	if (XGetSelectionOwner(xdisplay, clipboard_atom) == xwindow) {
-		if (owned_target == target && owned_data)
-			cb(clip_req.format, owned_data, owned_len, user);
+		struct clip_offer *o = clip_find_offer(target);
+		if (o)
+			cb(clip_req.format, o->data, o->len, user);
 		else
 			cb(clip_req.format, NULL, 0, user);
 		return;
@@ -1647,12 +1718,8 @@ lud__platform_poll_events(void)
 
 		case SelectionClear:
 			/* Lost ownership of a selection; drop our cached copy. */
-			if (xev.xselectionclear.selection == clipboard_atom) {
-				free(owned_data);
-				owned_data = NULL;
-				owned_len = 0;
-				owned_target = None;
-			}
+			if (xev.xselectionclear.selection == clipboard_atom)
+				clip_offers_free();
 			break;
 
 		case PropertyNotify:

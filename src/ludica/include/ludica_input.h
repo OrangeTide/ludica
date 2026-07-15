@@ -260,6 +260,20 @@ void lud_clipboard_get_async(const char *format, lud_clipboard_cb cb, void *user
 int   lud_clipboard_set_data(const char *format, const void *data, size_t len);
 void *lud_clipboard_get_data(const char *format, size_t *len_out);
 
+/* One typed payload, for offering several formats of the same content at once. */
+typedef struct {
+	const char *format;
+	const void *data;
+	size_t      len;
+} lud_clip_item_t;
+
+/* Place several formats on the clipboard in one shot, e.g. an image as both
+ * image/png and image/bmp, or files as text/uri-list and text/plain.  A
+ * requesting application picks whichever format it understands.  The bytes are
+ * copied.  Returns 0 on success, non-zero on failure.  set_text/set_data are
+ * the single-format shorthands for this. */
+int lud_clipboard_set_multi(const lud_clip_item_t *items, int count);
+
 /* File lists, a convenience layer over LUD_CLIPBOARD_URI_LIST.
  *
  * lud_clipboard_set_files() places `count` file paths on the clipboard,
