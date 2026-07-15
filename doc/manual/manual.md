@@ -494,6 +494,28 @@ text reads `text/plain`. Reading stays per-format: call `lud_clipboard_get_data(
 (or `get_text`) with the format you want. `set_text`, `set_data`, and
 `set_files` are the single-format shorthands for this.
 
+#### Rich text
+
+Formatted text moves as HTML. `lud_clipboard_set_html()` copies it and offers a
+plain-text fallback in the same operation, so a rich editor keeps the styling
+while a plain one still gets readable text:
+
+```c
+lud_clipboard_set_html("<b>bold</b> and <i>italic</i>", "bold and italic");
+
+/* Paste rich text. Caller frees the string. */
+char *html = lud_clipboard_get_html();
+if (html) {
+    insert_html(html);
+    free(html);
+}
+```
+
+Pass `NULL` for the fallback to offer only HTML. These are thin layers over
+`set_multi` / `get_data` with the `LUD_CLIPBOARD_HTML` target, so they work in
+both directions and, like everything else here, over `INCR` for large documents.
+RTF is available the same way through `LUD_CLIPBOARD_RTF` and `set_data`.
+
 Payload size is not a concern. On X11 a transfer larger than the server's
 maximum request size moves through the `INCR` incremental protocol
 automatically, in both the read and write directions, so multi-megabyte images

@@ -30,6 +30,9 @@
 #define COPY_TEXT  "cliptest copy \xE2\x98\xBA line"   /* has a UTF-8 codepoint */
 #define PASTE_TEXT "cliptest paste 12345"
 #define MULTI_TEXT "cliptest multi \xE2\x98\xBA text"  /* text half of a multi-format copy */
+#define HTML_COPY  "<b>cliptest</b> rich \xE2\x98\xBA"  /* rich text ludica copies */
+#define PLAIN_COPY "cliptest rich"                      /* its plain-text fallback */
+#define HTML_PASTE "<i>pasted</i> &amp; rich"           /* rich text B offers */
 
 /* A payload well over a single X property's max request size, to force the
  * INCR incremental-transfer path in both directions.  Plain ASCII so a chunk
@@ -120,10 +123,12 @@ static Atom     utf8_b;     /* UTF8_STRING */
 static Atom     targets_b;  /* TARGETS */
 static Atom     incr_b;     /* INCR */
 static Atom     png_b;      /* image/png */
+static Atom     html_b;     /* text/html */
 static Atom     prop_b;     /* our read destination property */
 
 static const char *b_owned; /* non-NULL while client B owns the selection */
 static size_t      b_owned_len;
+static Atom        b_owned_target; /* target B serves (default UTF8_STRING) */
 static int   b_got_notify;  /* SelectionNotify (non-INCR) seen; ready to read */
 static Atom  b_notify_prop; /* property from that SelectionNotify */
 
@@ -165,7 +170,9 @@ client_b_init(void)
 	targets_b = XInternAtom(dpy_b, "TARGETS", False);
 	incr_b    = XInternAtom(dpy_b, "INCR", False);
 	png_b     = XInternAtom(dpy_b, "image/png", False);
+	html_b    = XInternAtom(dpy_b, "text/html", False);
 	prop_b    = XInternAtom(dpy_b, "CLIPTEST_B", False);
+	b_owned_target = utf8_b;
 	return 0;
 }
 
@@ -188,13 +195,14 @@ client_b_serve(const XSelectionRequestEvent *req)
 	if (b_owned && req->selection == clip_b) {
 		Atom prop = req->property != None ? req->property : req->target;
 		if (req->target == targets_b) {
-			Atom t[] = { targets_b, utf8_b };
+			Atom t[] = { targets_b, b_owned_target };
 			XChangeProperty(dpy_b, req->requestor, prop, XA_ATOM, 32,
 					PropModeReplace, (unsigned char *)t, 2);
 			notify.property = prop;
-		} else if (req->target == utf8_b) {
+		} else if (req->target == b_owned_target) {
 			if (b_owned_len <= b_chunk_max()) {
-				XChangeProperty(dpy_b, req->requestor, prop, utf8_b, 8,
+				XChangeProperty(dpy_b, req->requestor, prop,
+						b_owned_target, 8,
 						PropModeReplace,
 						(const unsigned char *)b_owned,
 						(int)b_owned_len);
@@ -226,7 +234,7 @@ b_out_step(void)
 	size_t remaining = b_owned_len - b_out_sent;
 	size_t n = remaining < chunk ? remaining : chunk;
 
-	XChangeProperty(dpy_b, b_out_requestor, b_out_prop, utf8_b, 8,
+	XChangeProperty(dpy_b, b_out_requestor, b_out_prop, b_owned_target, 8,
 			PropModeReplace,
 			(const unsigned char *)b_owned + b_out_sent, (int)n);
 	b_out_sent += n;
@@ -409,6 +417,9 @@ enum {
 	ST_MULTI_TARGETS,   /* B reads TARGETS from a multi-format clipboard */
 	ST_MULTI_TEXT,      /* B reads the text target of that clipboard */
 	ST_MULTI_PNG,       /* B reads the image target of that clipboard */
+	ST_HTML_HTML,       /* B reads the HTML ludica copied via set_html */
+	ST_HTML_PLAIN,      /* B reads the plain-text fallback of that copy */
+	ST_HTML_PASTE,      /* ludica reads HTML that B offers (paste) */
 	ST_DONE,
 };
 
@@ -532,18 +543,26 @@ begin_copy_read(Atom target)
 	XFlush(dpy_b);
 }
 
-/* B takes ownership, then ludica reads it async (paste direction).  XSync,
- * not XFlush, so the server commits the ownership change before ludica queries
- * the owner; otherwise its async-get shortcut may still see itself as owner. */
+/* B takes ownership of `target`, then ludica reads `format` async (paste
+ * direction).  XSync, not XFlush, so the server commits the ownership change
+ * before ludica queries the owner; otherwise its async-get shortcut may still
+ * see itself as owner. */
 static void
-begin_paste_read(const char *text)
+begin_paste_read_as(const char *text, Atom target, const char *format)
 {
 	b_owned = text;
 	b_owned_len = strlen(text);
+	b_owned_target = target;
 	XSetSelectionOwner(dpy_b, clip_b, win_b, CurrentTime);
 	XSync(dpy_b, False);
 	paste_done = 0;
-	lud_clipboard_get_async(LUD_CLIPBOARD_TEXT, on_paste_async, NULL);
+	lud_clipboard_get_async(format, on_paste_async, NULL);
+}
+
+static void
+begin_paste_read(const char *text)
+{
+	begin_paste_read_as(text, utf8_b, LUD_CLIPBOARD_TEXT);
 }
 
 /* A copy-direction read is complete once a single-shot notify or an INCR
@@ -727,9 +746,64 @@ selftest_step(void)
 			unsigned char *got = b_take_read(&got_len);
 			check_bytes("multi-png", got, got_len, img_blob, IMG_LEN);
 			free(got);
-			state = ST_DONE;
+
+			/* Rich text copy: set_html offers HTML plus a plain-text
+			 * fallback.  Confirm the in-process read first, then have
+			 * B read each target over the wire. */
+			if (lud_clipboard_set_html(HTML_COPY, PLAIN_COPY) != 0) {
+				printf("FAIL html: set_html failed\n");
+				failures++;
+				state = ST_DONE;
+				return;
+			}
+			char *own = lud_clipboard_get_html();
+			check("html-get", own, HTML_COPY);
+			free(own);
+
+			begin_copy_read(html_b);
+			state = ST_HTML_HTML;
+			state_frame = frames;
 		} else if (frames - state_frame > WAIT_LIMIT) {
 			check_bytes("multi-png", NULL, 0, img_blob, IMG_LEN);
+			state = ST_DONE;
+		}
+		break;
+
+	case ST_HTML_HTML:
+		if (copy_read_ready()) {
+			char *got = (char *)b_take_read(NULL);
+			check("html-copy", got, HTML_COPY);
+			free(got);
+			begin_copy_read(utf8_b);
+			state = ST_HTML_PLAIN;
+			state_frame = frames;
+		} else if (frames - state_frame > WAIT_LIMIT) {
+			check("html-copy", NULL, HTML_COPY);
+			state = ST_DONE;
+		}
+		break;
+
+	case ST_HTML_PLAIN:
+		if (copy_read_ready()) {
+			char *got = (char *)b_take_read(NULL);
+			check("html-plain", got, PLAIN_COPY);
+			free(got);
+			/* Paste direction: B offers HTML, ludica reads it async. */
+			begin_paste_read_as(HTML_PASTE, html_b, LUD_CLIPBOARD_HTML);
+			state = ST_HTML_PASTE;
+			state_frame = frames;
+		} else if (frames - state_frame > WAIT_LIMIT) {
+			check("html-plain", NULL, PLAIN_COPY);
+			state = ST_DONE;
+		}
+		break;
+
+	case ST_HTML_PASTE:
+		if (paste_done) {
+			check("html-paste", paste_buf, HTML_PASTE);
+			state = ST_DONE;
+		} else if (frames - state_frame > WAIT_LIMIT) {
+			check("html-paste", NULL, HTML_PASTE);
 			state = ST_DONE;
 		}
 		break;

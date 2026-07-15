@@ -156,6 +156,8 @@ target). `lud_clipboard_get_files()` / `lud_clipboard_set_files(paths, count)`
 for file lists (`text/uri-list`, handles `file://` percent-encoding).
 `lud_clipboard_set_multi(items, count)` offers several formats at once (e.g.
 image/png + text fallback); reads stay per-format via get_data/get_text.
+`lud_clipboard_set_html(html, plain)` / `lud_clipboard_get_html()` for rich text
+(HTML, offers a plain-text fallback); `LUD_CLIPBOARD_HTML`/`_RTF` constants.
 `lud_clipboard_get_async(format, cb, user)` reads without blocking and delivers
 via callback during event processing; one request at a time. Large payloads use
 the X11 INCR protocol automatically. X11 serves text/images/files; Windows is
