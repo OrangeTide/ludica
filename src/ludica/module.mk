@@ -10,7 +10,7 @@ ludica_SRCS.Linux = platform_x11.c linux/gamepad-linux.c
 ludica_EXPORTED_LDLIBS.Linux = -lm -ldl -lEGL -lGLESv2 -lX11
 
 ### Windows (MSYS2/Cygwin uname -s reports something containing Windows_NT)
-ludica_SRCS.Windows_NT = platform_win32.c win32/gamepad-windows.c
+ludica_SRCS.Windows_NT = platform_win32.c win32/clipboard.c win32/gamepad-windows.c
 ludica_CPPFLAGS.Windows_NT = -I$(ludica_DIR)win32/include
 ludica_CFLAGS.Windows_NT = -mwin32
 ludica_EXPORTED_CPPFLAGS.Windows_NT = -I$(ludica_DIR)win32/include
