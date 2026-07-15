@@ -220,12 +220,14 @@ int lud_action_released(lud_action_t action);  /* just went up */
  *
  * lud_clipboard_get_text() returns a malloc'd, NUL-terminated UTF-8 string
  * that the caller must free().  It returns NULL when the clipboard is empty,
- * holds no text, or the owner does not respond within a short timeout.
+ * holds no text, or the owner does not respond within a short timeout.  The
+ * browser has no synchronous clipboard read, so on Emscripten this always
+ * returns NULL; use lud_clipboard_get_async() there.
  *
  * lud_clipboard_set_text() copies utf8 onto the clipboard.  It returns 0 on
- * success and non-zero on failure.  Ownership is held only while the app is
- * running; the contents are lost on exit unless a clipboard manager saves
- * them (standard X11 behavior). */
+ * success and non-zero on failure.  On X11 ownership is held only while the app
+ * runs, so the contents are lost on exit unless a clipboard manager saves them;
+ * Windows and the browser hand the data to the OS clipboard, which keeps it. */
 char *lud_clipboard_get_text(void);
 int   lud_clipboard_set_text(const char *utf8);
 
@@ -325,10 +327,13 @@ char **lud_parse_uri_list(const void *data, size_t len);
  *
  * Returns 0 when the drag started, non-zero on failure.  The bytes are copied.
  * When the drag ends, a LUD_EV_DRAG_END event reports whether a target
- * accepted it (ev->drag_end.accepted).  Non-blocking: the drag proceeds across
- * frames.  Only one drag may be active at a time.
+ * accepted it (ev->drag_end.accepted).  Only one drag may be active at a time.
  *
- * Drag source is implemented on X11 only; other backends return failure. */
+ * On X11 the drag is non-blocking and proceeds across frames.  On Windows it
+ * runs a modal loop (DoDragDrop), so the call blocks until the drop or cancel
+ * and then fires LUD_EV_DRAG_END; code that waits for that event stays portable.
+ * Implemented on X11 and Windows; Emscripten returns failure, since a browser
+ * cannot begin a drag programmatically. */
 int lud_drag_data(const char *format, const void *data, size_t len);
 int lud_drag_files(const char *const *paths, int count);
 

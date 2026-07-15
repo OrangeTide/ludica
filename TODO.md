@@ -38,21 +38,12 @@ for full design rationale and API sketches.
   - `lud_job_submit(func, arg, on_complete)` — func on worker, on_complete on main thread
   - job groups for bulk loading with `lud_draw_progress` integration
   - WASM: jobs run inline during `lud_job_poll` with per-frame time budget
-- [ ] arena allocator — bump allocator for per-job scratch, per-frame temporaries,
-  procgen buffers. bulk reset, no per-object free.
-  - reference: `DEVEL/osdev/cmd/jsh/jsh.c:533-647` (hybrid bump/malloc strategy)
-- [ ] texture arrays (`GL_TEXTURE_2D_ARRAY`, GLES3) — bind once, index by layer.
-  eliminates per-material texture switching.
-- [ ] mesh update — `lud_update_mesh()` for partial VBO writes (streaming world geometry)
-- [ ] instanced drawing — `lud_draw_instanced()` for repeated kit-piece meshes (GLES3)
 - [ ] frustum culling utilities — `lud_frustum_extract()`, `lud_frustum_test_aabb()`
-- [ ] deferred resource destruction — queue GL deletes to end of frame for safe streaming
 - [ ] collision primitives (`ludica_phys.h`) — swept capsule vs. planes/convex shapes,
   wall sliding. develop in hero first, extract when API stabilizes.
 
 ## Future
 
-- [ ] font rendering: SDF, MSDF (multichannel signed distance field), or Slug
 - [ ] networking / multiplayer. 
   - I have an very simple IDL compiler for doing binary protocols.
   - native and wasm games should be able to play together
@@ -69,6 +60,13 @@ There are some sub-project TODO.md in this project too.
 
 # DONE
 
+- [x] font rendering: SDF, MSDF (multichannel signed distance field), or Slug. -- resolved: resolution-independent vector fonts in `ludica_vfont.h` with automatic backend selection (Slug GPU Bezier on GLES3, SDF/MSDF atlas on GLES2); `font2slug` / `font2msdf` converters in `tools/`; demos `demo06_slugtext` and `demo07_vfont`. See `doc/manual/vector-fonts.md`.
+- [x] cross-platform clipboard and drag-and-drop. -- resolved: full clipboard (text, binary, files, HTML, multi-format, sync + async reads) and drag-and-drop (drop target + drag source) on X11 (INCR for large payloads), Windows (native clipboard types + OLE IDropTarget/DoDragDrop, validated under Wine in tests/wine/), and Emscripten (navigator.clipboard writes + async reads, DOM drop target; drag source and sync reads are browser limits). Delivered drops use an 8-slot buffer ring on all three backends. Tested by cliptest/dndtest/dragtest --selftest, the Wine tests, and samples/webclip (browser-verified). See doc/notes/clipboard-dnd.md.
+- [x] arena allocator — bump allocator for per-job scratch and per-frame temporaries. -- resolved: `ludica_arena.h` (`lud_arena_init/alloc/reset/free`).
+- [x] texture arrays (`GL_TEXTURE_2D_ARRAY`, GLES3). -- resolved: `lud_make_texture_array()` / `lud_texture_array_set_layer()` in `ludica_gfx.h`.
+- [x] mesh update — partial VBO writes for streaming geometry. -- resolved: `lud_update_mesh()` / `lud_update_mesh_indices()` (growable, DYNAMIC/STREAM).
+- [x] instanced drawing (GLES3). -- resolved: `lud_draw_instanced()`, vary by `gl_InstanceID`.
+- [x] deferred resource destruction — GL deletes at end of frame for safe streaming. -- resolved: `lud_destroy_mesh_deferred()` / `lud_destroy_texture_deferred()`, flushed each frame.
 - [x] ludica should offer a loading screen and progress meter as games initialize. hero's assets already create a few seconds of delay on start. -- resolved: new lud_draw_progress() does the job.
 - [x] move all non-ludica components out of src and into samples. this will make it easier to vendor ludica if only the real library's files are in src/ and directories like samples/ and assets/ can be ignored. -- resolved: hero, demos, ansiview moved to samples/
 - [x] clean up unused code and directories. (tiny/, src/attic/) -- resolved: src/attic/ and src/demo4/ deleted
