@@ -517,11 +517,31 @@ for an image, or `LUD_CLIPBOARD_TEXT` for text. `ev->drop.x` and `ev->drop.y`
 give the drop location in window pixels. `lud_parse_uri_list()` decodes a
 dropped or copied `text/uri-list` buffer into a NULL-terminated array of paths.
 
-Platform notes: X11 implements the XDND protocol as a drop target, reusing the
-same selection transfer and `INCR` chunking as the clipboard, so a dropped file
-or large image arrives at any size. Being a drag source (starting a drag from
-the window) is not implemented. Windows and Emscripten do not deliver drop
-events yet.
+The window can also be a drag *source*. When your app recognizes a drag gesture
+(a mouse button held and moved past a threshold), start a drag; it then follows
+the pointer and completes when the button is released:
+
+```c
+static int on_event(const lud_event_t *ev) {
+    if (ev->type == LUD_EV_MOUSE_MOVE && dragging_gesture()) {
+        const char *files[] = { "/home/me/sprite.png" };
+        lud_drag_files(files, 1);            /* or lud_drag_data(...) */
+    }
+    if (ev->type == LUD_EV_DRAG_END)
+        printf("drop %s\n", ev->drag_end.accepted ? "taken" : "cancelled");
+    return 0;
+}
+```
+
+`lud_drag_data(format, data, len)` offers arbitrary bytes; `lud_drag_files()`
+offers a set of paths. Both are non-blocking: the drag runs across frames and
+ends with a `LUD_EV_DRAG_END` event whose `accepted` field says whether a target
+took it. Only one drag may be active at a time.
+
+Platform notes: X11 implements the XDND protocol as both a drop target and a
+drag source, reusing the same selection transfer and `INCR` chunking as the
+clipboard, so a file or large image transfers at any size in either direction.
+Windows and Emscripten do not implement drag-and-drop yet.
 
 ### Fonts
 
