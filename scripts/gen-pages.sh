@@ -27,6 +27,7 @@ demo06_slugtext|demo06_slugtext|GPU vector font rendering using the Slug algorit
 tridrop|tridrop|Triangle block puzzle game. Drag and drop triangle pieces onto a hexagonal grid, clearing lines to score points.
 ansiview|ansiview|ANSI art viewer that renders .ANS files using a CP437 bitmap font. Supports 16-color palette and blinking attributes.
 lilpc|lilpc|Tiny 286 XT PC emulator with CGA display. Boots a custom BIOS and runs a demo disk image, rendering CGA text and graphics modes.
+webclip|webclip|Clipboard and drag-and-drop test harness. Copies text, rich text, and an image to the system clipboard, pastes asynchronously, and reports text or files dropped onto the canvas. In the browser it drives navigator.clipboard and DOM drop events.
 "
 
 # --- Copy WASM build artifacts ---
