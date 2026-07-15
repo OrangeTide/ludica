@@ -304,6 +304,13 @@ lud_drag_files(const char *const *paths, int count)
 	return LUD_ERR;
 }
 
+int
+lud_drag_multi(const lud_clip_item_t *items, int count)
+{
+	(void)items; (void)count;
+	return LUD_ERR;
+}
+
 /* ---- Event translation ---- */
 
 static void

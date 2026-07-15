@@ -268,9 +268,20 @@ static struct {
 	int    dropping;     /* XdndDrop sent, awaiting XdndFinished */
 	struct timeval deadline; /* give up waiting for XdndFinished after this */
 } drag;
-static unsigned char *drag_data;   /* payload we serve on XdndSelection */
-static size_t         drag_len;
-static Atom           drag_target;
+/* Formats we serve on XdndSelection for the active drag (like the clipboard
+ * offers, a drag can advertise several types at once). */
+static struct clip_offer drag_offers[CLIP_MAX_OFFERS];
+static int               drag_count;
+
+static void
+drag_offers_free(void)
+{
+	for (int i = 0; i < drag_count; i++) {
+		free(drag_offers[i].data);
+		drag_offers[i].data = NULL;
+	}
+	drag_count = 0;
+}
 
 /* Track key-repeat: X11 generates KeyRelease+KeyPress pairs for held keys */
 static int auto_repeat_detected;
@@ -507,10 +518,7 @@ lud__platform_shutdown(void)
 	drop_len = 0;
 	drop_format = NULL;
 
-	free(drag_data);
-	drag_data = NULL;
-	drag_len = 0;
-	drag_target = None;
+	drag_offers_free();
 }
 
 /* ---- Clipboard ---- */
@@ -828,9 +836,8 @@ clip_handle_request(const XSelectionRequestEvent *req)
 
 	if (req->selection == clipboard_atom && owned_count > 0) {
 		serve_offers(req, &notify, owned_offers, owned_count);
-	} else if (req->selection == xdnd_selection && drag_data) {
-		struct clip_offer one = { drag_target, drag_data, drag_len };
-		serve_offers(req, &notify, &one, 1);
+	} else if (req->selection == xdnd_selection && drag_count > 0) {
+		serve_offers(req, &notify, drag_offers, drag_count);
 	}
 
 	XSendEvent(xdisplay, req->requestor, False, 0, (XEvent *)&notify);
@@ -1351,6 +1358,27 @@ drag_find_target(int rx, int ry, int *ver_out)
 	return 0;
 }
 
+/* Announce our offered types to a new target.  Up to three ride in the
+ * XdndEnter message; more are published in the XdndTypeList property with the
+ * "more than three" flag set. */
+static void
+drag_send_enter(Window t)
+{
+	long flag = drag_count > 3 ? 1 : 0;
+	if (flag) {
+		Atom list[CLIP_MAX_OFFERS];
+		for (int i = 0; i < drag_count; i++)
+			list[i] = drag_offers[i].target;
+		XChangeProperty(xdisplay, xwindow, xdnd_type_list, XA_ATOM, 32,
+				PropModeReplace, (unsigned char *)list, drag_count);
+	}
+	long t0 = drag_count > 0 ? (long)drag_offers[0].target : 0;
+	long t1 = drag_count > 1 ? (long)drag_offers[1].target : 0;
+	long t2 = drag_count > 2 ? (long)drag_offers[2].target : 0;
+	xdnd_send(t, xdnd_enter, 0,
+		  (long)((unsigned long)XDND_VERSION << 24) | flag, t0, t1, t2);
+}
+
 /* Update the drag as the pointer moves to root coordinates (rx, ry): switch
  * target windows with XdndLeave/XdndEnter and send XdndPosition. */
 static void
@@ -1366,9 +1394,7 @@ drag_update(int rx, int ry)
 		drag.over_version = ver;
 		drag.accepted = 0;
 		if (t)
-			xdnd_send(t, xdnd_enter, 0,
-				  (long)((unsigned long)XDND_VERSION << 24),
-				  (long)drag_target, 0, 0);
+			drag_send_enter(t);
 	}
 	if (drag.over)
 		xdnd_send(drag.over, xdnd_position, 0, 0,
@@ -1380,10 +1406,7 @@ drag_update(int rx, int ry)
 static void
 drag_end(int accepted)
 {
-	free(drag_data);
-	drag_data = NULL;
-	drag_len = 0;
-	drag_target = None;
+	drag_offers_free();
 	memset(&drag, 0, sizeof(drag));
 
 	lud_event_t ev;
@@ -1415,42 +1438,50 @@ drag_release(void)
 }
 
 int
-lud_drag_data(const char *format, const void *data, size_t len)
+lud_drag_multi(const lud_clip_item_t *items, int count)
 {
 	if (!xdisplay || drag.active)
 		return LUD_ERR;
-
-	unsigned char *copy = malloc(len + 1);
-	if (!copy)
+	if (!items || count <= 0 || count > CLIP_MAX_OFFERS)
 		return LUD_ERR;
-	if (len)
-		memcpy(copy, data, len);
-	copy[len] = 0;
 
-	drag_data = copy;
-	drag_len = len;
-	drag_target = clip_format_to_target(format);
-
-	XSetSelectionOwner(xdisplay, xdnd_selection, xwindow, CurrentTime);
-	if (XGetSelectionOwner(xdisplay, xdnd_selection) != xwindow) {
-		free(drag_data);
-		drag_data = NULL;
-		drag_len = 0;
-		drag_target = None;
-		return LUD_ERR;
+	/* Copy the payloads into a scratch array; only commit them once we own
+	 * the selection and hold the pointer grab. */
+	struct clip_offer tmp[CLIP_MAX_OFFERS];
+	int n = 0;
+	for (int i = 0; i < count; i++) {
+		size_t len = items[i].len;
+		unsigned char *copy = malloc(len + 1);
+		if (!copy) {
+			for (int j = 0; j < n; j++)
+				free(tmp[j].data);
+			return LUD_ERR;
+		}
+		if (len)
+			memcpy(copy, items[i].data, len);
+		copy[len] = 0;
+		tmp[n].target = clip_format_to_target(items[i].format);
+		tmp[n].data = copy;
+		tmp[n].len = len;
+		n++;
 	}
 
-	if (XGrabPointer(xdisplay, xwindow, False,
+	XSetSelectionOwner(xdisplay, xdnd_selection, xwindow, CurrentTime);
+	if (XGetSelectionOwner(xdisplay, xdnd_selection) != xwindow ||
+	    XGrabPointer(xdisplay, xwindow, False,
 			 ButtonReleaseMask | PointerMotionMask,
 			 GrabModeAsync, GrabModeAsync, None, None,
 			 CurrentTime) != GrabSuccess) {
-		free(drag_data);
-		drag_data = NULL;
-		drag_len = 0;
-		drag_target = None;
+		XSetSelectionOwner(xdisplay, xdnd_selection, None, CurrentTime);
+		for (int j = 0; j < n; j++)
+			free(tmp[j].data);
 		return LUD_ERR;
 	}
 
+	drag_offers_free();
+	for (int i = 0; i < n; i++)
+		drag_offers[i] = tmp[i];
+	drag_count = n;
 	drag.active = 1;
 
 	/* Kick off the handshake from the pointer's current position. */
@@ -1462,6 +1493,13 @@ lud_drag_data(const char *format, const void *data, size_t len)
 	drag_update(rx, ry);
 	XFlush(xdisplay);
 	return LUD_OK;
+}
+
+int
+lud_drag_data(const char *format, const void *data, size_t len)
+{
+	lud_clip_item_t item = { format, data, len };
+	return lud_drag_multi(&item, 1);
 }
 
 int

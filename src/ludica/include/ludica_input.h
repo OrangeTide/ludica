@@ -321,4 +321,9 @@ char **lud_parse_uri_list(const void *data, size_t len);
 int lud_drag_data(const char *format, const void *data, size_t len);
 int lud_drag_files(const char *const *paths, int count);
 
+/* Start a drag offering several formats at once (like lud_clipboard_set_multi),
+ * so the target can pick the one it understands.  lud_drag_data is the
+ * single-format shorthand.  Returns 0 when the drag started. */
+int lud_drag_multi(const lud_clip_item_t *items, int count);
+
 #endif /* LUDICA_INPUT_H_ */
