@@ -608,6 +608,10 @@ filesystem paths. The Emscripten drag source (`lud_drag_*`) returns `LUD_ERR`: a
 browser cannot begin an HTML5 drag programmatically, only from a real user
 gesture on a draggable element.
 
+For the full cross-platform picture, a per-backend capability table, the design
+of the native mappings and the drop-buffer ring, and how each backend is tested,
+see the [Clipboard and Drag-and-Drop Notes](../notes/clipboard-dnd.md).
+
 ### Fonts
 
 Ludica provides bitmap fonts rendered through the sprite batch system.
