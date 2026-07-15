@@ -252,11 +252,15 @@ static struct {
 	int    x, y;      /* last pointer position, window pixels */
 } xdnd;
 
-/* Data delivered to the app for one frame via LUD_EV_DROP, owned here and
- * freed at the top of the next poll. */
-static unsigned char *drop_data;
-static size_t         drop_len;
-static const char    *drop_format;
+/* Data delivered to the app via LUD_EV_DROP, owned here.  Each drop keeps its
+ * own buffer in a small ring so a drop whose LUD_EV_DROP is still queued is not
+ * freed by a later drop landing in the same frame; a slot is reused only many
+ * drops later, well after its event has been dispatched.  (The format string is
+ * a static atom name, so only the data needs owning.  Same fix as the browser
+ * drop target in platform_emscripten.c.) */
+#define DROP_RING 8
+static unsigned char *drop_ring[DROP_RING];
+static int            drop_slot;
 
 /* A drag we started (source side).  While active we own XdndSelection and have
  * grabbed the pointer; `over` tracks the XDND-aware window under the pointer. */
@@ -513,10 +517,11 @@ lud__platform_shutdown(void)
 	free(clip_out.data);
 	memset(&clip_out, 0, sizeof(clip_out));
 
-	free(drop_data);
-	drop_data = NULL;
-	drop_len = 0;
-	drop_format = NULL;
+	for (int i = 0; i < DROP_RING; i++) {
+		free(drop_ring[i]);
+		drop_ring[i] = NULL;
+	}
+	drop_slot = 0;
 
 	drag_offers_free();
 }
@@ -1229,21 +1234,23 @@ xdnd_deliver(unsigned char *data, size_t len)
 {
 	const char *fmt = xdnd_format_for(xdnd.type);
 
-	free(drop_data);
-	drop_data = data;
-	drop_len = len;
-	drop_format = fmt;
-
 	if (fmt && data) {
+		int s = drop_slot;
+		free(drop_ring[s]); /* reclaim this slot's occupant, DROP_RING drops ago */
+		drop_ring[s] = data;
+		drop_slot = (s + 1) % DROP_RING;
+
 		lud_event_t ev;
 		memset(&ev, 0, sizeof(ev));
 		ev.type = LUD_EV_DROP;
 		ev.drop.format = fmt;
-		ev.drop.data = drop_data;
-		ev.drop.len = drop_len;
+		ev.drop.data = data;
+		ev.drop.len = len;
 		ev.drop.x = xdnd.x;
 		ev.drop.y = xdnd.y;
 		lud__event_push(&ev);
+	} else {
+		free(data); /* nothing deliverable; do not leak the buffer */
 	}
 
 	if (xdnd.source)
@@ -1519,15 +1526,6 @@ lud__platform_poll_events(void)
 {
 	XEvent xev;
 	lud_event_t ev;
-
-	/* Release last frame's drop payload; the app consumed it during the
-	 * previous dispatch. */
-	if (drop_data) {
-		free(drop_data);
-		drop_data = NULL;
-		drop_len = 0;
-		drop_format = NULL;
-	}
 
 	/* Give up on a drop whose target never sent XdndFinished. */
 	if (drag.active && drag.dropping) {

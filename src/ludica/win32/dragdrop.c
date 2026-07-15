@@ -8,12 +8,11 @@
  * LUD_EV_DROP event. This is the Windows twin of the XDND drop target in
  * platform_x11.c.
  *
- * Drop delivery mirrors the X11 lifetime: the decoded bytes are owned here and
- * stay valid for one frame. lud__win32_dnd_frame_reset(), called at the top of
- * each poll, frees the previous frame's buffer.
+ * Drop delivery: the decoded bytes are owned here and rotated through a small
+ * ring, so a drop whose LUD_EV_DROP is still queued is not freed by a later one.
  *
- * Drag source (lud_drag_*) is not wired yet. It would build an IDataObject and
- * an IDropSource and call DoDragDrop; the stubs below return LUD_ERR until then.
+ * Drag source (lud_drag_*) builds an IDataObject and an IDropSource and calls
+ * DoDragDrop; see the drag-source section below.
  *
  * Made by a machine. PUBLIC DOMAIN (CC0-1.0)
  */
@@ -60,15 +59,26 @@ pick_format(IDataObject *pdo)
 	return NULL;
 }
 
-/* ---- One-frame drop buffer ---- */
+/* ---- Drop buffer ring ----
+ *
+ * Each drop keeps its own buffer in a small ring so a drop whose LUD_EV_DROP is
+ * still queued is not freed by a later drop; a slot is reused only many drops
+ * later, well after its event has been dispatched.  (fmt is a static constant,
+ * so only the data needs owning.  Same fix as the browser drop target in
+ * platform_emscripten.c.) */
 
-static void *g_drop_data; /* delivered to the app; freed next frame */
+#define WIN_DROP_RING 8
+static void *g_drop_ring[WIN_DROP_RING];
+static int g_drop_slot;
 
-void
-lud__win32_dnd_frame_reset(void)
+static void
+drop_ring_free(void)
 {
-	free(g_drop_data);
-	g_drop_data = NULL;
+	for (int i = 0; i < WIN_DROP_RING; i++) {
+		free(g_drop_ring[i]);
+		g_drop_ring[i] = NULL;
+	}
+	g_drop_slot = 0;
 }
 
 /* Take ownership of `data` (may be NULL on decode failure) and hand it to the
@@ -76,10 +86,13 @@ lud__win32_dnd_frame_reset(void)
 static void
 deliver(HWND hwnd, const char *fmt, void *data, size_t len, POINTL screen_pt)
 {
-	free(g_drop_data);
-	g_drop_data = data;
 	if (!data)
 		return;
+
+	int s = g_drop_slot;
+	free(g_drop_ring[s]); /* reclaim this slot's occupant, WIN_DROP_RING drops ago */
+	g_drop_ring[s] = data;
+	g_drop_slot = (s + 1) % WIN_DROP_RING;
 
 	POINT p = { screen_pt.x, screen_pt.y };
 	if (hwnd)
@@ -230,8 +243,7 @@ void
 lud__win32_dnd_unregister(HWND hwnd)
 {
 	RevokeDragDrop(hwnd);
-	free(g_drop_data);
-	g_drop_data = NULL;
+	drop_ring_free();
 	g_target.hwnd = NULL;
 	OleUninitialize();
 }

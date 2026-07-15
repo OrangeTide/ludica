@@ -45,11 +45,10 @@ struct IDataObject;
 struct IDataObject *lud__win32_make_dataobj(const lud_clip_item_t *items,
 					    int count);
 
-/* Drop target (dragdrop.c). register/unregister bracket the OLE lifetime;
- * frame_reset frees the previous frame's delivered drop buffer and is called
- * at the top of each poll so LUD_EV_DROP data stays valid for one frame. */
+/* Drop target (dragdrop.c). register/unregister bracket the OLE lifetime.
+ * Delivered LUD_EV_DROP buffers are owned in dragdrop.c and rotated through a
+ * ring, so no per-frame reset hook is needed. */
 void lud__win32_dnd_register(HWND hwnd);
 void lud__win32_dnd_unregister(HWND hwnd);
-void lud__win32_dnd_frame_reset(void);
 
 #endif /* LUDICA_WIN32_H */

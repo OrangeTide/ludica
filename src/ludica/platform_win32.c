@@ -489,10 +489,6 @@ lud__platform_shutdown(void)
 void
 lud__platform_poll_events(void)
 {
-	/* Free the previous frame's delivered drop buffer (LUD_EV_DROP data is
-	 * valid only for the frame it is delivered in, matching X11). */
-	lud__win32_dnd_frame_reset();
-
 	MSG msg;
 	while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
 		if (msg.message == WM_QUIT) {
