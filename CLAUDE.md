@@ -40,6 +40,7 @@ Each `module.mk` declares targets via `EXECUTABLES`, `LIBRARIES`, and
 - `samples/lilpc/` — 286 XT PC emulator with CGA display
 - `samples/tridrop/` — Triangle drop demo
 - `samples/ansiview/` — ANSI art viewer
+- `samples/webclip/` — clipboard + drag-and-drop manual test (cross-platform; primarily for verifying the Emscripten browser paths)
 - `doc/manual/` — Manual (markdown, build with `make` in that directory)
 - `doc/notes/` — R&D notes
 - `doc/game-ideas/` — Game concept notes
