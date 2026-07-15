@@ -784,44 +784,48 @@ lud_clipboard_set_files(const char *const *paths, int count)
 /* ---- Drag and drop ----
  *
  * Drop target: DOM drop events on the canvas (registered in platform_init)
- * deliver text, HTML and files here.  The delivered bytes and format string
- * are owned here and stay valid until the next drop, covering the frame in
- * which the app's LUD_EV_DROP handler runs.
+ * deliver text, HTML and files here.  The delivered bytes and format string are
+ * owned here.  Because the browser can dispatch several drops (or a file's async
+ * read) before the next animation frame drains the event queue, each drop keeps
+ * its own buffer in a small ring: a slot is reused only many drops later, well
+ * after the app's LUD_EV_DROP handler for it has run.  A single shared buffer
+ * would be a use-after-free when two drops land in the same frame.
  *
  * Drag source: a browser cannot start an HTML5 drag programmatically -- a drag
  * must originate from a real user gesture on a draggable element and populate
  * dataTransfer inside the dragstart handler.  So lud_drag_* stay failures. */
 
-static void *em_drop_data;
-static char *em_drop_format;
-
-static void
-em_drop_free(void)
-{
-	free(em_drop_data);
-	em_drop_data = NULL;
-	free(em_drop_format);
-	em_drop_format = NULL;
-}
+#define EM_DROP_RING 8
+static void *em_drop_data[EM_DROP_RING];
+static char *em_drop_format[EM_DROP_RING];
+static int em_drop_slot;
 
 static void
 em_drop_push(const char *mime, const void *data, size_t len, int x, int y)
 {
-	em_drop_free();
-	em_drop_data = malloc(len ? len : 1);
-	em_drop_format = mime ? strdup(mime) : NULL;
-	if (!em_drop_data || !em_drop_format) {
-		em_drop_free();
+	int s = em_drop_slot;
+
+	/* Reclaim this slot's previous occupant (EM_DROP_RING drops ago). */
+	free(em_drop_data[s]);
+	free(em_drop_format[s]);
+	em_drop_data[s] = malloc(len ? len : 1);
+	em_drop_format[s] = mime ? strdup(mime) : NULL;
+	if (!em_drop_data[s] || !em_drop_format[s]) {
+		free(em_drop_data[s]);
+		free(em_drop_format[s]);
+		em_drop_data[s] = NULL;
+		em_drop_format[s] = NULL;
 		return;
 	}
 	if (len)
-		memcpy(em_drop_data, data, len);
+		memcpy(em_drop_data[s], data, len);
+	em_drop_slot = (s + 1) % EM_DROP_RING;
 
 	lud_event_t ev;
 	memset(&ev, 0, sizeof(ev));
 	ev.type = LUD_EV_DROP;
-	ev.drop.format = em_drop_format;
-	ev.drop.data = em_drop_data;
+	ev.drop.format = em_drop_format[s];
+	ev.drop.data = em_drop_data[s];
 	ev.drop.len = len;
 	ev.drop.x = x;
 	ev.drop.y = y;
