@@ -162,8 +162,11 @@ image/png + text fallback); reads stay per-format via get_data/get_text.
 via callback during event processing; one request at a time. Large payloads use
 the X11 INCR protocol automatically. X11 serves text/images/files; Windows maps
 formats to native clipboard types (CF_UNICODETEXT/CF_HDROP/HTML Format/registered),
-compile-verified but not yet run; Emscripten is a stub (browser clipboard is
-permission-gated).
+validated under Wine. On Emscripten, writes (set_text/set_data/set_multi) go to
+navigator.clipboard and async reads (get_async) map to its readText/read; the
+browser has no synchronous clipboard read (get_text/get_data return NULL) and no
+file paths (set_files fails). Writable MIME types are the browser safelist
+(text/plain, text/html, image/png), and everything is gesture/permission gated.
 
 Drag and drop: the window is an XDND drop target AND drag source. Drops arrive
 as a `LUD_EV_DROP` event (`ev->drop.format`, `.data`, `.len`, `.x`, `.y`; data
@@ -178,8 +181,11 @@ On Windows both directions work too: an OLE IDropTarget delivers `LUD_EV_DROP`,
 and the drag source (`lud_drag_*`) hands an IDataObject to `DoDragDrop`, both
 reusing the clipboard format mapping. One difference: `DoDragDrop` is modal, so
 the Windows drag source blocks until the drop or cancel, then fires
-`LUD_EV_DRAG_END` (the X11 drag source is non-blocking). Emscripten does not
-implement drag-and-drop yet.
+`LUD_EV_DRAG_END` (the X11 drag source is non-blocking). On Emscripten the drop
+target works: DOM drop events on the canvas deliver `LUD_EV_DROP` for text, HTML
+and files (a file arrives as its bytes under its MIME type, not a path). The
+Emscripten drag source (`lud_drag_*`) fails, since a browser cannot start an
+HTML5 drag programmatically.
 
 ## Adding a New Sample Program
 

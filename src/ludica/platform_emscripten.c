@@ -3,6 +3,7 @@
 #include "ludica_internal.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <emscripten/emscripten.h>
@@ -485,6 +486,51 @@ lud__platform_init(const lud_desc_t *desc)
 	emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, NULL, EM_TRUE, on_resize);
 	emscripten_set_fullscreenchange_callback(EMSCRIPTEN_EVENT_TARGET_DOCUMENT, NULL, EM_TRUE, on_fullscreen_change);
 
+	/* Drag-and-drop drop target: listen for DOM drop events on the canvas and
+	 * route them to the lud__drop_* trampolines below.  Files are read
+	 * asynchronously (File.arrayBuffer), text is available synchronously. */
+	EM_ASM({
+		var c = Module['canvas'] || document.getElementById('canvas');
+		if (!c)
+			return;
+		c.addEventListener('dragover', function (e) {
+			e.preventDefault();
+			if (e.dataTransfer)
+				e.dataTransfer.dropEffect = 'copy';
+		});
+		c.addEventListener('drop', function (e) {
+			e.preventDefault();
+			var dt = e.dataTransfer;
+			if (!dt)
+				return;
+			var r = c.getBoundingClientRect();
+			var x = (e.clientX - r.left) | 0, y = (e.clientY - r.top) | 0;
+			if (dt.files && dt.files.length) {
+				var f = dt.files[0];
+				f.arrayBuffer().then(function (buf) {
+					var u8 = new Uint8Array(buf);
+					Module.ccall('lud__drop_bytes', null,
+						['string', 'array', 'number', 'number', 'number'],
+						[f.type || 'application/octet-stream', u8, u8.length, x, y]);
+				});
+				return;
+			}
+			var html = dt.getData('text/html');
+			if (html) {
+				Module.ccall('lud__drop_text', null,
+					['string', 'string', 'number', 'number'],
+					['text/html', html, x, y]);
+				return;
+			}
+			var txt = dt.getData('text/plain');
+			if (txt) {
+				Module.ccall('lud__drop_text', null,
+					['string', 'string', 'number', 'number'],
+					['text/plain', txt, x, y]);
+			}
+		});
+	});
+
 	return LUD_OK;
 }
 
@@ -513,37 +559,57 @@ lud__platform_swap(void)
 
 /* ---- Clipboard ----
  *
- * The browser clipboard (navigator.clipboard) is asynchronous and gated
- * behind a user gesture and permission prompt, so it does not map onto the
- * synchronous API.  These are honest stubs: they keep the wasm build linking
- * and report "unavailable" rather than silently doing nothing wrong.
- * TODO: wire navigator.clipboard via EM_ASM for the async path. */
+ * The browser clipboard (navigator.clipboard) is asynchronous and gated behind
+ * a user gesture and a permission prompt, so it maps only partially onto this
+ * API.  What works:
+ *   - Writes (set_text/set_data/set_multi): dispatched to navigator.clipboard,
+ *     which resolves in the background.  We return LUD_OK once dispatched; the
+ *     browser may still reject it without a gesture.  The safelisted MIME types
+ *     are text/plain, text/html and image/png.
+ *   - Async reads (get_async): navigator.clipboard.readText / read map cleanly
+ *     onto the callback, delivering when the promise resolves.
+ * What cannot work: synchronous reads (get_text/get_data/get_files) -- the
+ * browser has no synchronous clipboard read -- and set_files, because the
+ * browser exposes no filesystem paths.  Those stay honest failures. */
+
+/* One in-flight async read; its callback state lives here until JS resolves. */
+static lud_clipboard_cb em_async_cb;
+static void *em_async_user;
+static const char *em_async_fmt;
+static int em_async_active;
+
+static void
+em_async_finish(void *data, size_t len)
+{
+	lud_clipboard_cb cb = em_async_cb;
+	void *user = em_async_user;
+	const char *fmt = em_async_fmt;
+	em_async_active = 0;
+	em_async_cb = NULL;
+	if (cb)
+		cb(fmt, data, len, user);
+}
+
+/* Called from JS when navigator.clipboard.readText resolves (NULL on failure).
+ * `utf8` is marshaled onto the stack by ccall and is valid for this call. */
+EMSCRIPTEN_KEEPALIVE void
+lud__clip_async_text(const char *utf8)
+{
+	em_async_finish((void *)utf8, utf8 ? strlen(utf8) : 0);
+}
+
+/* Called from JS when navigator.clipboard.read resolves with binary bytes. */
+EMSCRIPTEN_KEEPALIVE void
+lud__clip_async_bytes(unsigned char *data, int len)
+{
+	em_async_finish(data, data ? (size_t)len : 0);
+}
 
 char *
 lud_clipboard_get_text(void)
 {
+	/* No synchronous clipboard read in the browser; use get_async. */
 	return NULL;
-}
-
-int
-lud_clipboard_set_text(const char *utf8)
-{
-	(void)utf8;
-	return LUD_ERR;
-}
-
-void
-lud_clipboard_get_async(const char *format, lud_clipboard_cb cb, void *user)
-{
-	if (cb)
-		cb(format, NULL, 0, user);
-}
-
-int
-lud_clipboard_set_data(const char *format, const void *data, size_t len)
-{
-	(void)format; (void)data; (void)len;
-	return LUD_ERR;
 }
 
 void *
@@ -555,24 +621,225 @@ lud_clipboard_get_data(const char *format, size_t *len_out)
 	return NULL;
 }
 
+char **
+lud_clipboard_get_files(void)
+{
+	return NULL;
+}
+
+void
+lud_clipboard_get_async(const char *format, lud_clipboard_cb cb, void *user)
+{
+	if (!cb)
+		return;
+	if (em_async_active) { /* one request at a time */
+		cb(format, NULL, 0, user);
+		return;
+	}
+	em_async_active = 1;
+	em_async_cb = cb;
+	em_async_user = user;
+	em_async_fmt = format;
+
+	int is_text = !format || !strcmp(format, LUD_CLIPBOARD_TEXT) ||
+		      !strcmp(format, "text/plain");
+	if (is_text) {
+		EM_ASM({
+			if (!navigator.clipboard || !navigator.clipboard.readText) {
+				Module.ccall('lud__clip_async_text', null, ['string'], [null]);
+				return;
+			}
+			navigator.clipboard.readText().then(function (t) {
+				Module.ccall('lud__clip_async_text', null, ['string'], [t]);
+			}).catch(function () {
+				Module.ccall('lud__clip_async_text', null, ['string'], [null]);
+			});
+		});
+	} else {
+		/* Binary: read the first clipboard item matching this MIME type. */
+		EM_ASM({
+			var mime = UTF8ToString($0);
+			if (!navigator.clipboard || !navigator.clipboard.read) {
+				Module.ccall('lud__clip_async_bytes', null, ['number', 'number'], [0, 0]);
+				return;
+			}
+			navigator.clipboard.read().then(function (items) {
+				for (var i = 0; i < items.length; i++) {
+					if (items[i].types.indexOf(mime) >= 0)
+						return items[i].getType(mime);
+				}
+				throw 0;
+			}).then(function (blob) {
+				return blob.arrayBuffer();
+			}).then(function (buf) {
+				var u8 = new Uint8Array(buf);
+				Module.ccall('lud__clip_async_bytes', null,
+					['array', 'number'], [u8, u8.length]);
+			}).catch(function () {
+				Module.ccall('lud__clip_async_bytes', null, ['number', 'number'], [0, 0]);
+			});
+		}, format);
+	}
+}
+
+int
+lud_clipboard_set_text(const char *utf8)
+{
+	if (!utf8)
+		return LUD_ERR;
+	EM_ASM({
+		if (navigator.clipboard && navigator.clipboard.writeText)
+			navigator.clipboard.writeText(UTF8ToString($0));
+	}, utf8);
+	return LUD_OK;
+}
+
+/* Map a ludica format to a browser-safelisted ClipboardItem MIME type, or NULL
+ * if the browser will not accept it on the clipboard. */
+static const char *
+em_clip_mime(const char *format)
+{
+	if (!format || !strcmp(format, LUD_CLIPBOARD_TEXT))
+		return "text/plain";
+	if (!strcmp(format, LUD_CLIPBOARD_HTML))
+		return "text/html";
+	if (!strcmp(format, LUD_CLIPBOARD_PNG))
+		return "image/png";
+	return NULL;
+}
+
+int
+lud_clipboard_set_data(const char *format, const void *data, size_t len)
+{
+	const char *mime = em_clip_mime(format);
+	if (!mime || !data)
+		return LUD_ERR;
+
+	if (!strcmp(mime, "text/plain")) {
+		/* writeText wants a string; decode the bytes as UTF-8. */
+		EM_ASM({
+			if (navigator.clipboard && navigator.clipboard.writeText) {
+				var s = new TextDecoder('utf-8').decode(HEAPU8.subarray($0, $0 + $1));
+				navigator.clipboard.writeText(s);
+			}
+		}, data, (int)len);
+		return LUD_OK;
+	}
+
+	EM_ASM({
+		if (!navigator.clipboard || !navigator.clipboard.write ||
+		    typeof ClipboardItem === 'undefined')
+			return;
+		var mime = UTF8ToString($0);
+		var bytes = HEAPU8.slice($1, $1 + $2);
+		var item = {};
+		item[mime] = new Blob([bytes], { type: mime });
+		navigator.clipboard.write([new ClipboardItem(item)]);
+	}, mime, data, (int)len);
+	return LUD_OK;
+}
+
 int
 lud_clipboard_set_multi(const lud_clip_item_t *items, int count)
 {
-	(void)items; (void)count;
-	return LUD_ERR;
+	if (!items || count <= 0)
+		return LUD_ERR;
+
+	/* Accumulate the safelisted entries into one JS ClipboardItem. */
+	EM_ASM({ Module.__lud_clip = {}; });
+	int offered = 0;
+	for (int i = 0; i < count; i++) {
+		const char *mime = em_clip_mime(items[i].format);
+		if (!mime || !items[i].data)
+			continue;
+		EM_ASM({
+			var mime = UTF8ToString($0);
+			var bytes = HEAPU8.slice($1, $1 + $2);
+			Module.__lud_clip[mime] = new Blob([bytes], { type: mime });
+		}, mime, items[i].data, (int)items[i].len);
+		offered++;
+	}
+	if (!offered) {
+		EM_ASM({ delete Module.__lud_clip; });
+		return LUD_ERR;
+	}
+	EM_ASM({
+		var item = Module.__lud_clip;
+		delete Module.__lud_clip;
+		if (navigator.clipboard && navigator.clipboard.write &&
+		    typeof ClipboardItem !== 'undefined')
+			navigator.clipboard.write([new ClipboardItem(item)]);
+	});
+	return LUD_OK;
 }
 
 int
 lud_clipboard_set_files(const char *const *paths, int count)
 {
+	/* The browser exposes no filesystem paths to put on the clipboard. */
 	(void)paths; (void)count;
 	return LUD_ERR;
 }
 
-char **
-lud_clipboard_get_files(void)
+/* ---- Drag and drop ----
+ *
+ * Drop target: DOM drop events on the canvas (registered in platform_init)
+ * deliver text, HTML and files here.  The delivered bytes and format string
+ * are owned here and stay valid until the next drop, covering the frame in
+ * which the app's LUD_EV_DROP handler runs.
+ *
+ * Drag source: a browser cannot start an HTML5 drag programmatically -- a drag
+ * must originate from a real user gesture on a draggable element and populate
+ * dataTransfer inside the dragstart handler.  So lud_drag_* stay failures. */
+
+static void *em_drop_data;
+static char *em_drop_format;
+
+static void
+em_drop_free(void)
 {
-	return NULL;
+	free(em_drop_data);
+	em_drop_data = NULL;
+	free(em_drop_format);
+	em_drop_format = NULL;
+}
+
+static void
+em_drop_push(const char *mime, const void *data, size_t len, int x, int y)
+{
+	em_drop_free();
+	em_drop_data = malloc(len ? len : 1);
+	em_drop_format = mime ? strdup(mime) : NULL;
+	if (!em_drop_data || !em_drop_format) {
+		em_drop_free();
+		return;
+	}
+	if (len)
+		memcpy(em_drop_data, data, len);
+
+	lud_event_t ev;
+	memset(&ev, 0, sizeof(ev));
+	ev.type = LUD_EV_DROP;
+	ev.drop.format = em_drop_format;
+	ev.drop.data = em_drop_data;
+	ev.drop.len = len;
+	ev.drop.x = x;
+	ev.drop.y = y;
+	lud__event_push(&ev);
+}
+
+/* JS drop trampolines. `mime` and the payload are marshaled by ccall and valid
+ * for the call; em_drop_push copies what it keeps. */
+EMSCRIPTEN_KEEPALIVE void
+lud__drop_text(const char *mime, const char *text, int x, int y)
+{
+	em_drop_push(mime, text, text ? strlen(text) : 0, x, y);
+}
+
+EMSCRIPTEN_KEEPALIVE void
+lud__drop_bytes(const char *mime, unsigned char *data, int len, int x, int y)
+{
+	em_drop_push(mime, data, len > 0 ? (size_t)len : 0, x, y);
 }
 
 int

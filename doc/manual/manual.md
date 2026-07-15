@@ -526,9 +526,14 @@ the middle-click `PRIMARY` selection, and serves text, images, and file lists.
 Windows maps each format to its native clipboard type (`CF_UNICODETEXT` for
 text, `CF_HDROP` for files, the `HTML Format` for HTML, and a registered format
 for images and other bytes) and offers several at once natively; that backend
-is compile-verified but not yet run, so validate it on Windows before relying
-on it. The Emscripten backend is a stub because the browser clipboard is
-asynchronous and gated behind a user gesture and permission prompt.
+is validated under Wine. The Emscripten backend covers what the browser allows:
+writes (`lud_clipboard_set_text` / `set_data` / `set_multi`) are dispatched to
+`navigator.clipboard`, and async reads (`lud_clipboard_get_async`) map onto its
+`readText` / `read`. The browser has no synchronous clipboard read, so
+`lud_clipboard_get_text` / `get_data` / `get_files` return NULL, and it exposes
+no file paths, so `set_files` fails. Writable types are the browser safelist
+(`text/plain`, `text/html`, `image/png`), and every operation is gated behind a
+user gesture and permission prompt.
 
 ### Drag and Drop
 
@@ -595,8 +600,13 @@ delivering a `LUD_EV_DROP`. The drag source (`lud_drag_*`) builds an
 `DoDragDrop`. Because `DoDragDrop` runs its own modal loop, the Windows drag
 source blocks until the user drops or cancels and then fires `LUD_EV_DRAG_END`,
 where the X11 drag source is non-blocking. App code that waits for
-`LUD_EV_DRAG_END` works the same on both. Emscripten does not implement
-drag-and-drop yet.
+`LUD_EV_DRAG_END` works the same on both. On Emscripten the drop target works:
+DOM `drop` events on the canvas deliver a `LUD_EV_DROP` for dropped text
+(`text/plain`, `text/html`) and files. A dropped file arrives as its bytes under
+its MIME type (for example `image/png`), not a path, because the browser hides
+filesystem paths. The Emscripten drag source (`lud_drag_*`) returns `LUD_ERR`: a
+browser cannot begin an HTML5 drag programmatically, only from a real user
+gesture on a draggable element.
 
 ### Fonts
 
