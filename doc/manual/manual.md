@@ -553,9 +553,11 @@ static int on_event(const lud_event_t *ev) {
 ```
 
 `lud_drag_data(format, data, len)` offers arbitrary bytes; `lud_drag_files()`
-offers a set of paths. Both are non-blocking: the drag runs across frames and
-ends with a `LUD_EV_DRAG_END` event whose `accepted` field says whether a target
-took it. Only one drag may be active at a time.
+offers a set of paths; `lud_drag_multi(items, count)` offers several formats at
+once (like `lud_clipboard_set_multi`), so the target picks what it understands.
+All are non-blocking: the drag runs across frames and ends with a
+`LUD_EV_DRAG_END` event whose `accepted` field says whether a target took it.
+Only one drag may be active at a time.
 
 Platform notes: X11 implements the XDND protocol as both a drop target and a
 drag source, reusing the same selection transfer and `INCR` chunking as the

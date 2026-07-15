@@ -35,6 +35,8 @@ static const char *const drag_paths[] = {
 #define IMG_LEN 200000
 static unsigned char img_blob[IMG_LEN];
 
+#define MULTI_TEXT "dragtest multi text"
+
 static unsigned long
 checksum(const unsigned char *p, size_t n)
 {
@@ -70,10 +72,12 @@ static Display *dpy_b;
 static Window   win_b;
 static Atom     xa_aware, xa_enter, xa_position, xa_status, xa_leave, xa_drop,
 		xa_finished, xa_selection, xa_action_copy, xa_incr,
-		xa_uri_list, xa_png, prop_b;
+		xa_uri_list, xa_png, xa_type_list, prop_b;
 
 static Window   b_src;        /* the drag source (ludica's window) */
 static Atom     b_type;       /* type we agreed to receive */
+static Atom     b_types[16];  /* all types the source offered */
+static int      b_types_n;
 static int      b_saw_position;
 
 /* What B received from a completed transfer. */
@@ -114,6 +118,7 @@ client_b_init(void)
 	xa_incr        = XInternAtom(dpy_b, "INCR", False);
 	xa_uri_list    = XInternAtom(dpy_b, "text/uri-list", False);
 	xa_png         = XInternAtom(dpy_b, "image/png", False);
+	xa_type_list   = XInternAtom(dpy_b, "XdndTypeList", False);
 	prop_b         = XInternAtom(dpy_b, "DRAGTEST_B", False);
 
 	Atom version = 5;
@@ -253,13 +258,39 @@ client_b_pump(void)
 			if (e.xclient.message_type == xa_enter) {
 				b_src = (Window)e.xclient.data.l[0];
 				b_type = None;
-				for (int i = 2; i <= 4; i++) {
-					Atom t = (Atom)e.xclient.data.l[i];
-					if (t == xa_uri_list || t == xa_png) {
-						b_type = t;
-						break;
+				b_types_n = 0;
+				if (e.xclient.data.l[1] & 1) {
+					/* More than three types: read XdndTypeList. */
+					Atom ty;
+					int fmt;
+					unsigned long n, after;
+					unsigned char *d = NULL;
+					if (XGetWindowProperty(dpy_b, b_src,
+							       xa_type_list, 0, 64,
+							       False, XA_ATOM, &ty,
+							       &fmt, &n, &after, &d)
+					    == Success && d) {
+						Atom *a = (Atom *)d;
+						for (unsigned long i = 0;
+						     i < n && b_types_n < 16; i++)
+							b_types[b_types_n++] = a[i];
+						XFree(d);
 					}
+				} else {
+					for (int i = 2; i <= 4; i++)
+						if (e.xclient.data.l[i] &&
+						    b_types_n < 16)
+							b_types[b_types_n++] =
+								(Atom)e.xclient.data.l[i];
 				}
+				/* Prefer image, then files. */
+				for (int i = 0; i < b_types_n; i++)
+					if (b_types[i] == xa_png)
+						b_type = xa_png;
+				if (b_type == None)
+					for (int i = 0; i < b_types_n; i++)
+						if (b_types[i] == xa_uri_list)
+							b_type = xa_uri_list;
 			} else if (e.xclient.message_type == xa_position) {
 				b_saw_position = 1;
 				int accept = b_type != None;
@@ -320,7 +351,7 @@ b_send_release(void)
 
 enum { ST_START, ST_BEGIN, ST_WAIT_ACCEPT, ST_WAIT_DONE, ST_VERIFY, ST_DONE };
 static int state = ST_START;
-static int phase; /* 0 = files (single-shot), 1 = image (INCR) */
+static int phase; /* 0 = files, 1 = image (INCR), 2 = multi-type (4 offers) */
 
 #define WAIT_LIMIT 300
 
@@ -373,9 +404,22 @@ selftest_step(void)
 
 	case ST_BEGIN: {
 		reset_transfer();
-		int rc = phase == 0
-			? lud_drag_files(drag_paths, DRAG_N)
-			: lud_drag_data(LUD_CLIPBOARD_PNG, img_blob, IMG_LEN);
+		int rc;
+		if (phase == 0) {
+			rc = lud_drag_files(drag_paths, DRAG_N);
+		} else if (phase == 1) {
+			rc = lud_drag_data(LUD_CLIPBOARD_PNG, img_blob, IMG_LEN);
+		} else {
+			/* Four formats forces the XdndTypeList property path; the
+			 * target picks image/png out of the list. */
+			lud_clip_item_t items[] = {
+				{ LUD_CLIPBOARD_TEXT, MULTI_TEXT, strlen(MULTI_TEXT) },
+				{ "application/x-a", "a", 1 },
+				{ "application/x-b", "b", 1 },
+				{ LUD_CLIPBOARD_PNG, img_blob, IMG_LEN },
+			};
+			rc = lud_drag_multi(items, 4);
+		}
 		if (rc != 0) {
 			fail("lud_drag_* failed to start");
 			return;
@@ -427,13 +471,30 @@ selftest_step(void)
 			phase = 1;
 			warp_over_target();
 			state = ST_BEGIN;
-		} else {
+		} else if (phase == 1) {
 			int ok = drag_end_accepted && b_recv_len == IMG_LEN &&
 				 checksum(b_recv, b_recv_len) ==
 					 checksum(img_blob, IMG_LEN);
 			printf("%-6s drag-image accepted=%d len=%zu/%d\n",
 			       ok ? "PASS" : "FAIL", drag_end_accepted,
 			       b_recv_len, IMG_LEN);
+			fflush(stdout);
+			if (!ok)
+				failures++;
+
+			phase = 2;
+			warp_over_target();
+			state = ST_BEGIN;
+		} else {
+			/* Multi-type: the source offered four formats (so the
+			 * target read XdndTypeList) and the target chose png. */
+			int ok = drag_end_accepted && b_types_n == 4 &&
+				 b_type == xa_png && b_recv_len == IMG_LEN &&
+				 checksum(b_recv, b_recv_len) ==
+					 checksum(img_blob, IMG_LEN);
+			printf("%-6s drag-multi accepted=%d types=%d picked=%s\n",
+			       ok ? "PASS" : "FAIL", drag_end_accepted, b_types_n,
+			       b_type == xa_png ? "png" : "other");
 			fflush(stdout);
 			if (!ok)
 				failures++;

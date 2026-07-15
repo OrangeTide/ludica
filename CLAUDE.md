@@ -166,8 +166,9 @@ as a `LUD_EV_DROP` event (`ev->drop.format`, `.data`, `.len`, `.x`, `.y`; data
 owned by ludica, valid only during the callback). `lud_parse_uri_list(data,
 len)` decodes a dropped/copied `text/uri-list` into a NULL-terminated path
 array. To start a drag out of the window, call `lud_drag_data(format, data,
-len)` or `lud_drag_files(paths, count)` when a drag gesture begins (mouse button
-held); non-blocking, ends with a `LUD_EV_DRAG_END` event (`ev->drag_end.accepted`).
+len)`, `lud_drag_files(paths, count)`, or `lud_drag_multi(items, count)` (several
+formats at once) when a drag gesture begins (mouse button held); non-blocking,
+ends with a `LUD_EV_DRAG_END` event (`ev->drag_end.accepted`).
 X11 only (reuses the clipboard selection + INCR machinery); Windows/Emscripten
 do not implement drag-and-drop yet.
 
