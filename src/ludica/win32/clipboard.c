@@ -361,6 +361,12 @@ lud__win32_clip_cf(const char *format)
 	return win_clip_format(format, &k);
 }
 
+HGLOBAL
+lud__win32_clip_build(const char *format, const void *data, size_t len, UINT *cf_out)
+{
+	return win_build(format, data, len, cf_out);
+}
+
 void *
 lud__win32_clip_decode(const char *format, HANDLE h, size_t *len_out)
 {

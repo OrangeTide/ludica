@@ -21,8 +21,11 @@
 
 #include <ludica.h>
 
-/* dragdrop.c hands the singleton drop target out through this internal hook. */
+/* Internal hooks (win32.h) the test drives directly. */
 extern IDropTarget *lud__win32_drop_target(void);
+extern IDataObject *lud__win32_make_dataobj(const lud_clip_item_t *items, int count);
+extern UINT lud__win32_clip_cf(const char *format);
+extern void *lud__win32_clip_decode(const char *format, HANDLE h, size_t *len_out);
 
 /* ---- Captured event (our stub for lud__event_push) ---- */
 
@@ -236,6 +239,67 @@ main(void)
 	CHECK(fmt == NULL, "unknown-refused");
 	pdo->lpVtbl->Release(pdo);
 	GlobalFree(hx);
+
+	/* ---- Drag source: the IDataObject lud_drag_multi hands to DoDragDrop ---- */
+
+	unsigned char png[64];
+	for (int i = 0; i < 64; i++) png[i] = (unsigned char)(i * 5 + 1);
+	lud_clip_item_t items[] = {
+		{ LUD_CLIPBOARD_TEXT, "drag \xE2\x98\xBA", strlen("drag \xE2\x98\xBA") },
+		{ LUD_CLIPBOARD_PNG, png, sizeof png },
+	};
+	IDataObject *src = lud__win32_make_dataobj(items, 2);
+	CHECK(src != NULL, "drag-build");
+
+	if (src) {
+		/* Both offered formats are queryable, an unoffered one is not. */
+		FORMATETC qt = { (CLIPFORMAT)lud__win32_clip_cf(LUD_CLIPBOARD_TEXT),
+				 NULL, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+		FORMATETC qp = { (CLIPFORMAT)lud__win32_clip_cf(LUD_CLIPBOARD_PNG),
+				 NULL, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+		FORMATETC qn = { (CLIPFORMAT)CF_HDROP, NULL, DVASPECT_CONTENT, -1,
+				 TYMED_HGLOBAL };
+		CHECK(src->lpVtbl->QueryGetData(src, &qt) == S_OK &&
+		      src->lpVtbl->QueryGetData(src, &qp) == S_OK &&
+		      src->lpVtbl->QueryGetData(src, &qn) != S_OK, "drag-query");
+
+		/* EnumFormatEtc advertises exactly the two offered formats. */
+		IEnumFORMATETC *en = NULL;
+		int cnt = 0;
+		if (src->lpVtbl->EnumFormatEtc(src, DATADIR_GET, &en) == S_OK && en) {
+			FORMATETC fe;
+			ULONG got;
+			while (en->lpVtbl->Next(en, 1, &fe, &got) == S_OK && got == 1)
+				cnt++;
+			en->lpVtbl->Release(en);
+		}
+		CHECK(cnt == 2, "drag-enum-count");
+
+		/* GetData yields handles that decode back to the payloads. */
+		STGMEDIUM st;
+		memset(&st, 0, sizeof(st));
+		size_t dl = 0;
+		char *dt = NULL;
+		if (src->lpVtbl->GetData(src, &qt, &st) == S_OK) {
+			dt = lud__win32_clip_decode(LUD_CLIPBOARD_TEXT, st.hGlobal, &dl);
+			ReleaseStgMedium(&st);
+		}
+		CHECK(dt && !strcmp(dt, "drag \xE2\x98\xBA"), "drag-text-roundtrip");
+		free(dt);
+
+		memset(&st, 0, sizeof(st));
+		unsigned char *dp = NULL;
+		dl = 0;
+		if (src->lpVtbl->GetData(src, &qp, &st) == S_OK) {
+			dp = lud__win32_clip_decode(LUD_CLIPBOARD_PNG, st.hGlobal, &dl);
+			ReleaseStgMedium(&st);
+		}
+		CHECK(dp && dl == sizeof png && !memcmp(dp, png, sizeof png),
+		      "drag-png-roundtrip");
+		free(dp);
+
+		src->lpVtbl->Release(src);
+	}
 
 	OleUninitialize();
 	printf("%d failure(s)\n", fails);

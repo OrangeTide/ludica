@@ -174,9 +174,12 @@ len)`, `lud_drag_files(paths, count)`, or `lud_drag_multi(items, count)` (severa
 formats at once) when a drag gesture begins (mouse button held); non-blocking,
 ends with a `LUD_EV_DRAG_END` event (`ev->drag_end.accepted`).
 On X11 both directions work (reuses the clipboard selection + INCR machinery).
-On Windows the drop target works (an OLE IDropTarget delivers `LUD_EV_DROP`,
-reusing the clipboard format decoders); the drag source (`lud_drag_*`) is still
-a stub. Emscripten does not implement drag-and-drop yet.
+On Windows both directions work too: an OLE IDropTarget delivers `LUD_EV_DROP`,
+and the drag source (`lud_drag_*`) hands an IDataObject to `DoDragDrop`, both
+reusing the clipboard format mapping. One difference: `DoDragDrop` is modal, so
+the Windows drag source blocks until the drop or cancel, then fires
+`LUD_EV_DRAG_END` (the X11 drag source is non-blocking). Emscripten does not
+implement drag-and-drop yet.
 
 ## Adding a New Sample Program
 
