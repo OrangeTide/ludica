@@ -475,6 +475,25 @@ for (int i = 0; files && files[i]; i++) {
 free(files);
 ```
 
+#### Several formats at once
+
+Real applications often place the same content in more than one format, so the
+receiving app can pick what it understands. `lud_clipboard_set_multi()` offers a
+list of formats in a single copy:
+
+```c
+lud_clip_item_t items[] = {
+    { LUD_CLIPBOARD_PNG, png_bytes, png_len },
+    { LUD_CLIPBOARD_TEXT, "a picture", 9 },  /* a text fallback */
+};
+lud_clipboard_set_multi(items, 2);
+```
+
+A pasting application that wants an image reads `image/png`; one that only takes
+text reads `text/plain`. Reading stays per-format: call `lud_clipboard_get_data()`
+(or `get_text`) with the format you want. `set_text`, `set_data`, and
+`set_files` are the single-format shorthands for this.
+
 Payload size is not a concern. On X11 a transfer larger than the server's
 maximum request size moves through the `INCR` incremental protocol
 automatically, in both the read and write directions, so multi-megabyte images

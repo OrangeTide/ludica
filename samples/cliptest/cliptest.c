@@ -29,6 +29,7 @@
 
 #define COPY_TEXT  "cliptest copy \xE2\x98\xBA line"   /* has a UTF-8 codepoint */
 #define PASTE_TEXT "cliptest paste 12345"
+#define MULTI_TEXT "cliptest multi \xE2\x98\xBA text"  /* text half of a multi-format copy */
 
 /* A payload well over a single X property's max request size, to force the
  * INCR incremental-transfer path in both directions.  Plain ASCII so a chunk
@@ -372,6 +373,30 @@ client_b_read(size_t *len_out)
 	return out;
 }
 
+/* Read a TARGETS reply (an atom list) into out[], returning the count. */
+static int
+client_b_read_atoms(Atom *out, int max)
+{
+	Atom type;
+	int fmt;
+	unsigned long nitems, after;
+	unsigned char *data = NULL;
+	int n = 0;
+
+	if (XGetWindowProperty(dpy_b, win_b, prop_b, 0, 64, False, XA_ATOM,
+			       &type, &fmt, &nitems, &after, &data) != Success)
+		return 0;
+	if (data && type == XA_ATOM && fmt == 32) {
+		Atom *a = (Atom *)data;
+		for (unsigned long i = 0; i < nitems && n < max; i++)
+			out[n++] = a[i];
+	}
+	if (data)
+		XFree(data);
+	XDeleteProperty(dpy_b, win_b, prop_b);
+	return n;
+}
+
 /* ---- self-test state machine ---- */
 
 enum {
@@ -381,6 +406,9 @@ enum {
 	ST_BIG_COPY_WAIT,   /* B is reading a large ludica payload via INCR */
 	ST_BIG_PASTE_WAIT,  /* ludica is reading a large B payload via INCR */
 	ST_IMG_COPY_WAIT,   /* B is reading a binary image/png payload */
+	ST_MULTI_TARGETS,   /* B reads TARGETS from a multi-format clipboard */
+	ST_MULTI_TEXT,      /* B reads the text target of that clipboard */
+	ST_MULTI_PNG,       /* B reads the image target of that clipboard */
 	ST_DONE,
 };
 
@@ -627,9 +655,81 @@ selftest_step(void)
 
 			/* File-list helpers (in-process round trip). */
 			check_files();
-			state = ST_DONE;
+
+			/* Multi-format: offer text and image at once, then have B
+			 * read TARGETS and each target back. */
+			{
+				lud_clip_item_t items[] = {
+					{ LUD_CLIPBOARD_TEXT, MULTI_TEXT,
+					  strlen(MULTI_TEXT) },
+					{ LUD_CLIPBOARD_PNG, img_blob, IMG_LEN },
+				};
+				if (lud_clipboard_set_multi(items, 2) != 0) {
+					printf("FAIL multi: set_multi failed\n");
+					failures++;
+					state = ST_DONE;
+					return;
+				}
+			}
+			begin_copy_read(targets_b);
+			state = ST_MULTI_TARGETS;
+			state_frame = frames;
 		} else if (frames - state_frame > WAIT_LIMIT) {
 			check_bytes("img-copy", NULL, 0, img_blob, IMG_LEN);
+			state = ST_DONE;
+		}
+		break;
+
+	case ST_MULTI_TARGETS:
+		if (b_got_notify) {
+			Atom targets[16];
+			int n = client_b_read_atoms(targets, 16);
+			int has_text = 0, has_png = 0;
+			for (int i = 0; i < n; i++) {
+				if (targets[i] == utf8_b)
+					has_text = 1;
+				if (targets[i] == png_b)
+					has_png = 1;
+			}
+			int ok = has_text && has_png;
+			printf("%-6s multi-targets text=%d png=%d\n",
+			       ok ? "PASS" : "FAIL", has_text, has_png);
+			fflush(stdout);
+			if (!ok)
+				failures++;
+			begin_copy_read(utf8_b);
+			state = ST_MULTI_TEXT;
+			state_frame = frames;
+		} else if (frames - state_frame > WAIT_LIMIT) {
+			printf("FAIL multi-targets: no reply\n");
+			failures++;
+			state = ST_DONE;
+		}
+		break;
+
+	case ST_MULTI_TEXT:
+		if (copy_read_ready()) {
+			char *got = (char *)b_take_read(NULL);
+			check("multi-text", got, MULTI_TEXT);
+			free(got);
+			begin_copy_read(png_b);
+			state = ST_MULTI_PNG;
+			state_frame = frames;
+		} else if (frames - state_frame > WAIT_LIMIT) {
+			check("multi-text", NULL, MULTI_TEXT);
+			state = ST_DONE;
+		}
+		break;
+
+	case ST_MULTI_PNG:
+		if (copy_read_ready()) {
+			size_t got_len = 0;
+			unsigned char *got = b_take_read(&got_len);
+			check_bytes("multi-png", got, got_len, img_blob, IMG_LEN);
+			free(got);
+			state = ST_DONE;
+		} else if (frames - state_frame > WAIT_LIMIT) {
+			check_bytes("multi-png", NULL, 0, img_blob, IMG_LEN);
 			state = ST_DONE;
 		}
 		break;
