@@ -378,7 +378,7 @@ cleanup(void)
 }
 
 int
-main(int argc, const char *argv[])
+main(int argc, char *argv[])
 {
 	return lud_run(&(lud_desc_t){
 		.app_name = "demo04_sprites",

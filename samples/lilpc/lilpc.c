@@ -23,10 +23,9 @@ static int composite_mode;
 static void dump_textbuf(void);
 
 /* MCP automation key table */
-static struct auto_key {
+static const struct auto_key {
 	const char *name;
 	enum lud_keycode key;
-	lud_action_t action;
 } auto_keys[] = {
 	{ "escape",    LUD_KEY_ESCAPE },
 	{ "1",         LUD_KEY_1 },     { "2",         LUD_KEY_2 },
@@ -89,6 +88,7 @@ static struct auto_key {
 	{ "delete",    LUD_KEY_DELETE },
 };
 #define NUM_AUTO_KEYS ((int)(sizeof(auto_keys) / sizeof(auto_keys[0])))
+static lud_action_t auto_actions[NUM_AUTO_KEYS];
 static lud_action_t act_dump_text;
 
 /* ======================================================================== */
@@ -679,8 +679,8 @@ static void init(void)
 
 	/* register keyboard actions for MCP automation */
 	for (int i = 0; i < NUM_AUTO_KEYS; i++) {
-		auto_keys[i].action = lud_make_action(auto_keys[i].name);
-		lud_bind_key(auto_keys[i].key, auto_keys[i].action);
+		auto_actions[i] = lud_make_action(auto_keys[i].name);
+		lud_bind_key(auto_keys[i].key, auto_actions[i]);
 	}
 	act_dump_text = lud_make_action("dump_text");
 	lud_auto_register_int("composite", &composite_mode);
@@ -701,9 +701,9 @@ static void frame(float dt)
 		uint8_t sc = keycode_to_scancode(auto_keys[i].key);
 		if (!sc)
 			continue;
-		if (lud_action_pressed(auto_keys[i].action))
+		if (lud_action_pressed(auto_actions[i]))
 			kbd_press(&pc.kbd, &pc, sc);
-		if (lud_action_released(auto_keys[i].action))
+		if (lud_action_released(auto_actions[i]))
 			kbd_release(&pc.kbd, &pc, sc);
 	}
 	if (lud_action_pressed(act_dump_text))

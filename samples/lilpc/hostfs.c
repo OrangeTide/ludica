@@ -908,10 +908,12 @@ static void cmd_findfrst(hostfs_t *hfs, lilpc_t *pc)
             dlen = 1;
         memcpy(dir_path, full, dlen);
         dir_path[dlen] = '\0';
-        snprintf(pattern, sizeof(pattern), "%s", sep + 1);
+        snprintf(pattern, sizeof(pattern), "%.*s",
+                 (int)(sizeof(pattern) - 1), sep + 1);
     } else {
         snprintf(dir_path, sizeof(dir_path), "%s", hfs->ep[ep].path);
-        snprintf(pattern, sizeof(pattern), "%s", full);
+        snprintf(pattern, sizeof(pattern), "%.*s",
+                 (int)(sizeof(pattern) - 1), full);
     }
 
     for (int i = 0; pattern[i]; i++)
@@ -931,7 +933,8 @@ static void cmd_findfrst(hostfs_t *hfs, lilpc_t *pc)
     s->next_entry = 0;
     s->endpoint = ep;
     s->attr_mask = hfs->param & 0xFF;
-    snprintf(s->pattern, sizeof(s->pattern), "%s", pattern);
+    snprintf(s->pattern, sizeof(s->pattern), "%.*s",
+             (int)(sizeof(s->pattern) - 1), pattern);
     hfs->dircache[cache_slot].pin_count++;
     hfs->handle = slot;
 
