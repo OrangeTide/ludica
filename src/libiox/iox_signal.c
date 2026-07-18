@@ -29,9 +29,11 @@ sig_handler(int signo)
 {
 	unsigned char s = (unsigned char)signo;
 	int saved_errno = errno;
+	ssize_t r;
 
 	/* best-effort write; if pipe is full, signal is already pending */
-	(void)write(sig_pipe[1], &s, 1);
+	r = write(sig_pipe[1], &s, 1);
+	(void)r;
 	errno = saved_errno;
 }
 

@@ -382,6 +382,7 @@ lud_audio_capture_stop(const char *wav_path)
 		'd','a','t','a', 0,0,0,0,
 	};
 	unsigned i;
+	int ok;
 	FILE *f;
 
 	/* Atomically stop capture and grab the buffer */
@@ -418,7 +419,7 @@ lud_audio_capture_stop(const char *wav_path)
 		free(buf);
 		return -1;
 	}
-	fwrite(header, sizeof(header), 1, f);
+	ok = fwrite(header, sizeof(header), 1, f) == 1;
 
 	/* Write samples as little-endian int16 */
 	for (i = 0; i < nr_samples; i++) {
@@ -426,11 +427,16 @@ lud_audio_capture_stop(const char *wav_path)
 		int16_t s = buf[i];
 		le[0] = (unsigned char)(s & 0xFF);
 		le[1] = (unsigned char)((s >> 8) & 0xFF);
-		fwrite(le, 2, 1, f);
+		ok = ok && fwrite(le, 2, 1, f) == 1;
 	}
 
-	fclose(f);
 	free(buf);
+
+	if (!ok) {
+		fclose(f);
+		return -1;
+	}
+	fclose(f);
 
 	lud_log("audio: captured %s (%.2f seconds)",
 	        wav_path, (double)frames / (double)sample_rate);

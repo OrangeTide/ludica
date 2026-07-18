@@ -100,7 +100,9 @@ sbuf_header(char *buf, size_t cap, lud_log_level_t lvl)
 static void
 emit_line(const char *buf, size_t len)
 {
-	fwrite(buf, 1, len, stderr);
+	/* best-effort; nothing useful to do if logging to stderr fails */
+	if (fwrite(buf, 1, len, stderr) != len)
+		return;
 	fputc('\n', stderr);
 	fflush(stderr);
 }
