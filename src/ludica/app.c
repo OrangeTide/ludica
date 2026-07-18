@@ -129,7 +129,7 @@ lud_run(const lud_desc_t *desc)
 
 #if defined(__EMSCRIPTEN__)
 	/* Clear the loading overlay now that init() is done */
-	EM_ASM({ if (Module.setStatus) Module.setStatus(''); });
+	EM_ASM({ if (Module.setStatus) Module.setStatus(""); });
 	int fps = lud__state.desc.target_fps > 0 ? lud__state.desc.target_fps : 0;
 	emscripten_set_main_loop(em_frame, fps, 1);
 #else
