@@ -948,6 +948,14 @@ multi-texture rendering within a single sector.
 | F11            | Toggle fullscreen         |
 | Escape         | Quit                      |
 
+# lilpc: 286 PC Emulator
+
+The `lilpc` sample is a small 286-class PC emulator with CGA, Hercules,
+and ATI display emulation. It includes a hypothetical CGA-256 extension
+(160x100 at 256 colors through a RAMDAC). For the full hardware model,
+register map, and the scan-out analysis, see the
+[lilpc Specification](lilpc-spec.html).
+
 # Appendix
 
 ## Third-Party Libraries
