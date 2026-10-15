@@ -14,6 +14,7 @@
 
 static lilpc_t pc;
 static lud_texture_t screen_tex;
+static lud_texture_t palette_tex;	/* 256x1 RAMDAC CLUT */
 static lud_shader_t crt_shader;
 static lud_mesh_t crt_quad;
 static int tex_w, tex_h;
@@ -111,7 +112,10 @@ static const char crt_frag_src[] =
 	"out vec4 frag_color;\n"
 	"\n"
 	"uniform sampler2D u_screen;\n"
-	"uniform vec4 u_palette[16];\n"
+	/* RAMDAC CLUT as a 256x1 lookup texture: index -> RGBA.
+	 * Replaces a uniform array so CGA-256 can carry 256 entries
+	 * (a 256-vec4 uniform array exceeds the GLES3 fragment minimum). */
+	"uniform sampler2D u_palette_tex;\n"
 	"uniform vec2 u_src_size;\n"
 	"uniform vec2 u_tex_size;\n"
 	"uniform int u_border_idx;\n"
@@ -138,9 +142,14 @@ static const char crt_frag_src[] =
 	"    return texture(u_screen, tex_uv).r * 255.0 + 0.5;\n"
 	"}\n"
 	"\n"
+	/* fetch_idx() returns the palette index biased by +0.5, so dividing
+	 * by 256 lands on the centre of the matching LUT texel. */
+	"vec4 pal(float idx) {\n"
+	"    return texture(u_palette_tex, vec2(idx / 256.0, 0.5));\n"
+	"}\n"
+	"\n"
 	"vec4 fetch(vec2 uv) {\n"
-	"    float idx = fetch_idx(uv);\n"
-	"    return u_palette[int(idx) & 15];\n"
+	"    return pal(fetch_idx(uv));\n"
 	"}\n"
 	"\n"
 	/* NTSC composite decode: generate composite signal from neighboring
@@ -200,7 +209,7 @@ static const char crt_frag_src[] =
 	"    vec2 os = (uv - 0.5) / OVERSCAN + 0.5;\n"
 	"\n"
 	"    if (os.x < 0.0 || os.x > 1.0 || os.y < 0.0 || os.y > 1.0) {\n"
-	"        frag_color = u_palette[u_border_idx];\n"
+	"        frag_color = pal(float(u_border_idx) + 0.5);\n"
 	"        vec2 vig = uv * (1.0 - uv);\n"
 	"        frag_color.rgb *= clamp(pow(vig.x * vig.y * 15.0, 0.25), 0.0, 1.0);\n"
 	"        frag_color.a = 1.0;\n"
@@ -650,6 +659,15 @@ static void init(void)
 		.mag_filter = LUD_FILTER_NEAREST,
 	});
 
+	/* RAMDAC CLUT texture: 256 palette entries, index -> RGBA */
+	palette_tex = lud_make_texture(&(lud_texture_desc_t){
+		.width = 256,
+		.height = 1,
+		.format = LUD_PIXFMT_RGBA8,
+		.min_filter = LUD_FILTER_NEAREST,
+		.mag_filter = LUD_FILTER_NEAREST,
+	});
+
 	/* CRT shader and fullscreen quad */
 	crt_shader = lud_make_shader(&(lud_shader_desc_t){
 		.vert_src = crt_vert_src,
@@ -755,22 +773,16 @@ static void frame(float dt)
 	lud_clear(0.0f, 0.0f, 0.0f, 1.0f);
 	lud_viewport(vp_x, vp_y, vp_w, vp_h);
 
-	/* build palette uniform from RGBA palette table */
-	const uint32_t *pal = mono ? herc_palette : cga_palette;
-	int pal_count = mono ? 2 : 16;
-	float pal_uniform[16 * 4];
-	memset(pal_uniform, 0, sizeof(pal_uniform));
-	for (int i = 0; i < pal_count; i++) {
-		uint32_t c = pal[i];
-		pal_uniform[i * 4 + 0] = (float)((c >>  0) & 0xFF) / 255.0f;
-		pal_uniform[i * 4 + 1] = (float)((c >>  8) & 0xFF) / 255.0f;
-		pal_uniform[i * 4 + 2] = (float)((c >> 16) & 0xFF) / 255.0f;
-		pal_uniform[i * 4 + 3] = 1.0f;
-	}
+	/* upload the active palette to the RAMDAC CLUT texture */
+	uint32_t lut[256];
+	video_get_palette(&pc.video, lut);
+	lud_update_texture(palette_tex, 0, 0, 256, 1, lut);
 
 	lud_apply_shader(crt_shader);
 	lud_bind_texture(screen_tex, 0);
+	lud_bind_texture(palette_tex, 1);
 	lud_uniform_int(crt_shader, "u_screen", 0);
+	lud_uniform_int(crt_shader, "u_palette_tex", 1);
 	lud_uniform_vec2(crt_shader, "u_src_size", (float)tex_w, (float)tex_h);
 	lud_uniform_vec2(crt_shader, "u_tex_size",
 		(float)VIDEO_MAX_W, (float)VIDEO_MAX_H);
@@ -779,22 +791,16 @@ static void frame(float dt)
 	lud_uniform_float(crt_shader, "u_curvature",
 		mono ? 0.1f : 0.15f);
 
-	/* upload palette as individual vec4 uniforms */
-	for (int i = 0; i < 16; i++) {
-		char name[16];
-		snprintf(name, sizeof(name), "u_palette[%d]", i);
-		lud_uniform_vec4(crt_shader, name,
-			pal_uniform[i*4+0], pal_uniform[i*4+1],
-			pal_uniform[i*4+2], pal_uniform[i*4+3]);
-	}
-
 	/* composite NTSC decode uniforms.
 	 * u_hue stays 0: the shader samples at texel centres (phase carries a
 	 * half-pixel offset) while cgapack encodes against integer pixel phase,
 	 * so decoded hues sit ~45 degrees rotated from the encoder's intent.
 	 * The current tint reads fine, so we leave it; bump u_hue if a future
 	 * encoder aligns to texel centres and the rotation needs cancelling. */
-	lud_uniform_int(crt_shader, "u_composite", composite_mode && !mono);
+	/* composite decode models an RGBI signal; CGA-256 drives the RAMDAC
+	 * directly, so it has no composite path. */
+	int composite_active = composite_mode && !mono && !pc.video.packed256;
+	lud_uniform_int(crt_shader, "u_composite", composite_active);
 	lud_uniform_float(crt_shader, "u_hue", 0.0f);
 	lud_uniform_float(crt_shader, "u_saturation", 1.0f);
 	int colorburst = !(pc.video.mode_ctrl & 0x04);
@@ -803,12 +809,13 @@ static void frame(float dt)
 	/* precompute YIQ values for all 16 RGBI palette entries.
 	 * RGBI analog levels: normal channel = 2/3, intensity adds 1/3.
 	 * Brown special case: color 6 has G at 1/3 instead of 2/3. */
-	if (composite_mode && !mono) {
+	if (composite_active) {
 		float yiq[16 * 3];
 		for (int i = 0; i < 16; i++) {
-			float r = pal_uniform[i * 4 + 0];
-			float g = pal_uniform[i * 4 + 1];
-			float b = pal_uniform[i * 4 + 2];
+			uint32_t c = cga_palette[i];
+			float r = (float)((c >>  0) & 0xFF) / 255.0f;
+			float g = (float)((c >>  8) & 0xFF) / 255.0f;
+			float b = (float)((c >> 16) & 0xFF) / 255.0f;
 			yiq[i * 3 + 0] = 0.299f * r + 0.587f * g + 0.114f * b;
 			yiq[i * 3 + 1] = 0.596f * r - 0.275f * g - 0.321f * b;
 			yiq[i * 3 + 2] = 0.212f * r - 0.523f * g + 0.311f * b;
@@ -944,6 +951,7 @@ static void cleanup(void)
 	lud_destroy_mesh(crt_quad);
 	lud_destroy_shader(crt_shader);
 	lud_destroy_texture(screen_tex);
+	lud_destroy_texture(palette_tex);
 	lilpc_cleanup(&pc);
 }
 

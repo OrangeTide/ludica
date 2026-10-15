@@ -22,6 +22,15 @@ typedef enum {
 #define CGA_VRAM_BASE	0xB8000
 #define CGA_VRAM_SIZE	0x4000	/* 16KB */
 
+/*
+ * CGA-256: hypothetical packed-pixel extension.
+ * 160x100, one byte per pixel, 256 colors through a RAMDAC CLUT.
+ * 160*100 = 16000 bytes, so the whole frame fits in CGA's 16KB VRAM
+ * with 384 bytes to spare.  Enabled by mode-control bit 6 (0x40).
+ */
+#define CGA256_W	160
+#define CGA256_H	100
+
 /* Hercules display dimensions */
 #define HERC_TEXT_COLS	80
 #define HERC_TEXT_ROWS	25
@@ -86,6 +95,25 @@ typedef struct video {
 
 	/* composite CGA mode (GPU shader NTSC decode) */
 	int composite;
+
+	/*
+	 * CGA-256 extension state.
+	 *
+	 * packed256 is set by video_render() when the 160x100x256 packed
+	 * mode is active, so the display side knows to use the full RAMDAC
+	 * palette (and to disable composite NTSC decode, which models an
+	 * RGBI signal that this mode does not produce).
+	 *
+	 * The RAMDAC CLUT is programmed VGA-style through ports 3C6h-3C9h.
+	 * dac[] holds 6-bit R,G,B per entry (0-63), as written by the CPU;
+	 * video_get_palette() expands them to 8-bit RGBA on readout.
+	 */
+	int packed256;
+	uint8_t dac[256][3];	/* RAMDAC CLUT: 6-bit R,G,B per index */
+	uint8_t dac_mask;	/* PEL mask register (port 3C6h) */
+	uint8_t dac_wr_idx;	/* PEL write index (port 3C8h) */
+	uint8_t dac_rd_idx;	/* PEL read index (port 3C7h) */
+	uint8_t dac_sub;	/* sub-index within an entry: 0=R, 1=G, 2=B */
 } video_t;
 
 void video_init(video_t *vid, struct lilpc *pc, video_adapter_t adapter);
@@ -94,6 +122,14 @@ void video_tick(video_t *vid, struct lilpc *pc, uint64_t cpu_cycles);
 
 /* get current display dimensions */
 void video_get_size(video_t *vid, int *w, int *h);
+
+/*
+ * Fill out[256] with the active display palette as RGBA
+ * (0xAABBGGRR, little-endian).  Standard CGA fills 0-15, Hercules
+ * fills 0-1, and CGA-256 packed mode fills all 256 from the RAMDAC.
+ * Entries beyond the active count are opaque black.
+ */
+void video_get_palette(video_t *vid, uint32_t out[256]);
 
 /* CGA RGBI palette (RGBA, little-endian = 0xAABBGGRR) */
 extern const uint32_t cga_palette[16];

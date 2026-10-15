@@ -65,6 +65,11 @@ CPU starts execution at FFFF:0000 (physical F_FFF0h) after reset.
 | 4 | 640x200 graphics (set) vs 320x200 (clear) |
 | 5 | Blink enable (set) vs background intensity (clear) |
 
+> **lilpc extension, not real hardware:** bit 6 (0x40) enables the
+> fictional CGA-256 packed mode (160x100x256 with a RAMDAC CLUT at
+> ports 3C6h-3C9h). Real CGA leaves bits 6 and 7 undefined. See
+> `CGA256.md` for the full design.
+
 #### CGA Status Register (3DAh)
 | Bit | Function |
 |-----|----------|

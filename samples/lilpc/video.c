@@ -303,6 +303,67 @@ static const int cga_gfx_pal[2][4] = {
 
 /* ======================================================================== */
 
+/*
+ * CGA-256 RAMDAC (CLUT) I/O handlers, ports 3C6h-3C9h.
+ *
+ * These mirror the VGA/MCGA DAC interface so that palette-loading code
+ * written for those adapters works unchanged:
+ *   3C6h  PEL mask register
+ *   3C7h  PEL read index  (write sets the index; reads come from 3C9h)
+ *   3C8h  PEL write index (write sets the index; writes go to 3C9h)
+ *   3C9h  PEL data: three successive accesses transfer R, G, B (6-bit
+ *         each), then the index auto-increments to the next entry.
+ */
+static uint8_t cga_dac_read(lilpc_t *pc, uint16_t port)
+{
+	video_t *vid = &pc->video;
+
+	switch (port) {
+	case 0x3C6:
+		return vid->dac_mask;
+	case 0x3C7:
+		return 0;	/* DAC state register (read/write mode): unused */
+	case 0x3C8:
+		return vid->dac_wr_idx;
+	case 0x3C9:
+	{
+		uint8_t v = vid->dac[vid->dac_rd_idx][vid->dac_sub] & 0x3F;
+		if (++vid->dac_sub >= 3) {
+			vid->dac_sub = 0;
+			vid->dac_rd_idx++;	/* wraps at 256 (uint8_t) */
+		}
+		return v;
+	}
+	}
+	return 0xFF;
+}
+
+static void cga_dac_write(lilpc_t *pc, uint16_t port, uint8_t val)
+{
+	video_t *vid = &pc->video;
+
+	switch (port) {
+	case 0x3C6:
+		vid->dac_mask = val;
+		break;
+	case 0x3C7:
+		vid->dac_rd_idx = val;
+		vid->dac_sub = 0;
+		break;
+	case 0x3C8:
+		vid->dac_wr_idx = val;
+		vid->dac_sub = 0;
+		break;
+	case 0x3C9:
+		vid->dac[vid->dac_wr_idx][vid->dac_sub] = val & 0x3F;
+		if (++vid->dac_sub >= 3) {
+			vid->dac_sub = 0;
+			vid->dac_wr_idx++;	/* wraps at 256 (uint8_t) */
+		}
+		break;
+	}
+}
+
 /* CGA I/O handlers */
 static uint8_t cga_read(lilpc_t *pc, uint16_t port)
 {
@@ -545,6 +606,29 @@ void video_init(video_t *vid, lilpc_t *pc, video_adapter_t adapter)
 		vid->mode_ctrl = 0x29; /* 80-col text, enable display */
 		bus_register_io(&pc->bus, 0x3D0, 16, cga_read, cga_write);
 
+		/* CGA-256 RAMDAC at 3C6h-3C9h */
+		vid->dac_mask = 0xFF;
+		bus_register_io(&pc->bus, 0x3C6, 4, cga_dac_read, cga_dac_write);
+
+		/*
+		 * Seed the RAMDAC with a usable default: indices 0-15 mirror
+		 * the fixed CGA RGBI colors (down-converted to 6 bits), and
+		 * 16-255 form a grayscale ramp so an unprogrammed palette is
+		 * not simply black.
+		 */
+		for (int i = 0; i < 16; i++) {
+			uint32_t c = cga_palette[i];
+			vid->dac[i][0] = ((c >>  0) & 0xFF) >> 2;	/* R */
+			vid->dac[i][1] = ((c >>  8) & 0xFF) >> 2;	/* G */
+			vid->dac[i][2] = ((c >> 16) & 0xFF) >> 2;	/* B */
+		}
+		for (int i = 16; i < 256; i++) {
+			uint8_t g = i >> 2;	/* 8-bit index -> 6-bit gray */
+			vid->dac[i][0] = g;
+			vid->dac[i][1] = g;
+			vid->dac[i][2] = g;
+		}
+
 		if (adapter == VIDEO_ATI)
 			bus_register_io(&pc->bus, 0x3B0, 16, herc_read, herc_write);
 
@@ -730,6 +814,37 @@ static void render_cga_640(video_t *vid, bus_t *bus)
 				vid->pixels[y * 640 + x + px] =
 					(byte & (0x80 >> px)) ? fg : bg;
 			}
+		}
+	}
+}
+
+/*
+ * Render CGA-256 packed-pixel mode: 160x100, one byte per pixel, 256
+ * colors through the RAMDAC CLUT.
+ *
+ * Unlike the standard CGA graphics modes, addressing is linear (no
+ * even/odd bank interleave): pixel (x,y) is at byte y*160 + x.  The
+ * byte value is the palette index; color resolution lives entirely in
+ * the RAMDAC, so nothing is decoded here beyond the index itself.
+ *
+ * The CRTC start address (word units, as in the other modes) is honored
+ * so a program can pan or page-flip within VRAM.  A full second page
+ * does not fit: two 16000-byte frames need 32000 bytes but only 16384
+ * are available, so start-address tricks are limited to partial scroll.
+ */
+static void render_cga_packed256(video_t *vid, bus_t *bus)
+{
+	vid->render_w = CGA256_W;
+	vid->render_h = CGA256_H;
+
+	uint16_t start_addr = ((uint16_t)vid->crtc.reg[12] << 8) | vid->crtc.reg[13];
+	uint32_t base = (uint32_t)start_addr * 2;	/* CRTC counts in words */
+
+	for (int y = 0; y < CGA256_H; y++) {
+		for (int x = 0; x < CGA256_W; x++) {
+			uint32_t off = (base + (uint32_t)y * CGA256_W + x) & 0x3FFF;
+			vid->pixels[y * CGA256_W + x] =
+				bus_read8(bus, CGA_VRAM_BASE + off);
 		}
 	}
 }
@@ -1055,8 +1170,47 @@ static void render_ati_132col(video_t *vid, bus_t *bus)
     }
 }
 
+void video_get_palette(video_t *vid, uint32_t out[256])
+{
+	/* monochrome adapters: only two meaningful entries */
+	if (vid->adapter == VIDEO_HERCULES ||
+	    (vid->adapter == VIDEO_ATI && vid->ati_mono_active)) {
+		for (int i = 0; i < 256; i++)
+			out[i] = 0xFF000000;
+		out[0] = herc_palette[0];
+		out[1] = herc_palette[1];
+		return;
+	}
+
+	/* CGA-256 packed mode: expand the full 256-entry RAMDAC */
+	if (vid->packed256) {
+		for (int i = 0; i < 256; i++) {
+			/* expand 6-bit DAC values to 8 bits (v<<2 | v>>4) */
+			uint8_t r6 = vid->dac[i][0];
+			uint8_t g6 = vid->dac[i][1];
+			uint8_t b6 = vid->dac[i][2];
+			uint8_t r = (uint8_t)((r6 << 2) | (r6 >> 4));
+			uint8_t g = (uint8_t)((g6 << 2) | (g6 >> 4));
+			uint8_t b = (uint8_t)((b6 << 2) | (b6 >> 4));
+			out[i] = 0xFF000000u |
+				((uint32_t)b << 16) |
+				((uint32_t)g << 8) |
+				(uint32_t)r;
+		}
+		return;
+	}
+
+	/* standard CGA: fixed 16-color RGBI palette */
+	for (int i = 0; i < 256; i++)
+		out[i] = 0xFF000000;
+	for (int i = 0; i < 16; i++)
+		out[i] = cga_palette[i];
+}
+
 void video_render(video_t *vid, lilpc_t *pc)
 {
+	vid->packed256 = 0;
+
 	if (vid->adapter == VIDEO_HERCULES) {
 		if (vid->herc_mode & 0x02)
 			render_herc_gfx(vid, &pc->bus);
@@ -1100,6 +1254,18 @@ void video_render(video_t *vid, lilpc_t *pc)
 			vid->render_w = 640;
 			vid->render_h = 200;
 			memset(vid->pixels, 0, 640 * 200);
+			return;
+		}
+
+		/*
+		 * CGA-256 packed mode (bit 6 of the mode-control register).
+		 * It bypasses the 1bpp/2bpp pixel sequencer entirely, so it is
+		 * checked ahead of the standard text/graphics selection.
+		 */
+		if (vid->mode_ctrl & 0x40) {
+			render_cga_packed256(vid, &pc->bus);
+			vid->packed256 = 1;
+			memset(vid->snow, 0, sizeof(vid->snow));
 			return;
 		}
 

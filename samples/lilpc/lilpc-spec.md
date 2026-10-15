@@ -15,6 +15,7 @@ CGA (Color Graphics Adapter) emulation with MC6845 CRTC.
 - 320x200 4-color graphics (mode 4/5)
 - 640x200 2-color graphics (mode 6)
 - 160x100 16-color pseudo-graphics (CRTC reprogrammed text mode)
+- 160x100 256-color packed graphics (CGA-256 extension, see below)
 - Color Select Register (3D9h): border/overscan, background, palette select
 - Mode Control Register (3D8h): blink disable for 16 background colors
 - MC6845 CRTC register programming: row/column counts, sync position,
@@ -23,6 +24,31 @@ CGA (Color Graphics Adapter) emulation with MC6845 CRTC.
 - Status register (3DAh): horizontal and vertical retrace bits
 - VRAM at B8000h-BBFFFh (16KB)
 - CRT post-processing shader
+
+### CGA-256 Extension (160x100x256)
+
+A hypothetical packed-pixel extension: 160x100, one byte per pixel,
+256 colors through a RAMDAC color look-up table. The whole 16000-byte
+frame fits in CGA's existing 16KB of VRAM. Full design rationale,
+hardware mapping and limitations are in `CGA256.md`.
+
+- Enable: mode-control register (3D8h) bit 6 (0x40), with display
+  enable (0x08) set. A program writes 0x48 to 3D8h.
+- Addressing: linear, pixel (x,y) at byte offset y*160 + x from B8000h.
+  The CRTC start address is honored for partial scroll and paging.
+- RAMDAC CLUT at ports 3C6h-3C9h, matching the VGA/MCGA DAC interface
+  (6-bit R,G,B per entry), so VGA palette-loading code works unchanged:
+
+  | Port | Access | Function |
+  |------|--------|----------|
+  | 3C6h | R/W | PEL mask register |
+  | 3C7h | W | PEL read index |
+  | 3C8h | W | PEL write index |
+  | 3C9h | R/W | PEL data (R, G, B in sequence, auto-increments) |
+
+- Demo: `cabin256.com` / `lake256.com` on the demo disk display a
+  full-color photo in this mode. Built from `cga256pack.c` (PNG to
+  packed blob) and `viewer256.asm` (loader) by `build-cga.sh`.
 
 ### CGA Compatibility Testing
 Tested with CGACompatibilityTester (trixter@oldskool.org). Results
