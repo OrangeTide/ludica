@@ -50,6 +50,10 @@ hardware mapping and limitations are in `CGA256.md`.
   full-color photo in this mode. Built from `cga256pack.c` (PNG to
   packed blob) and `viewer256.asm` (loader) by `build-cga.sh`.
 
+![cabin256.com in CGA-256 mode](../../screenshots/lilpc_cga256_cabin.jpg)
+
+![lake256.com in CGA-256 mode](../../screenshots/lilpc_cga256_lake.jpg)
+
 ### CGA Compatibility Testing
 Tested with CGACompatibilityTester (trixter@oldskool.org). Results
 in `/cga-compat-test.txt`. All 46 tests ran to completion (4 batch,
