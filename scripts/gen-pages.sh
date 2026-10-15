@@ -61,6 +61,20 @@ if command -v pandoc >/dev/null 2>&1 && [ -f doc/manual/manual.md ]; then
 	make -C doc/manual
 fi
 
+# --- Render the lilpc example's standalone spec ---
+# lilpc is a self-contained demo, not part of ludica, so its spec is its
+# own page (linked from the example entry below), not a manual section.
+# Render it self-contained so the CGA-256 screenshots inline.
+if command -v pandoc >/dev/null 2>&1 && [ -f samples/lilpc/lilpc-spec.md ]; then
+	pandoc samples/lilpc/lilpc-spec.md \
+		-f markdown -t html \
+		--standalone --embed-resources \
+		--resource-path=samples/lilpc:doc/manual \
+		--metadata title="lilpc Specification" \
+		--css style.css \
+		-o "$OUTDIR/lilpc-spec.html"
+fi
+
 # --- Find screenshot for a sample ---
 find_screenshot() {
 	for ext in jpg png; do
@@ -248,6 +262,10 @@ echo "$SAMPLES" | while IFS='|' read -r name title desc; do
 	echo '<div class="links">' >> "$OUTDIR/index.html"
 	if has_wasm "$name"; then
 		printf '<a href="%s.html">&#9654; Play in browser</a>' "$name" >> "$OUTDIR/index.html"
+	fi
+	# Standalone docs for samples that have them
+	if [ "$name" = "lilpc" ] && [ -f "$OUTDIR/lilpc-spec.html" ]; then
+		printf '<a href="lilpc-spec.html">Manual</a>' >> "$OUTDIR/index.html"
 	fi
 	echo '</div>' >> "$OUTDIR/index.html"
 	echo '</div>' >> "$OUTDIR/index.html"
